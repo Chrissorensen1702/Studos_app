@@ -31,6 +31,12 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a2448"
       }
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b4da2c62-b9cd-442c-b8da-facc8e6dc689"
+      }
+    },
+    "owner": "chrissorensen"
   }
 }
