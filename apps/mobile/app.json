@@ -28,7 +28,6 @@
     },
     "android": {
       "package": "dk.studenterapp.mobile",
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a2448"

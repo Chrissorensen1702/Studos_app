@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
+    "start:dev-client": "expo start --dev-client --port 8081",
     "ios": "expo run:ios",
     "ios:device": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH expo run:ios --device",
     "ios:release": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH expo run:ios --device --configuration Release",
@@ -13,12 +14,14 @@
     "android": "expo run:android",
     "web": "expo start --web",
     "build:android": "npx eas-cli build --platform android --profile preview",
+    "build:android:dev": "npx eas-cli build --platform android --profile development",
     "build:ios": "npx eas-cli build --platform ios --profile preview",
     "build:all": "npx eas-cli build --platform all --profile preview"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "expo": "~55.0.0",
+    "expo-dev-client": "~55.0.28",
     "expo-image-picker": "~55.0.19",
     "expo-secure-store": "~55.0.13",
     "react": "19.2.0",
