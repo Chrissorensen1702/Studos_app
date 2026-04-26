@@ -14,7 +14,8 @@
           "photosPermission": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/with-android-cleartext"
     ],
     "ios": {
       "bundleIdentifier": "dk.studenterapp.mobile",
