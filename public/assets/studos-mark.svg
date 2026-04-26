@@ -1,0 +1,34 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Studos mark</title>
+  <desc id="desc">A clean Studos S mark with social dots and a chat-tail accent.</desc>
+  <defs>
+    <linearGradient id="bg" x1="142" y1="96" x2="882" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#172143"/>
+      <stop offset="0.58" stop-color="#223363"/>
+      <stop offset="1" stop-color="#121936"/>
+    </linearGradient>
+    <linearGradient id="sFill" x1="344" y1="196" x2="696" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF4D8"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <filter id="shadow" x="146" y="134" width="744" height="776" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="34"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.03 0 0 0 0 0.05 0 0 0 0 0.14 0 0 0 0.28 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <path d="M262 708C300 808 398 864 512 864C634 864 734 801 736 692C738 585 648 534 520 509C422 490 368 465 364 410C361 357 406 319 468 300C548 275 632 303 674 354" stroke="#75DED0" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+  <g filter="url(#shadow)">
+    <path d="M682 320C632 260 534 236 448 264C374 288 326 342 330 407C335 486 416 518 520 538C628 559 694 596 692 674C690 760 596 814 490 802C398 792 326 746 288 682" stroke="url(#sFill)" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <circle cx="742" cy="282" r="72" fill="#FFD46D"/>
+  <circle cx="790" cy="384" r="34" fill="#75DED0"/>
+  <circle cx="238" cy="748" r="50" fill="#FF6F73"/>
+  <path d="M205 784C240 792 273 781 300 756C296 804 267 834 212 846C228 828 227 805 205 784Z" fill="#FF6F73"/>
+</svg>

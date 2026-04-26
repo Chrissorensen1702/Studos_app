@@ -1,0 +1,23 @@
+{
+  "name": "studenter-app",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Native studenter-app med web/admin og API.",
+  "workspaces": [
+    "apps/mobile",
+    "packages/*"
+  ],
+  "scripts": {
+    "api:dev": "php artisan serve --host=127.0.0.1 --port=8000",
+    "db:init": "php artisan migrate",
+    "web:dev": "php artisan serve --host=127.0.0.1 --port=8000",
+    "mobile:start": "npm --workspace @studenter-app/mobile run start",
+    "mobile:ios:device": "npm --workspace @studenter-app/mobile run ios:device",
+    "mobile:ios:release": "npm --workspace @studenter-app/mobile run ios:release",
+    "mobile:ios:prebuild": "npm --workspace @studenter-app/mobile run ios:prebuild",
+    "mobile:build:android": "npm --workspace @studenter-app/mobile run build:android",
+    "mobile:build:ios": "npm --workspace @studenter-app/mobile run build:ios",
+    "mobile:build:all": "npm --workspace @studenter-app/mobile run build:all",
+    "notes": "cat README.md"
+  }
+}

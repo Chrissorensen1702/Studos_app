@@ -1,0 +1,27 @@
+{
+  "name": "@studenter-app/mobile",
+  "private": true,
+  "version": "0.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "ios:device": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH expo run:ios --device",
+    "ios:release": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH expo run:ios --device --configuration Release",
+    "ios:pod:install": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH pod install --project-directory=ios",
+    "ios:prebuild": "expo prebuild --platform ios",
+    "android": "expo run:android",
+    "web": "expo start --web",
+    "build:android": "npx eas-cli build --platform android --profile preview",
+    "build:ios": "npx eas-cli build --platform ios --profile preview",
+    "build:all": "npx eas-cli build --platform all --profile preview"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "expo": "~55.0.0",
+    "expo-image-picker": "~55.0.19",
+    "expo-secure-store": "~55.0.13",
+    "react": "19.2.0",
+    "react-native": "0.83.6"
+  }
+}

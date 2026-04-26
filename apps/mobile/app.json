@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Studos",
+    "slug": "studos",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "scheme": "studos",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "ios": {
+      "bundleIdentifier": "dk.studenterapp.mobile",
+      "icon": "./assets/icon.png",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Studos bruger lokal netvaerksadgang til at tale med udviklingsserveren paa din Mac.",
+        "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
+      }
+    },
+    "android": {
+      "package": "dk.studenterapp.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a2448"
+      }
+    }
+  }
+}
