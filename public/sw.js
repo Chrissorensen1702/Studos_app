@@ -1,8 +1,8 @@
-const CACHE_NAME = 'studos-pwa-v8';
+const CACHE_NAME = 'studos-pwa-v9';
 const SHELL_ASSETS = [
-  '/pwa/?v=8',
+  '/pwa/?v=9',
   '/manifest.webmanifest',
-  '/_expo/static/js/web/index-828b44ff7f2419e0c8ab8c2200a75c6f.js',
+  '/_expo/static/js/web/index-5fc66f9ab3104871eb4b5ec12237cd19.js',
   '/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png',
   '/assets/assets/chat-send-rocket.deb227b670d45acc9b0a4c2f00b33687.png'
 ];
@@ -34,9 +34,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const requestUrl = new URL(request.url);
+
+  if (requestUrl.pathname === '/api' || requestUrl.pathname.includes('/api/')) {
+    return;
+  }
+
   event.respondWith(
     caches.match(request).then((cached) => (
-      cached || fetch(request).catch(() => caches.match('/pwa/?v=8'))
+      cached || fetch(request).catch(() => caches.match('/pwa/?v=9'))
     ))
   );
 });

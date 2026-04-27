@@ -198,9 +198,21 @@ const chatMessageActionConfigFor = (actionType) => {
   }
 };
 
+const createWebPublicBaseUrl = () => {
+  if (!IS_WEB || typeof window === 'undefined' || !window.location?.origin) {
+    return null;
+  }
+
+  const pwaPathIndex = window.location.pathname.indexOf('/pwa');
+  const publicBasePath = pwaPathIndex >= 0 ? window.location.pathname.slice(0, pwaPathIndex) : '';
+
+  return `${window.location.origin}${publicBasePath}`;
+};
+
+const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
 const CREATE_CLASS_URL =
   process.env.EXPO_PUBLIC_CREATE_CLASS_URL
-  ?? 'http://192.168.1.114/studenter-app/public/opret-klasse';
+  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://192.168.1.114/studenter-app/public/opret-klasse');
 const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const LOCAL_API_BASE_URLS = [
   'http://192.168.1.114/studenter-app/public/api',
@@ -208,7 +220,13 @@ const LOCAL_API_BASE_URLS = [
   'http://127.0.0.1/studenter-app/public/api',
   'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
 ];
-const API_BASE_URLS = (EXPLICIT_API_BASE_URL ? [EXPLICIT_API_BASE_URL] : LOCAL_API_BASE_URLS).filter(Boolean);
+const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/api` : null;
+const API_BASE_URLS = (EXPLICIT_API_BASE_URL
+  ? [EXPLICIT_API_BASE_URL]
+  : IS_WEB
+    ? [WEB_API_BASE_URL]
+    : LOCAL_API_BASE_URLS
+).filter(Boolean);
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
 const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? '192.168.1.114';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);

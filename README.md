@@ -156,7 +156,7 @@ Password: studos123
 - Expo/React Native app ligger i `apps/mobile`.
 - Appen hedder visuelt `Studos` paa iOS/Android.
 - PWA'en ligger i `public/pwa/index.html` og kan testes paa
-  `https://studos.laravel.cloud/pwa/?v=7`.
+  `https://studos.laravel.cloud/pwa/?v=9`.
 - PWA'en er en hurtig test-wrapper af samme app-bundle. Den bruger browser
   storage i stedet for `expo-secure-store`, saa login virker i Safari/PWA.
 - Appens foerste flow er invitekode -> profiloprettelse -> overblik.
@@ -293,7 +293,7 @@ Status pr. 2026-04-27:
   bygget med Cloud-env.
 - Android har EAS preview/dev scripts, og dev-build har separat navn/package
   (`Studos-dev`), saa den ikke konflikter med normal app.
-- PWA'en ligger live under `/pwa/` og er opdateret til cache-version `v8`.
+- PWA'en ligger live under `/pwa/` og er opdateret til cache-version `v9`.
 - Mobilappen/PWA'en har footer-navigation: Kalender, Chat, Overblik, Wallet,
   Walls.
 - Mobilappen har nu en kompakt app-shell med topbar, footer og sidebar. `Mit
@@ -464,7 +464,7 @@ npm run mobile:ios:release:cloud
 PWA-test i Cloud:
 
 ```text
-https://studos.laravel.cloud/pwa/?v=8
+https://studos.laravel.cloud/pwa/?v=9
 ```
 
 Hvis Expo bygger appen, men haenger paa `Connecting to iPhone`, kan den byggede
@@ -506,7 +506,7 @@ Resultat:
 - iPhone Release build: OK.
 - Direkte iPhone install: OK.
 - Direkte iPhone launch: OK.
-- PWA shell er senest versioneret til `v8` efter iOS footer/safe-area fix.
+- PWA shell er senest versioneret til `v9` efter PWA API-base fix.
 
 ## Vigtige noter
 
@@ -534,7 +534,7 @@ Resultat:
   `Storage`-disk. Nye uploads skal testes mod Cloud bucket; gamle lokale
   billed-URL'er er ikke migreret.
 - Hvis PWA'en viser gammel UI efter deploy, aabn
-  `https://studos.laravel.cloud/pwa/?v=8` eller fjern og installer PWA'en igen.
+  `https://studos.laravel.cloud/pwa/?v=9` eller fjern og installer PWA'en igen.
 - Engangskode-endpoints findes stadig til senere email-flow, men appen bruger
   nu email + adgangskode.
 - Notifikationer bor parkeret indtil Apple Developer-konto/provisioning er paa
