@@ -160,6 +160,18 @@ Realtime kan overrides paa samme maade:
 EXPO_PUBLIC_REVERB_HOST=DIN-MAC-IP npm run mobile:start:dev-client
 ```
 
+Til Laravel Cloud test skal Expo startes med Cloud API og Reverb over TLS:
+
+```bash
+EXPO_PUBLIC_API_URL=https://DIT-CLOUD-DOMAENE/api \
+EXPO_PUBLIC_CREATE_CLASS_URL=https://DIT-CLOUD-DOMAENE/opret-klasse \
+EXPO_PUBLIC_REVERB_APP_KEY=DIN_REVERB_APP_KEY \
+EXPO_PUBLIC_REVERB_HOST=DIN_REVERB_HOST \
+EXPO_PUBLIC_REVERB_PORT=443 \
+EXPO_PUBLIC_REVERB_SCHEME=https \
+npm run mobile:start
+```
+
 `@react-native-community/netinfo` er tilfoejet, fordi Pusher bruger det i React
 Native. Hvis en eksisterende Android/iOS development build ikke indeholder det
 native modul, falder chatten tilbage til polling. Rigtig Reverb realtime

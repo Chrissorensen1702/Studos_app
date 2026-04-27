@@ -181,6 +181,8 @@ const API_BASE_URLS = [
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
 const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? '192.168.1.114';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
+const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'http';
+const REVERB_FORCE_TLS = REVERB_SCHEME === 'https' || REVERB_PORT === 443;
 const APP_TABS = [
   { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar' },
   { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses' },
@@ -591,8 +593,8 @@ const createChatEcho = (authToken) => {
       wsHost: REVERB_HOST,
       wsPort: REVERB_PORT,
       wssPort: REVERB_PORT,
-      forceTLS: false,
-      enabledTransports: ['ws'],
+      forceTLS: REVERB_FORCE_TLS,
+      enabledTransports: [REVERB_FORCE_TLS ? 'wss' : 'ws'],
       authorizer: (channel) => ({
         authorize: (socketId, callback) => {
           apiFetch('/chat/realtime/auth', {
