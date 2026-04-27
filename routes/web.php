@@ -32,6 +32,4 @@ Route::middleware('auth')->group(function (): void {
     Route::delete('/admin/classes/{class}/events/{event}', [StudosWebController::class, 'destroyEvent'])->name('classes.events.destroy');
 });
 
-Route::get('/index.html', function () {
-    return redirect()->to(config('app.url'));
-});
+Route::redirect('/index.html', '/');
