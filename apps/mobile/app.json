@@ -28,10 +28,15 @@
     },
     "android": {
       "package": "dk.studenterapp.mobile",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a2448"
       }
+    },
+    "androidNavigationBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#ffffff"
     },
     "extra": {
       "eas": {

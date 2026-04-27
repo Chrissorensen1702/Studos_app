@@ -2,14 +2,19 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\ContentModeration;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 class StudosController extends Controller
 {
@@ -128,21 +133,34 @@ class StudosController extends Controller
         $ownerId = (string) Str::uuid();
         $now = now()->format('Y-m-d H:i:s');
         $graduationDate = blank($data['graduationDate'] ?? null) ? null : $data['graduationDate'];
-        $ownerName = trim($data['ownerName']);
+        $className = ContentModeration::cleanText($data['className'], 'className', 'Klassenavnet', [
+            'source' => 'class_create',
+            'member_id' => $ownerId,
+            'class_id' => $classId,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+        $ownerName = ContentModeration::cleanName($data['ownerName'], 'ownerName', 'Navnet', [
+            'source' => 'class_owner_name',
+            'member_id' => $ownerId,
+            'class_id' => $classId,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
         $ownerParts = preg_split('/\s+/', $ownerName, 2) ?: [];
         $publicId = $this->generateClassPublicId(
             $schoolName,
-            $data['className'],
+            $className,
             $data['graduationYear'] ?? (string) now()->year,
         );
 
-        DB::transaction(function () use ($data, $schoolId, $schoolName, $ownerName, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
+        DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
             DB::table('classes')->insert([
                 'id' => $classId,
                 'public_id' => $publicId,
                 'school_id' => $schoolId,
                 'school_name' => $schoolName,
-                'class_name' => trim($data['className']),
+                'class_name' => $className,
                 'graduation_year' => trim($data['graduationYear'] ?? (string) now()->year),
                 'graduation_date' => $graduationDate,
                 'owner_name' => $ownerName,
@@ -197,10 +215,13 @@ class StudosController extends Controller
 
         abort_unless($schoolClass, 404);
 
+        $currentMember = $this->authenticatedMemberFromRequest($request, false, false);
+        $currentMemberId = $currentMember?->class_id === $schoolClass->id ? $currentMember->id : null;
+
         return response()->json([
             'class' => $this->hydrateClasses(
                 collect([$schoolClass]),
-                $request->string('memberId')->toString() ?: null,
+                $currentMemberId,
             )[0],
             'schools' => $this->schoolOptions(),
         ]);
@@ -277,14 +298,11 @@ class StudosController extends Controller
         ]);
     }
 
-    public function connectionsForMember(string $member): JsonResponse
+    public function connectionsForMember(Request $request, string $member): JsonResponse
     {
-        $viewer = DB::table('members')
-            ->where('id', $member)
-            ->where('status', 'active')
-            ->first();
+        $viewer = $this->authenticatedMemberFromRequest($request);
 
-        abort_unless($viewer, 404);
+        abort_if($viewer->id !== $member, 403, 'Du kan kun hente dine egne connections.');
 
         $connections = DB::table('member_connections')
             ->where('requester_member_id', $member)
@@ -315,14 +333,10 @@ class StudosController extends Controller
     public function requestConnection(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'requesterMemberId' => ['required', 'string', 'max:36'],
             'personalCode' => ['required', 'string', 'max:32'],
         ]);
 
-        $requester = DB::table('members')
-            ->where('id', $data['requesterMemberId'])
-            ->where('status', 'active')
-            ->first();
+        $requester = $this->authenticatedMemberFromRequest($request);
         $receiver = DB::table('members')
             ->where('personal_code', Str::upper(trim($data['personalCode'])))
             ->where('status', 'active')
@@ -380,14 +394,14 @@ class StudosController extends Controller
     public function respondToConnection(Request $request, string $connection): JsonResponse
     {
         $data = $request->validate([
-            'memberId' => ['required', 'string', 'max:36'],
             'status' => ['required', Rule::in(['accepted', 'rejected'])],
         ]);
+        $member = $this->authenticatedMemberFromRequest($request);
 
         $current = DB::table('member_connections')->where('id', $connection)->first();
 
         abort_unless($current, 404);
-        abort_if($current->receiver_member_id !== $data['memberId'], 403, 'Kun modtageren kan svare paa requesten.');
+        abort_if($current->receiver_member_id !== $member->id, 403, 'Kun modtageren kan svare paa requesten.');
         abort_if($current->status !== 'pending', 422, 'Requesten er allerede besvaret.');
 
         DB::table('member_connections')->where('id', $connection)->update([
@@ -403,7 +417,7 @@ class StudosController extends Controller
         ]));
 
         return response()->json([
-            'connection' => $this->serializeConnection($updatedConnection, $data['memberId'], $memberPreviews),
+            'connection' => $this->serializeConnection($updatedConnection, $member->id, $memberPreviews),
         ]);
     }
 
@@ -426,8 +440,18 @@ class StudosController extends Controller
 
         $inviteCode = Str::upper(trim($data['inviteCode']));
         $schoolId = trim($data['schoolId']);
-        $firstName = trim($data['firstName']);
-        $lastName = trim($data['lastName']);
+        $firstName = ContentModeration::cleanName($data['firstName'], 'firstName', 'Fornavnet', [
+            'source' => 'member_signup_name',
+            'invite_code' => $inviteCode,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+        $lastName = ContentModeration::cleanName($data['lastName'], 'lastName', 'Efternavnet', [
+            'source' => 'member_signup_name',
+            'invite_code' => $inviteCode,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
         $displayName = trim($firstName.' '.$lastName);
         $email = Str::lower(trim($data['email']));
         $classId = null;
@@ -497,7 +521,7 @@ class StudosController extends Controller
 
                 DB::table('members')->where('id', $existingMember->id)->update($updates);
 
-                $member = $this->serializeMember(DB::table('members')->where('id', $existingMember->id)->first(), true);
+                $member = $this->serializeMember(DB::table('members')->where('id', $existingMember->id)->first(), true, true);
 
                 return;
             }
@@ -535,12 +559,12 @@ class StudosController extends Controller
                 'joined_at' => $joinedAt,
             ]);
 
-            $member = $this->serializeMember(DB::table('members')->where('id', $memberId)->first(), true);
+            $member = $this->serializeMember(DB::table('members')->where('id', $memberId)->first(), true, true);
         });
 
         return response()->json([
-            'session' => $this->sessionForMember($member),
-            'class' => $this->loadClassById($classId),
+            'session' => $this->sessionForMember($member, $this->issueMemberToken($member['id'])),
+            'class' => $this->loadClassById($classId, $member['id']),
         ]);
     }
 
@@ -570,9 +594,11 @@ class StudosController extends Controller
             'Email eller adgangskode er forkert.',
         );
 
+        $serializedMember = $this->serializeMember($member, true, true);
+
         return response()->json([
-            'session' => $this->sessionForMember($this->serializeMember($member, true)),
-            'class' => $this->loadClassById($schoolClass->id),
+            'session' => $this->sessionForMember($serializedMember, $this->issueMemberToken($serializedMember['id'])),
+            'class' => $this->loadClassById($schoolClass->id, $serializedMember['id']),
         ]);
     }
 
@@ -648,14 +674,334 @@ class StudosController extends Controller
 
         Cache::forget($cacheKey);
 
+        $serializedMember = $this->serializeMember($member, true, true);
+
         return response()->json([
-            'session' => $this->sessionForMember($this->serializeMember($member, true)),
-            'class' => $this->loadClassById($schoolClass->id),
+            'session' => $this->sessionForMember($serializedMember, $this->issueMemberToken($serializedMember['id'])),
+            'class' => $this->loadClassById($schoolClass->id, $serializedMember['id']),
+        ]);
+    }
+
+    public function sessionMe(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request, true, false);
+        $serializedMember = $this->serializeMember($member, true, true);
+
+        return response()->json([
+            'session' => [
+                'tokenType' => 'Bearer',
+                'expiresAt' => $this->apiDateTime($member->authTokenExpiresAt ?? null),
+                'member' => $serializedMember,
+            ],
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function updateProfilePhoto(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'profilePhotoData' => ['required', 'string', 'max:7000000'],
+        ]);
+
+        $profilePhotoUrl = $this->storeBase64Image(
+            $request,
+            $data['profilePhotoData'],
+            'profile-photos',
+            $member->id,
+        );
+
+        DB::table('members')->where('id', $member->id)->update([
+            'profile_photo_url' => $profilePhotoUrl,
+        ]);
+
+        $updatedMember = DB::table('members')->where('id', $member->id)->first();
+        $serializedMember = $this->serializeMember($updatedMember, true, true);
+
+        return response()->json([
+            'session' => [
+                'tokenType' => 'Bearer',
+                'expiresAt' => $this->apiDateTime($member->authTokenExpiresAt ?? null),
+                'member' => $serializedMember,
+            ],
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    private function storeBase64Image(Request $request, string $imageData, string $folder, string $filenamePrefix): string
+    {
+        if (! preg_match('/^data:image\/(jpeg|jpg|png|webp);base64,/', $imageData)) {
+            abort(422, 'Billedet kunne ikke laeses.');
+        }
+
+        $base64 = substr($imageData, strpos($imageData, ',') + 1);
+        $binary = base64_decode($base64, true);
+
+        if ($binary === false) {
+            abort(422, 'Billedet kunne ikke laeses.');
+        }
+
+        if (strlen($binary) > 4 * 1024 * 1024) {
+            abort(422, 'Billedet er for stort.');
+        }
+
+        $imageInfo = @getimagesizefromstring($binary);
+        $mimeType = $imageInfo['mime'] ?? null;
+        $extension = match ($mimeType) {
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            default => null,
+        };
+
+        if (! $extension) {
+            abort(422, 'Billedet kunne ikke laeses.');
+        }
+
+        $directory = public_path('uploads/'.$folder);
+        File::ensureDirectoryExists($directory, 0775, true);
+
+        $filename = $filenamePrefix.'-'.Str::uuid().'.'.$extension;
+
+        try {
+            $written = File::put($directory.'/'.$filename, $binary);
+        } catch (Throwable $exception) {
+            Log::warning('Image upload failed.', [
+                'folder' => $folder,
+                'error' => $exception->getMessage(),
+            ]);
+
+            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
+        }
+
+        if ($written === false) {
+            Log::warning('Image upload returned false.', [
+                'folder' => $folder,
+            ]);
+
+            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
+        }
+
+        return $request->getSchemeAndHttpHost()
+            .rtrim($request->getBaseUrl(), '/')
+            .'/uploads/'.$folder.'/'.$filename;
+    }
+
+    public function storeEvent(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:190'],
+            'eventDate' => ['required', 'date'],
+            'eventTime' => ['nullable', 'date_format:H:i'],
+            'location' => ['nullable', 'string', 'max:190'],
+            'description' => ['nullable', 'string', 'max:1200'],
+            'coverImageData' => ['nullable', 'string', 'max:7000000'],
+            'inviteScope' => ['nullable', Rule::in(['class', 'crew', 'custom'])],
+            'invitedMemberIds' => ['nullable', 'array', 'max:250'],
+            'invitedMemberIds.*' => ['string', 'max:36'],
+        ]);
+
+        $eventId = (string) Str::uuid();
+        $rsvpId = (string) Str::uuid();
+        $now = now()->format('Y-m-d H:i:s');
+        $eventDate = Carbon::parse($data['eventDate'])->format('Y-m-d');
+        $eventTime = blank($data['eventTime'] ?? null) ? null : $data['eventTime'];
+        $startsAt = $eventTime
+            ? Carbon::createFromFormat('Y-m-d H:i', $eventDate.' '.$eventTime)->format('Y-m-d H:i:s')
+            : null;
+        $coverImageUrl = blank($data['coverImageData'] ?? null)
+            ? null
+            : $this->storeBase64Image($request, $data['coverImageData'], 'event-covers', $eventId);
+        $inviteScope = $data['inviteScope'] ?? 'class';
+        $inviteMemberIds = $this->resolveEventInviteMemberIds(
+            $member,
+            $inviteScope,
+            $data['invitedMemberIds'] ?? [],
+        );
+        $moderationContext = [
+            'source' => 'event_create',
+            'member_id' => $member->id,
+            'class_id' => $member->class_id,
+            'event_id' => $eventId,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $location = ContentModeration::cleanNullableText($data['location'] ?? null, 'location', 'Sted', $moderationContext);
+        $description = ContentModeration::cleanNullableText($data['description'] ?? null, 'description', 'Beskrivelsen', $moderationContext);
+
+        DB::transaction(function () use (
+            $eventId,
+            $rsvpId,
+            $member,
+            $now,
+            $eventDate,
+            $startsAt,
+            $coverImageUrl,
+            $inviteScope,
+            $inviteMemberIds,
+            $title,
+            $location,
+            $description,
+        ): void {
+            DB::table('events')->insert([
+                'id' => $eventId,
+                'class_id' => $member->class_id,
+                'title' => $title,
+                'event_date' => $eventDate,
+                'starts_at' => $startsAt,
+                'event_type' => 'studentergilde',
+                'location' => $location,
+                'description' => $description,
+                'cover_image_url' => $coverImageUrl,
+                'invite_scope' => $inviteScope,
+                'created_by_member_id' => $member->id,
+                'rsvp_count' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            if (Schema::hasTable('event_invites')) {
+                DB::table('event_invites')->insert(array_map(
+                    fn (string $memberId): array => [
+                        'id' => (string) Str::uuid(),
+                        'event_id' => $eventId,
+                        'member_id' => $memberId,
+                        'invited_by_member_id' => $member->id,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ],
+                    $inviteMemberIds,
+                ));
+            }
+
+            DB::table('event_rsvps')->insert([
+                'id' => $rsvpId,
+                'event_id' => $eventId,
+                'member_id' => $member->id,
+                'status' => 'attending',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        });
+
+        return response()->json([
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ], 201);
+    }
+
+    private function resolveEventInviteMemberIds(object $member, string $inviteScope, array $requestedMemberIds): array
+    {
+        $activeMemberIds = DB::table('members')
+            ->where('class_id', $member->class_id)
+            ->where('status', 'active')
+            ->pluck('id')
+            ->all();
+
+        if ($inviteScope !== 'custom') {
+            return array_values(array_unique([...$activeMemberIds, $member->id]));
+        }
+
+        $requestedMemberIds = array_values(array_unique(array_filter($requestedMemberIds)));
+
+        if (empty($requestedMemberIds)) {
+            abort(422, 'Vaelg mindst een person at invitere.');
+        }
+
+        $validMemberIds = DB::table('members')
+            ->where('class_id', $member->class_id)
+            ->where('status', 'active')
+            ->whereIn('id', $requestedMemberIds)
+            ->pluck('id')
+            ->all();
+
+        abort_if(
+            count($validMemberIds) !== count($requestedMemberIds),
+            422,
+            'En eller flere inviterede findes ikke.',
+        );
+
+        return array_values(array_unique([...$validMemberIds, $member->id]));
+    }
+
+    public function respondToEvent(Request $request, string $event): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'status' => ['required', Rule::in(['attending', 'not_attending'])],
+        ]);
+        $schoolEvent = DB::table('events')
+            ->where('id', $event)
+            ->where('class_id', $member->class_id)
+            ->first();
+
+        abort_unless($schoolEvent, 404, 'Begivenheden findes ikke.');
+
+        if (Schema::hasTable('event_invites')) {
+            $hasInvites = DB::table('event_invites')
+                ->where('event_id', $event)
+                ->exists();
+
+            $isInvited = DB::table('event_invites')
+                ->where('event_id', $event)
+                ->where('member_id', $member->id)
+                ->exists();
+
+            abort_if($hasInvites && ! $isInvited, 403, 'Du er ikke inviteret til begivenheden.');
+        }
+
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::transaction(function () use ($data, $event, $member, $now): void {
+            $existing = DB::table('event_rsvps')
+                ->where('event_id', $event)
+                ->where('member_id', $member->id)
+                ->first();
+
+            if ($existing) {
+                DB::table('event_rsvps')->where('id', $existing->id)->update([
+                    'status' => $data['status'],
+                    'updated_at' => $now,
+                ]);
+            } else {
+                DB::table('event_rsvps')->insert([
+                    'id' => (string) Str::uuid(),
+                    'event_id' => $event,
+                    'member_id' => $member->id,
+                    'status' => $data['status'],
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+
+            $attendingCount = DB::table('event_rsvps')
+                ->where('event_id', $event)
+                ->where('status', 'attending')
+                ->count();
+
+            DB::table('events')->where('id', $event)->update([
+                'rsvp_count' => $attendingCount,
+                'updated_at' => $now,
+            ]);
+        });
+
+        return response()->json([
+            'class' => $this->loadClassById($member->class_id, $member->id),
         ]);
     }
 
     public function updateMemberAccess(Request $request, string $class, string $member): JsonResponse
     {
+        $actor = $this->authenticatedMemberFromRequest($request);
+
+        abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
+        abort_unless(
+            in_array($this->normalizeRole($actor->role), ['owner', 'moderator'], true),
+            403,
+            'Du har ikke rettigheder til at aendre adgang.',
+        );
+
         $data = $request->validate([
             'role' => ['nullable', 'string', Rule::in($this->roleIds())],
             'status' => ['nullable', 'string', Rule::in($this->statusIds())],
@@ -803,7 +1149,7 @@ class StudosController extends Controller
         ]);
     }
 
-    private function hydrateClasses($classRows, ?string $personalCodeMemberId = null): array
+    private function hydrateClasses($classRows, ?string $currentMemberId = null): array
     {
         if ($classRows->isEmpty()) {
             return [];
@@ -815,11 +1161,52 @@ class StudosController extends Controller
             ->orderBy('joined_at')
             ->get()
             ->groupBy('class_id');
-        $events = DB::table('events')
+        $eventRows = DB::table('events')
             ->whereIn('class_id', $classIds)
             ->orderBy('event_date')
-            ->get()
-            ->groupBy('class_id');
+            ->get();
+        $events = $eventRows->groupBy('class_id');
+        $eventRsvps = collect();
+        $eventInvites = collect();
+
+        if (Schema::hasTable('event_rsvps') && $eventRows->isNotEmpty()) {
+            $eventRsvps = DB::table('event_rsvps')
+                ->join('members', 'members.id', '=', 'event_rsvps.member_id')
+                ->whereIn('event_rsvps.event_id', $eventRows->pluck('id'))
+                ->select([
+                    'event_rsvps.id',
+                    'event_rsvps.event_id',
+                    'event_rsvps.member_id',
+                    'event_rsvps.status',
+                    'event_rsvps.created_at',
+                    'event_rsvps.updated_at',
+                    'members.display_name as memberDisplayName',
+                    'members.profile_photo_url as memberProfilePhotoUrl',
+                ])
+                ->orderBy('event_rsvps.created_at')
+                ->get()
+                ->groupBy('event_id');
+        }
+
+        if (Schema::hasTable('event_invites') && $eventRows->isNotEmpty()) {
+            $eventInvites = DB::table('event_invites')
+                ->join('members', 'members.id', '=', 'event_invites.member_id')
+                ->whereIn('event_invites.event_id', $eventRows->pluck('id'))
+                ->select([
+                    'event_invites.id',
+                    'event_invites.event_id',
+                    'event_invites.member_id',
+                    'event_invites.invited_by_member_id',
+                    'event_invites.created_at',
+                    'event_invites.updated_at',
+                    'members.display_name as memberDisplayName',
+                    'members.profile_photo_url as memberProfilePhotoUrl',
+                ])
+                ->orderBy('event_invites.created_at')
+                ->get()
+                ->groupBy('event_id');
+        }
+
         $contentBlocks = Schema::hasTable('class_content_blocks')
             ? DB::table('class_content_blocks')
                 ->whereIn('class_id', $classIds)
@@ -834,26 +1221,39 @@ class StudosController extends Controller
                 $schoolClass,
                 $members->get($schoolClass->id, collect()),
                 $events->get($schoolClass->id, collect()),
+                $eventRsvps,
+                $eventInvites,
                 $contentBlocks->get($schoolClass->id, collect()),
-                $personalCodeMemberId,
+                $currentMemberId,
             ))
             ->values()
             ->all();
     }
 
-    private function loadClassById(string $classId): array
+    private function loadClassById(string $classId, ?string $currentMemberId = null): array
     {
         $schoolClass = $this->classQuery()->where('id', $classId)->first();
 
         abort_unless($schoolClass, 404);
 
-        return $this->hydrateClasses(collect([$schoolClass]))[0];
+        return $this->hydrateClasses(collect([$schoolClass]), $currentMemberId)[0];
     }
 
-    private function serializeClass(object $schoolClass, $members, $events, $contentBlocks, ?string $personalCodeMemberId = null): array
-    {
+    private function serializeClass(
+        object $schoolClass,
+        $members,
+        $events,
+        $eventRsvps,
+        $eventInvites,
+        $contentBlocks,
+        ?string $currentMemberId = null,
+    ): array {
         $serializedMembers = $members
-            ->map(fn ($member) => $this->serializeMember($member, $member->id === $personalCodeMemberId))
+            ->map(fn ($member) => $this->serializeMember(
+                $member,
+                $member->id === $currentMemberId,
+                $member->id === $currentMemberId,
+            ))
             ->values();
 
         return [
@@ -876,14 +1276,102 @@ class StudosController extends Controller
             ],
             'members' => $serializedMembers->all(),
             'memberSummary' => $this->memberSummary($serializedMembers),
-            'events' => $events->map(fn ($event) => [
-                'id' => $event->id,
-                'title' => $event->title,
-                'date' => $this->apiDate($event->event_date),
-                'location' => $event->location ?? '',
-                'description' => $event->description ?? '',
-                'rsvpCount' => (int) $event->rsvp_count,
-            ])->values()->all(),
+            'events' => $events
+                ->filter(function (object $event) use ($currentMemberId, $eventInvites): bool {
+                    if (! $currentMemberId) {
+                        return ($event->invite_scope ?? 'class') !== 'custom';
+                    }
+
+                    if (($event->invite_scope ?? 'class') !== 'custom') {
+                        return true;
+                    }
+
+                    $invitesForEvent = $eventInvites->get($event->id, collect());
+
+                    return $invitesForEvent->isEmpty()
+                        || $invitesForEvent->contains('member_id', $currentMemberId);
+                })
+                ->map(function (object $event) use ($currentMemberId, $eventRsvps, $eventInvites, $members): array {
+                    $eventRsvpsForEvent = $eventRsvps->get($event->id, collect());
+                    $eventInvitesForEvent = $eventInvites->get($event->id, collect());
+                    $attendees = $eventRsvpsForEvent->where('status', 'attending')->values();
+                    $declines = $eventRsvpsForEvent->where('status', 'not_attending')->values();
+                    $respondedMemberIds = $eventRsvpsForEvent->pluck('member_id')->unique();
+                    $pendingInvites = $eventInvitesForEvent
+                        ->reject(fn (object $invite): bool => $respondedMemberIds->contains($invite->member_id))
+                        ->values();
+                    $creator = blank($event->created_by_member_id ?? null)
+                        ? null
+                        : $members->firstWhere('id', $event->created_by_member_id);
+                    $myRsvp = $currentMemberId
+                        ? $eventRsvpsForEvent->firstWhere('member_id', $currentMemberId)?->status
+                        : null;
+                    $inviteCount = $eventInvitesForEvent->isNotEmpty()
+                        ? $eventInvitesForEvent->count()
+                        : $members->where('status', 'active')->count();
+
+                    return [
+                        'id' => $event->id,
+                        'title' => $event->title,
+                        'type' => $event->event_type ?? 'studentergilde',
+                        'date' => $this->apiDate($event->event_date),
+                        'startsAt' => $this->apiDateTime($event->starts_at ?? null),
+                        'location' => $event->location ?? '',
+                        'description' => $event->description ?? '',
+                        'coverImageUrl' => $event->cover_image_url ?? null,
+                        'inviteScope' => $event->invite_scope ?? 'class',
+                        'inviteCount' => $inviteCount,
+                        'pendingCount' => $eventInvitesForEvent->isNotEmpty()
+                            ? $pendingInvites->count()
+                            : max(0, $inviteCount - $attendees->count() - $declines->count()),
+                        'myInviteStatus' => $currentMemberId && (
+                            $eventInvitesForEvent->isEmpty()
+                            || $eventInvitesForEvent->contains('member_id', $currentMemberId)
+                        ) ? 'invited' : null,
+                        'createdByMemberId' => $event->created_by_member_id ?? null,
+                        'creator' => $creator ? [
+                            'id' => $creator->id,
+                            'displayName' => $creator->display_name,
+                            'profilePhotoUrl' => $creator->profile_photo_url ?? null,
+                        ] : null,
+                        'rsvpCount' => (int) $event->rsvp_count,
+                        'attendingCount' => $attendees->isNotEmpty()
+                            ? $attendees->count()
+                            : (int) $event->rsvp_count,
+                        'notAttendingCount' => $declines->count(),
+                        'myRsvp' => $myRsvp,
+                        'attendees' => $attendees
+                            ->map(fn (object $rsvp): array => [
+                                'memberId' => $rsvp->member_id,
+                                'displayName' => $rsvp->memberDisplayName,
+                                'profilePhotoUrl' => $rsvp->memberProfilePhotoUrl,
+                            ])
+                            ->all(),
+                        'declines' => $declines
+                            ->map(fn (object $rsvp): array => [
+                                'memberId' => $rsvp->member_id,
+                                'displayName' => $rsvp->memberDisplayName,
+                                'profilePhotoUrl' => $rsvp->memberProfilePhotoUrl,
+                            ])
+                            ->all(),
+                        'invitees' => $eventInvitesForEvent
+                            ->map(fn (object $invite): array => [
+                                'memberId' => $invite->member_id,
+                                'displayName' => $invite->memberDisplayName,
+                                'profilePhotoUrl' => $invite->memberProfilePhotoUrl,
+                            ])
+                            ->all(),
+                        'pendingInvitees' => $pendingInvites
+                            ->map(fn (object $invite): array => [
+                                'memberId' => $invite->member_id,
+                                'displayName' => $invite->memberDisplayName,
+                                'profilePhotoUrl' => $invite->memberProfilePhotoUrl,
+                            ])
+                            ->all(),
+                    ];
+                })
+                ->values()
+                ->all(),
             'contentBlocks' => $contentBlocks->map(fn ($block) => [
                 'id' => $block->id,
                 'type' => $block->type,
@@ -896,25 +1384,30 @@ class StudosController extends Controller
         ];
     }
 
-    private function serializeMember(object $member, bool $includePersonalCode = false): array
+    private function serializeMember(object $member, bool $includePersonalCode = false, bool $includePrivate = false): array
     {
         $firstName = $member->first_name ?? null;
         $lastName = $member->last_name ?? null;
 
         $serialized = [
             'id' => $member->id,
-            'schoolId' => $member->school_id ?? null,
             'displayName' => $member->display_name,
             'firstName' => $firstName,
             'lastName' => $lastName,
-            'email' => $member->email,
-            'phone' => $member->phone ?? null,
-            'birthday' => $this->apiDate($member->birthday ?? null),
             'profilePhotoUrl' => $member->profile_photo_url ?? null,
             'role' => $this->normalizeRole($member->role),
             'status' => $this->normalizeStatus($member->status ?? 'active'),
             'joinedAt' => $this->apiDateTime($member->joined_at),
+            'lastSeenAt' => $this->apiDateTime($member->last_seen_at ?? null),
+            'isOnline' => $this->memberIsOnline($member->last_seen_at ?? null),
         ];
+
+        if ($includePrivate) {
+            $serialized['schoolId'] = $member->school_id ?? null;
+            $serialized['email'] = $member->email;
+            $serialized['phone'] = $member->phone ?? null;
+            $serialized['birthday'] = $this->apiDate($member->birthday ?? null);
+        }
 
         if ($includePersonalCode) {
             $serialized['personalCode'] = $member->personal_code ?? null;
@@ -923,12 +1416,89 @@ class StudosController extends Controller
         return $serialized;
     }
 
-    private function sessionForMember(array $member): array
+    private function sessionForMember(array $member, ?array $token = null): array
     {
-        return [
-            'token' => 'demo-'.$member['id'],
+        $session = [
+            'tokenType' => 'Bearer',
             'member' => $member,
         ];
+
+        if ($token) {
+            $session['token'] = $token['plainTextToken'];
+            $session['expiresAt'] = $this->apiDateTime($token['expiresAt']);
+        }
+
+        return $session;
+    }
+
+    private function issueMemberToken(string $memberId, string $name = 'mobile'): array
+    {
+        $plainTextToken = 'studos_'.bin2hex(random_bytes(32));
+        $expiresAt = now()->addDays(60);
+
+        DB::table('member_auth_tokens')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => $memberId,
+            'token_hash' => hash('sha256', $plainTextToken),
+            'name' => $name,
+            'last_used_at' => null,
+            'expires_at' => $expiresAt->format('Y-m-d H:i:s'),
+            'revoked_at' => null,
+            'created_at' => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        return [
+            'plainTextToken' => $plainTextToken,
+            'expiresAt' => $expiresAt,
+        ];
+    }
+
+    private function authenticatedMemberFromRequest(Request $request, bool $required = true, bool $mustBeActive = true): ?object
+    {
+        $plainTextToken = $request->bearerToken();
+
+        if (blank($plainTextToken)) {
+            abort_if($required, 401, 'Login mangler.');
+
+            return null;
+        }
+
+        $token = DB::table('member_auth_tokens')
+            ->where('token_hash', hash('sha256', $plainTextToken))
+            ->whereNull('revoked_at')
+            ->first();
+
+        abort_unless($token, 401, 'Sessionen er ugyldig. Log ind igen.');
+
+        if (! blank($token->expires_at) && Carbon::parse($token->expires_at)->isPast()) {
+            DB::table('member_auth_tokens')->where('id', $token->id)->update([
+                'revoked_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+
+            abort(401, 'Sessionen er udloebet. Log ind igen.');
+        }
+
+        $memberQuery = DB::table('members')->where('id', $token->member_id);
+
+        if ($mustBeActive) {
+            $memberQuery->where('status', 'active');
+        } else {
+            $memberQuery->where('status', '!=', 'removed');
+        }
+
+        $member = $memberQuery->first();
+
+        abort_unless($member, 401, 'Medlemmet har ikke adgang laengere.');
+
+        DB::table('member_auth_tokens')->where('id', $token->id)->update([
+            'last_used_at' => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        $this->touchMemberPresence($member);
+
+        $member->authTokenExpiresAt = $token->expires_at;
+
+        return $member;
     }
 
     private function memberPreviews($memberIds)
@@ -939,21 +1509,60 @@ class StudosController extends Controller
             return collect();
         }
 
+        $select = [
+            'members.id',
+            'members.display_name as displayName',
+            'members.first_name as firstName',
+            'members.profile_photo_url as profilePhotoUrl',
+            'classes.public_id as classId',
+            'classes.school_name as schoolName',
+            'classes.class_name as className',
+            'classes.graduation_year as graduationYear',
+        ];
+
+        if (Schema::hasColumn('members', 'last_seen_at')) {
+            $select[] = 'members.last_seen_at as lastSeenAt';
+        }
+
         return DB::table('members')
             ->join('classes', 'classes.id', '=', 'members.class_id')
-            ->select([
-                'members.id',
-                'members.display_name as displayName',
-                'members.first_name as firstName',
-                'members.profile_photo_url as profilePhotoUrl',
-                'classes.public_id as classId',
-                'classes.school_name as schoolName',
-                'classes.class_name as className',
-                'classes.graduation_year as graduationYear',
-            ])
+            ->select($select)
             ->whereIn('members.id', $ids)
             ->get()
             ->keyBy('id');
+    }
+
+    private function touchMemberPresence(object $member): void
+    {
+        if (! Schema::hasColumn('members', 'last_seen_at')) {
+            return;
+        }
+
+        $now = now();
+        $lastSeenAt = blank($member->last_seen_at ?? null)
+            ? null
+            : Carbon::parse($member->last_seen_at);
+
+        if ($lastSeenAt && $lastSeenAt->greaterThan($now->copy()->subSeconds(45))) {
+            return;
+        }
+
+        $formattedNow = $now->format('Y-m-d H:i:s');
+
+        DB::table('members')->where('id', $member->id)->update([
+            'last_seen_at' => $formattedNow,
+        ]);
+
+        $member->last_seen_at = $formattedNow;
+    }
+
+    private function memberIsOnline(mixed $lastSeenAt): bool
+    {
+        if (blank($lastSeenAt)) {
+            return false;
+        }
+
+        return Carbon::parse($lastSeenAt)->greaterThanOrEqualTo(now()->subMinutes(2));
     }
 
     private function serializeConnection(object $connection, string $viewerMemberId, $memberPreviews): array
@@ -975,6 +1584,8 @@ class StudosController extends Controller
                 'displayName' => $otherMember->displayName,
                 'firstName' => $otherMember->firstName,
                 'profilePhotoUrl' => $otherMember->profilePhotoUrl,
+                'lastSeenAt' => $this->apiDateTime($otherMember->lastSeenAt ?? null),
+                'isOnline' => $this->memberIsOnline($otherMember->lastSeenAt ?? null),
                 'class' => [
                     'classId' => $otherMember->classId,
                     'schoolName' => $otherMember->schoolName,

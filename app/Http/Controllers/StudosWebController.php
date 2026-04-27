@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Support\ContentModeration;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -108,6 +109,13 @@ class StudosWebController extends Controller
             'joinPolicy' => ['required', Rule::in(array_keys(self::JOIN_POLICIES))],
         ]);
 
+        $data['className'] = ContentModeration::cleanText($data['className'], 'className', 'Klassenavnet', [
+            'source' => 'web_class_create',
+            'user_id' => $request->user()?->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
         $user = $request->user();
         $classId = $this->createClassForOwner($data, $user->name, $user->email);
 
@@ -129,8 +137,19 @@ class StudosWebController extends Controller
             'joinPolicy' => ['required', Rule::in(array_keys(self::JOIN_POLICIES))],
         ]);
 
+        $data['ownerName'] = ContentModeration::cleanName($data['ownerName'], 'ownerName', 'Navnet', [
+            'source' => 'web_public_owner_name',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+        $data['className'] = ContentModeration::cleanText($data['className'], 'className', 'Klassenavnet', [
+            'source' => 'web_public_class_create',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
         $user = User::create([
-            'name' => trim($data['ownerName']),
+            'name' => $data['ownerName'],
             'email' => Str::lower(trim($data['ownerEmail'])),
             'password' => $data['password'],
         ]);
@@ -155,22 +174,32 @@ class StudosWebController extends Controller
         $ownerId = (string) Str::uuid();
         $now = now()->format('Y-m-d H:i:s');
         $graduationDate = blank($data['graduationDate'] ?? null) ? null : $data['graduationDate'];
-        $ownerParts = preg_split('/\s+/', trim($ownerName), 2) ?: [];
+        $ownerName = ContentModeration::cleanName($ownerName, 'ownerName', 'Navnet', [
+            'source' => 'web_class_owner_name',
+            'member_id' => $ownerId,
+            'class_id' => $classId,
+        ]);
+        $className = ContentModeration::cleanText($data['className'], 'className', 'Klassenavnet', [
+            'source' => 'web_class_create',
+            'member_id' => $ownerId,
+            'class_id' => $classId,
+        ]);
+        $ownerParts = preg_split('/\s+/', $ownerName, 2) ?: [];
         $school = $this->schoolById($data['schoolId']);
         $schoolId = $school->id;
         $schoolName = $school->name;
-        $publicId = $this->generateClassPublicId($schoolName, $data['className'], $data['graduationYear']);
+        $publicId = $this->generateClassPublicId($schoolName, $className, $data['graduationYear']);
 
-        DB::transaction(function () use ($data, $schoolId, $schoolName, $ownerName, $ownerEmail, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
+        DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerEmail, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
             DB::table('classes')->insert([
                 'id' => $classId,
                 'public_id' => $publicId,
                 'school_id' => $schoolId,
                 'school_name' => $schoolName,
-                'class_name' => trim($data['className']),
+                'class_name' => $className,
                 'graduation_year' => trim($data['graduationYear']),
                 'graduation_date' => $graduationDate,
-                'owner_name' => trim($ownerName),
+                'owner_name' => $ownerName,
                 'owner_email' => Str::lower(trim($ownerEmail)),
                 'invite_code' => $this->generateInviteCode($data['graduationYear']),
                 'join_policy' => $data['joinPolicy'],
@@ -185,7 +214,7 @@ class StudosWebController extends Controller
                 'personal_code' => $this->generatePersonalCode($ownerParts[0] ?? $ownerName),
                 'class_id' => $classId,
                 'school_id' => $schoolId,
-                'display_name' => trim($ownerName),
+                'display_name' => $ownerName,
                 'first_name' => $ownerParts[0] ?? null,
                 'last_name' => $ownerParts[1] ?? null,
                 'email' => Str::lower(trim($ownerEmail)),
@@ -359,13 +388,22 @@ class StudosWebController extends Controller
             'body' => ['required', 'string', 'max:4000'],
             'sortOrder' => ['nullable', 'integer', 'min:0', 'max:999'],
         ]);
+        $moderationContext = [
+            'source' => 'admin_content_block',
+            'class_id' => $class,
+            'user_id' => $request->user()?->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $body = ContentModeration::cleanText($data['body'], 'body', 'Teksten', $moderationContext);
 
         DB::table('class_content_blocks')->insert([
             'id' => (string) Str::uuid(),
             'class_id' => $class,
             'type' => $data['type'],
-            'title' => trim($data['title']),
-            'body' => trim($data['body']),
+            'title' => $title,
+            'body' => $body,
             'is_pinned' => $request->boolean('isPinned'),
             'sort_order' => $data['sortOrder'] ?? 100,
             'created_at' => now(),
@@ -387,11 +425,21 @@ class StudosWebController extends Controller
             'body' => ['required', 'string', 'max:4000'],
             'sortOrder' => ['nullable', 'integer', 'min:0', 'max:999'],
         ]);
+        $moderationContext = [
+            'source' => 'admin_content_block',
+            'class_id' => $class,
+            'content_block_id' => $block,
+            'user_id' => $request->user()?->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $body = ContentModeration::cleanText($data['body'], 'body', 'Teksten', $moderationContext);
 
         DB::table('class_content_blocks')->where('id', $block)->update([
             'type' => $data['type'],
-            'title' => trim($data['title']),
-            'body' => trim($data['body']),
+            'title' => $title,
+            'body' => $body,
             'is_pinned' => $request->boolean('isPinned'),
             'sort_order' => $data['sortOrder'] ?? 100,
             'updated_at' => now(),
@@ -422,14 +470,24 @@ class StudosWebController extends Controller
             'description' => ['nullable', 'string', 'max:4000'],
             'rsvpCount' => ['nullable', 'integer', 'min:0', 'max:9999'],
         ]);
+        $moderationContext = [
+            'source' => 'admin_event',
+            'class_id' => $class,
+            'user_id' => $request->user()?->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $location = ContentModeration::cleanNullableText($data['location'] ?? null, 'location', 'Sted', $moderationContext);
+        $description = ContentModeration::cleanNullableText($data['description'] ?? null, 'description', 'Beskrivelsen', $moderationContext);
 
         DB::table('events')->insert([
             'id' => (string) Str::uuid(),
             'class_id' => $class,
-            'title' => trim($data['title']),
+            'title' => $title,
             'event_date' => $data['eventDate'],
-            'location' => blank($data['location'] ?? null) ? null : trim($data['location']),
-            'description' => blank($data['description'] ?? null) ? null : trim($data['description']),
+            'location' => $location,
+            'description' => $description,
             'rsvp_count' => $data['rsvpCount'] ?? 0,
             'created_at' => now(),
             'updated_at' => now(),
@@ -451,12 +509,23 @@ class StudosWebController extends Controller
             'description' => ['nullable', 'string', 'max:4000'],
             'rsvpCount' => ['nullable', 'integer', 'min:0', 'max:9999'],
         ]);
+        $moderationContext = [
+            'source' => 'admin_event',
+            'class_id' => $class,
+            'event_id' => $event,
+            'user_id' => $request->user()?->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $location = ContentModeration::cleanNullableText($data['location'] ?? null, 'location', 'Sted', $moderationContext);
+        $description = ContentModeration::cleanNullableText($data['description'] ?? null, 'description', 'Beskrivelsen', $moderationContext);
 
         DB::table('events')->where('id', $event)->update([
-            'title' => trim($data['title']),
+            'title' => $title,
             'event_date' => $data['eventDate'],
-            'location' => blank($data['location'] ?? null) ? null : trim($data['location']),
-            'description' => blank($data['description'] ?? null) ? null : trim($data['description']),
+            'location' => $location,
+            'description' => $description,
             'rsvp_count' => $data['rsvpCount'] ?? 0,
             'updated_at' => now(),
         ]);

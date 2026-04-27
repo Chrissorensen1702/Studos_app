@@ -6,6 +6,9 @@ og native React Native iPhone-app.
 Denne README er en "start her igen"-note, saa projektet kan tages op uden at
 miste konteksten.
 
+Se ogsaa `DETTE_MANGLER_VI.md` for konkrete produkt-/feature-noter, der ikke
+maa glemmes.
+
 ## Produktide
 
 Studos er en privat klassehub til studenteraret. En klasse kan oprettes paa web,
@@ -16,7 +19,7 @@ Hovedideen:
 
 - `Laravel`: website, admin, login, roller, API og database/migrations.
 - `mobile`: elevernes native app med join-flow, klasseforside, countdown,
-  events og senere feed, billeder, blaa bog og notifikationer.
+  events, chat og senere feed, billeder, blaa bog og notifikationer.
 - `database`: rigtig SQL via XAMPP MariaDB/MySQL, saa data kan ses og styres i
   phpMyAdmin.
 
@@ -46,8 +49,11 @@ studenter-app/
 - Bruger XAMPP MariaDB/MySQL via socket:
   `/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock`.
 - Database hedder `studenter_app`.
-- Tabeller: `schools`, `classes`, `members`, `events`, `member_connections`,
-  `member_blocks`, `member_reports` plus Laravels egne tabeller.
+- Tabeller: `schools`, `classes`, `members`, `events`, `event_rsvps`,
+  `event_invites`, `member_connections`, `member_blocks`, `member_reports`,
+  `moderation_violations`, `member_auth_tokens`,
+  `chat_conversations`, `chat_participants`, `chat_messages`,
+  `chat_moderation_events` plus Laravels egne tabeller.
 - Medlemsroller: `owner`, `moderator`, `student`. Alle tre har fuld adgang
   lige nu, indtil adgangsniveauerne bliver defineret.
 - Medlemsstatus: `pending`, `active`, `removed`.
@@ -79,7 +85,26 @@ API endpoints:
 - `POST /api/session/login`
 - `POST /api/session/request-code`
 - `POST /api/session/verify-code`
+- `GET /api/session/me`
+- `POST /api/profile/photo`
 - `POST /api/classes/:classId/members/:memberId/access`
+- `POST /api/events`
+- `POST /api/events/:eventId/rsvp`
+- `GET /api/chat/conversations`
+- `POST /api/chat/realtime/auth`
+- `POST /api/chat/conversations/direct`
+- `POST /api/chat/conversations/group`
+- `GET /api/chat/conversations/:conversationId/messages`
+- `POST /api/chat/conversations/:conversationId/messages`
+- `POST /api/chat/conversations/:conversationId/read`
+- `POST /api/chat/conversations/:conversationId/mute`
+- `POST /api/chat/conversations/:conversationId/report`
+- `POST /api/chat/conversations/:conversationId/block`
+- `POST /api/chat/conversations/:conversationId/hide`
+- `POST /api/chat/conversations/:conversationId/leave`
+- `DELETE /api/chat/conversations/:conversationId`
+- `POST /api/chat/messages/:messageId/report`
+- `DELETE /api/chat/messages/:messageId`
 
 ## Web
 
@@ -129,8 +154,9 @@ Password: studos123
 - Profiloprettelse kraever adgangskode, som gemmes hashet paa medlemmet.
 - Efter login har appen bundnavigation med `Kalender`, `Chat`, `Overblik`,
   `Wallet` og `Walls`.
-- `Overblik` er pt. en ren forside med titel, countdown, personlig
-  `Studos-kode` og en lille studenterhat over O'et.
+- `Overblik` er pt. en forside med titel, dynamisk countdown til
+  studenterugen, check-in/stemning, social-score/klip-kort og en lille
+  studenterhat over O'et.
 - Topbaren viser skole/klasse, Studos-wordmark, custom hamburger-menu og synlig
   skygge over sideindholdet.
 - Sidebaren er en kompakt, ikke-scrollende drawer. `Mit crew` ligger som en
@@ -139,8 +165,30 @@ Password: studos123
 - Sidebar-ikonerne bruger en fast Studos-palette (`lyseblaa`, `gul`, `roed`,
   `moerk`) og er bygget som simple React Native `View`-former, hvor flerfarve
   giver mening, i stedet for svaere SVG'er.
-- `Chat`, `Walls`, `Kalender`, `Wallet` og sidebar-siderne er oprettet som
-  foerste placeholder-sider.
+- `Chat` har foerste rigtige version med 1-1 samtaler, gruppechats,
+  gruppebillede, tekst/emoji, unread-count, kronologisk sortering,
+  1-1 sendt/laest-status, mute/unmute, skjul direkte chat, forlad gruppe og
+  slet gruppe som ejer.
+- Chatforsiden har long-press paa en samtale for chatindstillinger. Inde i en
+  individuel chat kan man long-press'e en besked for at slette egen besked
+  eller rapportere en anden persons besked.
+- Individuelle chats har fuldskaermsvisning uden global topbar/footer,
+  keyboard-tilpasset inputfelt paa iOS/Android og swipe fra venstre mod hoejre
+  tilbage til chatlisten med chatlisten synlig under traekket.
+- Chat og oprettelsesflows bruger indholdsfilter via `ContentModeration`, og
+  overtraedelser logges i `moderation_violations`. Chatrapporter og
+  beskedrapporter gemmes i `member_reports`, og chathandlinger logges i
+  `chat_moderation_events`.
+- `Kalender` har en rigtig begivenhedsoversigt og oprettelsesflow til
+  studentergilder med cover-billede, datovaelger, iOS-lignende tidshjul,
+  invitationer til hele klassen/crew/valgte personer og RSVP
+  `Deltager`/`Deltager ikke`.
+- Chatten bruger Laravel Reverb til realtime via private kanaler. Hvis en
+  development build mangler native NetInfo-modulet, falder appen tilbage til
+  polling.
+- `Walls`, `Wallet` og flere sidebar-sider er stadig foerste
+  placeholder-/skitse-sider. `Kalender` har foerste rigtige event-flow, men
+  skal stadig produktionspolishes.
 - App-ikonet er lavet ud fra Studos-marken som 1024x1024 PNG uden alpha.
 - Ikonfiler:
   - `apps/mobile/assets/icon.png`
@@ -152,7 +200,7 @@ Password: studos123
 - Den rigtige fremtidige bundle id kan vaere `dk.studos.mobile`, men den
   kraever ny provisioning profile/Apple Developer setup.
 
-## App Store-godkendelse
+## App Store-godkendelse og drift
 
 VIGTIGT: Alt i native appen skal bygges med det formaal, at appen senere skal
 kunne godkendes i App Store.
@@ -167,11 +215,21 @@ Det betyder blandt andet:
   kraever det.
 - Appen maa ikke kraeve uventede eksterne dev-servere, debug-flows eller lokal
   netvaerksadgang i produktion.
-- Fremtidige features som billeder, chat, moderation og notifikationer skal
-  designes med Apples privacy-, safety- og content-regler i tankerne.
+- Sociale features som billeder, chat, kalender-events, moderation og
+  notifikationer skal designes med Apples privacy-, safety- og content-regler i
+  tankerne.
 - Oprettelse skal indsamle accept af vilkaar og privatlivspolitik. Der er
   databasefelter til samtykke/version, kontosletning samt tabeller til
   rapportering og blokering, saa sociale features kan bygges App Store-klar.
+- Content rating i App Store Connect og Google Play Console skal svare aerligt
+  paa, at appen har brugerchat og brugergenereret indhold. Det er bedre med en
+  korrekt aldersrating end en afvisning for skjult UGC.
+- App Review Notes skal indeholde demo-login, kort forklaring af chat/moderation
+  og hvor reviewer finder rapporter/blokering.
+- Der skal vaere fungerende links til privatlivspolitik, vilkaar og support.
+- Der skal vaere en reel moderationsproces: rapporter skal kunne ses og
+  behandles hurtigt, og groft indhold/brugere skal kunne fjernes eller
+  suspenderes.
 
 Mobile test-login:
 
@@ -183,7 +241,7 @@ Password: studos123
 
 ## Hvor vi er lige nu
 
-Status pr. 2026-04-26:
+Status pr. 2026-04-27:
 
 - Projektet er migreret fra statisk web + Node API til Laravel web/API.
 - XAMPP URL virker: `http://localhost/studenter-app/public/`.
@@ -205,23 +263,72 @@ Status pr. 2026-04-26:
 - Mobilappen har footer-navigation: Kalender, Chat, Overblik, Wallet, Walls.
 - Mobilappen har nu en kompakt app-shell med topbar, footer og sidebar. `Mit
   crew` er fremhaevet i toppen af sidebaren, og de oevrige sidebar-features
-  ligger som placeholder-sider.
+  ligger som placeholder-/skitse-sider.
+- Chatten har backend-tabeller, API-routes, mobil chatforside, direkte chats,
+  gruppechats, gruppebillede, beskedtraad, unread-count, Reverb/polling
+  realtime-setup, mute/hide/leave/delete/block/report og long-press actions.
+- Individuelle chats har swipe-tilbage, keyboard-haandtering, fuld bredde i
+  chatsektionen, chatbobler, online-dot, aktivitetstekst og hardcodet
+  `Klassens straeber` badge-visning som UI-test.
+- Chatmoderation er startet: ord-/navnefilter, rapporter paa chat/besked,
+  blokering, slet egen besked, moderation-log og throttling paa de vigtigste
+  oprettelses-/rapport-endpoints.
+- Kalenderen er ikke laengere wiped/placeholder: der er oprettelsesflow,
+  cover-upload, dato/tid, invitationer, personvaelger med soegning og RSVP.
+- Overblik har dynamisk `Dage til studenterugen`, check-in/stemning med
+  modal, "sidst opdateret", klip-container og bruger-overblik som UI-spor.
 - Seneste iPhone Release-build er bygget, installeret og launched paa parret
   iPhone via `devicectl`.
 - Studos-branding er lagt paa website og app-ikoner.
 
-Ikke lavet endnu:
+Ikke lavet endnu / skal afklares:
 
 - QR-invite.
 - Join approval-flow i web/admin.
 - Glemt adgangskode/email-reset.
-- Rigtig chat.
 - Walls/feed/galleri.
 - Awards/afstemninger.
-- Blaa bog og moderation i UI.
+- Blaa bog.
+- Admin/moderationsside hvor rapporter, moderation_violations og blocks kan
+  gennemgaas og behandles.
 - Push-notifikationer.
 - TestFlight/App Store/EAS iOS distribution.
 - Produktionshosting.
+- Kontosletning/data-export UI, hvis det ikke allerede ender som support-flow.
+
+## Foer drift / udgivelse
+
+Dette er de vigtigste ting, der skal vaere styr paa, foer appen sendes til
+App Store/Google Play eller bruges af en rigtig klasse:
+
+- `APP_ENV=production`, `APP_DEBUG=false`, HTTPS, rigtige produktions-URL'er og
+  ingen lokal XAMPP/LAN-IP i app-buildet.
+- Skrivbare upload-mapper og korrekt webserver-setup for
+  `public/uploads/profile-photos`, `public/uploads/event-covers` og
+  `public/uploads/chat-groups`. Fejl her giver permission-denied ved uploads.
+- Privatlivspolitik, vilkaar/EULA og support/kontakt skal vaere live og linket
+  fra app/store listing.
+- Vilkaar skal tydeligt forbyde chikanerende, diskriminerende, seksuelt,
+  truende og ulovligt indhold samt misbrug af chat/billeder.
+- App Store/Google Play content rating skal deklarere brugerchat/UGC korrekt.
+- Der skal oprettes demo-konto/testklasse til review, med login-info i review
+  notes.
+- Moderationsdrift skal vaere reel: rapporter og overtraedelser skal kunne
+  findes, vurderes og handles paa. Minimum: daglig gennemgang mens appen er ny.
+- Blokering, rapportering, slet egen besked, skjul/forlad chats og filtrering
+  skal testes paa baade iOS og Android.
+- Reverb/websocket skal koere paa produktionshost med korrekt host/port/TLS,
+  eller appen skal bevidst koere polling indtil realtime er klar.
+- Mail/password reset skal vaere klar, hvis elever skal kunne komme tilbage
+  uden manuel support.
+- Backups af database og uploads skal planlaegges, og `.env`/keys maa ikke
+  committes.
+- Fjern/afklar demo-hardcoding foer release: fx hardcodede badge-tekster,
+  demo-counts, testpersoner og placeholder-sider der kan forvirre reviewers.
+- Test paa rigtige enheder: iPhone, Android, daensk keyboard, upload fra
+  galleri/kamera, daarligt net, logout/login, ny installation og to-bruger chat.
+- Push-notifikationer kan vente, men naar de tilfoejes skal stemnings-check-in
+  have en daglig reminder, som kan slaas fra.
 
 ## Start lokalt
 
@@ -281,6 +388,12 @@ Start mobilappen i Expo:
 npm run mobile:start
 ```
 
+Start Reverb i et separat terminalvindue, naar chat realtime skal testes:
+
+```bash
+npm run reverb:start
+```
+
 Byg og installer lokal iPhone-release:
 
 ```bash
@@ -335,7 +448,14 @@ Resultat:
 - Mobilappen er Expo/React Native og kalder Laravel API'et.
 - Appens lokale session ligger i `expo-secure-store`. Brug `Skift profil` i
   `Mere`, hvis onboarding/login skal testes igen.
-- Profilbilleder gemmes lige nu som lokal reference/URL, ikke som rigtig upload.
+- Chatten har foerste rigtige version og er App Store/Google Play-orienteret
+  med filtering, reporting og blocking, men skal stadig testes grundigt paa to
+  rigtige enheder med baade Reverb og fallback/polling.
+- Udviklingsnote: `Mit crew` i sidebaren viser lige nu mindst `120 medlemmer`
+  som layout-demo. Fjern demo-counten foer produktionsbuild, saa tallet igen
+  kun kommer fra `activeMembers`.
+- Profilbilleder kan uploades fra appen og gemmes under
+  `public/uploads/profile-photos`.
 - Engangskode-endpoints findes stadig til senere email-flow, men appen bruger
   nu email + adgangskode.
 - Notifikationer bor parkeret indtil Apple Developer-konto/provisioning er paa
@@ -345,12 +465,14 @@ Resultat:
 
 ## Naeste gode skridt
 
-1. Lav rigtig indhold til `Chat`.
-2. Lav `Walls` som feed/galleri.
-3. Lav `Awards` med foerste afstemningsflow.
-4. Lav join approval-flow i web/admin.
-5. Lav glemt adgangskode/email-reset.
-6. Tilfoej QR/invitelink.
-7. Udbyg profilbilleder med rigtig upload/storage i stedet for lokal reference.
-8. Naar Apple Developer er klar: skift bundle id til `dk.studos.mobile`, opret
-   provisioning, og saet notifikationer/TestFlight op.
+1. Lav admin/moderationsside til rapporter, blocks og
+   `moderation_violations`.
+2. Gennemfoer to-enheds-test af chat: iOS/Android, Reverb/polling, swipe,
+   keyboard, long-press, rapportering og blokering.
+3. Goer kalenderflowet produktionsklart: uploads, invitationer, RSVP og tomme
+   states paa begge platforme.
+4. Lav glemt adgangskode/email-reset og afklar kontosletning/data-export.
+5. Lav `Walls` som feed/galleri og `Awards` med foerste afstemningsflow.
+6. Lav join approval-flow i web/admin og QR/invitelink.
+7. Naar Apple Developer er klar: skift bundle id til `dk.studos.mobile`, opret
+   provisioning, saet TestFlight op og foerst derefter push-notifikationer.

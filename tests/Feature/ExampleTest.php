@@ -5,12 +5,51 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class ExampleTest extends TestCase
 {
     use RefreshDatabase;
+
+    private function issueTestMemberToken(string $memberId, ?string $plainTextToken = null): string
+    {
+        $plainTextToken ??= 'studos_test_'.Str::random(32);
+
+        DB::table('member_auth_tokens')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => $memberId,
+            'token_hash' => hash('sha256', $plainTextToken),
+            'name' => 'test',
+            'last_used_at' => null,
+            'expires_at' => now()->addDays(30)->format('Y-m-d H:i:s'),
+            'revoked_at' => null,
+            'created_at' => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        return $plainTextToken;
+    }
+
+    private function createActiveDemoMember(string $id, string $displayName, string $email): void
+    {
+        $parts = explode(' ', $displayName, 2);
+
+        DB::table('members')->insert([
+            'id' => $id,
+            'personal_code' => Str::upper(Str::slug($parts[0])).'-CHAT',
+            'class_id' => 'demo-class',
+            'school_id' => DB::table('classes')->where('id', 'demo-class')->value('school_id'),
+            'display_name' => $displayName,
+            'first_name' => $parts[0],
+            'last_name' => $parts[1] ?? 'Test',
+            'email' => $email,
+            'role' => 'student',
+            'status' => 'active',
+            'joined_at' => now(),
+        ]);
+    }
 
     /**
      * A basic test example.
@@ -107,10 +146,19 @@ class ExampleTest extends TestCase
             'joined_at' => now(),
         ]);
 
-        $request = $this->postJson('/api/connections/request', [
-            'requesterMemberId' => 'demo-owner',
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $otherToken = $this->issueTestMemberToken('other-member');
+
+        $this->postJson('/api/connections/request', [
             'personalCode' => 'MAJA-DISCO',
-        ]);
+        ])->assertStatus(401);
+
+        $request = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/connections/request', [
+                'requesterMemberId' => 'other-member',
+                'personalCode' => 'MAJA-DISCO',
+            ]);
 
         $request
             ->assertStatus(201)
@@ -122,15 +170,24 @@ class ExampleTest extends TestCase
 
         $connectionId = $request->json('connection.id');
 
-        $this->getJson('/api/members/other-member/connections')
+        $this
+            ->withHeader('Authorization', 'Bearer invalid-token')
+            ->getJson('/api/members/other-member/connections')
+            ->assertStatus(401);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$otherToken)
+            ->getJson('/api/members/other-member/connections')
             ->assertStatus(200)
             ->assertJsonPath('connections.0.direction', 'incoming')
             ->assertJsonPath('connections.0.status', 'pending');
 
-        $this->postJson('/api/connections/'.$connectionId.'/respond', [
-            'memberId' => 'other-member',
-            'status' => 'accepted',
-        ])
+        $this
+            ->withHeader('Authorization', 'Bearer '.$otherToken)
+            ->postJson('/api/connections/'.$connectionId.'/respond', [
+                'memberId' => 'demo-owner',
+                'status' => 'accepted',
+            ])
             ->assertStatus(200)
             ->assertJsonPath('connection.status', 'accepted');
 
@@ -142,10 +199,609 @@ class ExampleTest extends TestCase
         ]);
 
         $ownCode = DB::table('members')->where('id', 'demo-owner')->value('personal_code');
-        $this->postJson('/api/connections/request', [
-            'requesterMemberId' => 'demo-owner',
-            'personalCode' => $ownCode,
-        ])->assertStatus(422);
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/connections/request', [
+                'personalCode' => $ownCode,
+            ])->assertStatus(422);
+    }
+
+    public function test_students_can_create_calendar_events_and_update_rsvp(): void
+    {
+        $this->createActiveDemoMember('calendar-maja', 'Maja Kalender', 'maja.calendar@example.test');
+        $this->createActiveDemoMember('calendar-tobias', 'Tobias Kalender', 'tobias.calendar@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $majaToken = $this->issueTestMemberToken('calendar-maja');
+        $tobiasToken = $this->issueTestMemberToken('calendar-tobias');
+        $coverImageData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AVqGqAAAAABJRU5ErkJggg==';
+
+        $this->postJson('/api/events', [
+            'title' => 'Studentergilde hos Chris',
+            'eventDate' => '2026-05-24',
+            'eventTime' => '19:00',
+        ])->assertStatus(401);
+
+        $createResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events', [
+                'title' => 'Studentergilde hos Chris',
+                'eventDate' => '2026-05-24',
+                'eventTime' => '19:00',
+                'location' => 'Chris have',
+                'description' => 'Tag noget godt med.',
+                'coverImageData' => $coverImageData,
+                'inviteScope' => 'custom',
+                'invitedMemberIds' => ['calendar-maja'],
+            ]);
+
+        $createResponse
+            ->assertStatus(201)
+            ->assertJsonPath('class.events.0.title', 'Studentergilde hos Chris')
+            ->assertJsonPath('class.events.0.startsAt', '2026-05-24T19:00:00.000Z')
+            ->assertJsonPath('class.events.0.location', 'Chris have')
+            ->assertJsonPath('class.events.0.creator.displayName', 'Chris')
+            ->assertJsonPath('class.events.0.myRsvp', 'attending')
+            ->assertJsonPath('class.events.0.inviteScope', 'custom')
+            ->assertJsonPath('class.events.0.inviteCount', 2)
+            ->assertJsonPath('class.events.0.pendingCount', 1)
+            ->assertJsonPath('class.events.0.attendingCount', 1)
+            ->assertJsonPath('class.events.0.notAttendingCount', 0);
+
+        $eventId = $createResponse->json('class.events.0.id');
+        $coverImageUrl = $createResponse->json('class.events.0.coverImageUrl');
+
+        $this->assertStringContainsString('/uploads/event-covers/'.$eventId.'-', $coverImageUrl);
+
+        $this->assertDatabaseHas('events', [
+            'id' => $eventId,
+            'class_id' => 'demo-class',
+            'created_by_member_id' => 'demo-owner',
+            'cover_image_url' => $coverImageUrl,
+            'rsvp_count' => 1,
+        ]);
+        $this->assertDatabaseHas('event_rsvps', [
+            'event_id' => $eventId,
+            'member_id' => 'demo-owner',
+            'status' => 'attending',
+        ]);
+        $this->assertDatabaseHas('event_invites', [
+            'event_id' => $eventId,
+            'member_id' => 'demo-owner',
+            'invited_by_member_id' => 'demo-owner',
+        ]);
+        $this->assertDatabaseHas('event_invites', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-maja',
+            'invited_by_member_id' => 'demo-owner',
+        ]);
+        $this->assertDatabaseMissing('event_invites', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-tobias',
+        ]);
+
+        $coverPath = public_path(ltrim(parse_url($coverImageUrl, PHP_URL_PATH), '/'));
+        $this->assertFileExists($coverPath);
+        File::delete($coverPath);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/events/'.$eventId.'/rsvp', [
+                'status' => 'attending',
+            ])
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/events/'.$eventId.'/rsvp', [
+                'status' => 'not_attending',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.events.0.myRsvp', 'not_attending')
+            ->assertJsonPath('class.events.0.inviteCount', 2)
+            ->assertJsonPath('class.events.0.pendingCount', 0)
+            ->assertJsonPath('class.events.0.attendingCount', 1)
+            ->assertJsonPath('class.events.0.notAttendingCount', 1);
+
+        $this->assertDatabaseHas('event_rsvps', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-maja',
+            'status' => 'not_attending',
+        ]);
+    }
+
+    public function test_direct_chat_uses_auth_member_as_sender_and_tracks_read_status(): void
+    {
+        $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $majaToken = $this->issueTestMemberToken('chat-maja');
+
+        $this->postJson('/api/chat/conversations/direct', [
+            'memberId' => 'chat-maja',
+        ])->assertStatus(401);
+
+        $conversationResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'chat-maja',
+            ]);
+
+        $conversationResponse
+            ->assertStatus(201)
+            ->assertJsonPath('conversation.type', 'direct')
+            ->assertJsonPath('conversation.title', 'Maja Chat')
+            ->assertJsonPath('conversation.canHide', true)
+            ->assertJsonPath('conversation.canDeleteForEveryone', false);
+
+        $conversationId = $conversationResponse->json('conversation.id');
+
+        $messageResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'senderMemberId' => 'chat-maja',
+                'body' => 'Hej Maja 👋',
+            ]);
+
+        $messageResponse
+            ->assertStatus(201)
+            ->assertJsonPath('message.sender.id', 'demo-owner')
+            ->assertJsonPath('message.isMine', true)
+            ->assertJsonPath('message.readByOther', false)
+            ->assertJsonPath('message.body', 'Hej Maja 👋');
+
+        $messageId = $messageResponse->json('message.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/messages/'.$messageId.'/report', [
+                'reason' => 'Egen besked',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du kan ikke rapportere din egen besked.');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/chat/messages/'.$messageId.'/report', [
+                'reason' => 'Test beskedrapport',
+                'details' => 'Rapporteret fra testen.',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_reports', [
+            'reporter_member_id' => 'chat-maja',
+            'reported_member_id' => 'demo-owner',
+            'target_type' => 'chat_message',
+            'target_id' => $messageId,
+            'reason' => 'Test beskedrapport',
+            'status' => 'pending',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->deleteJson('/api/chat/messages/'.$messageId)
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('chat_messages', [
+            'id' => $messageId,
+            'deleted_by_member_id' => 'demo-owner',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/read', [
+                'messageId' => $messageId,
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('conversation.unreadCount', 0);
+
+        $messagesResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/chat/conversations/'.$conversationId.'/messages')
+            ->assertStatus(200)
+            ->assertJsonPath('messages.0.isDeleted', true)
+            ->assertJsonPath('messages.0.body', '')
+            ->assertJsonPath('messages.0.readByOther', true)
+            ->assertJsonPath('messages.0.sender.isOnline', true);
+
+        $majaParticipant = collect($messagesResponse->json('conversation.participants'))
+            ->firstWhere('memberId', 'chat-maja');
+
+        $this->assertTrue($majaParticipant['member']['isOnline']);
+        $this->assertNotEmpty($majaParticipant['member']['lastSeenAt']);
+
+        $muteResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/mute', [
+                'muted' => true,
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertNotEmpty($muteResponse->json('conversation.mutedUntil'));
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/mute', [
+                'muted' => false,
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('conversation.mutedUntil', '');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/report', [
+                'reason' => 'Test rapport',
+                'details' => 'Rapporteret fra testen.',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_reports', [
+            'reporter_member_id' => 'demo-owner',
+            'reported_member_id' => 'chat-maja',
+            'target_type' => 'chat_conversation',
+            'target_id' => $conversationId,
+            'reason' => 'Test rapport',
+            'status' => 'pending',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/block')
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_blocks', [
+            'blocker_member_id' => 'demo-owner',
+            'blocked_member_id' => 'chat-maja',
+            'reason' => 'Blokeret fra chat',
+        ]);
+
+        $this->assertNotNull(
+            DB::table('chat_participants')
+                ->where('conversation_id', $conversationId)
+                ->where('member_id', 'demo-owner')
+                ->value('hidden_at')
+        );
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'Kan du se den?',
+            ])
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'Nej',
+            ])
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'chat-maja',
+            ])
+            ->assertStatus(403);
+    }
+
+    public function test_authenticated_member_can_update_profile_photo(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $photoData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AVqGqAAAAABJRU5ErkJggg==';
+
+        $this
+            ->postJson('/api/profile/photo', [
+                'profilePhotoData' => $photoData,
+            ])
+            ->assertStatus(401);
+
+        $response = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/profile/photo', [
+                'profilePhotoData' => $photoData,
+            ]);
+
+        $response
+            ->assertStatus(200)
+            ->assertJsonPath('session.member.id', 'demo-owner')
+            ->assertJsonPath('class.classId', 'MG-3B-26');
+
+        $photoUrl = $response->json('session.member.profilePhotoUrl');
+
+        $this->assertStringContainsString('/uploads/profile-photos/demo-owner-', $photoUrl);
+        $this->assertDatabaseHas('members', [
+            'id' => 'demo-owner',
+            'profile_photo_url' => $photoUrl,
+        ]);
+
+        $photoPath = public_path(ltrim(parse_url($photoUrl, PHP_URL_PATH), '/'));
+        $this->assertFileExists($photoPath);
+        File::delete($photoPath);
+    }
+
+    public function test_group_chat_owner_can_delete_and_members_can_leave(): void
+    {
+        $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
+        $this->createActiveDemoMember('chat-tobias', 'Tobias Chat', 'tobias.chat@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $majaToken = $this->issueTestMemberToken('chat-maja');
+
+        $groupResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/group', [
+                'title' => 'Vogntur plan',
+                'memberIds' => ['chat-maja', 'chat-tobias'],
+            ]);
+
+        $groupResponse
+            ->assertStatus(201)
+            ->assertJsonPath('conversation.type', 'group')
+            ->assertJsonPath('conversation.title', 'Vogntur plan')
+            ->assertJsonPath('conversation.ownerMemberId', 'demo-owner')
+            ->assertJsonPath('conversation.canDeleteForEveryone', true)
+            ->assertJsonPath('conversation.canLeave', false)
+            ->assertJsonPath('conversation.canHide', false)
+            ->assertJsonPath('conversation.participants.0.role', 'owner');
+
+        $conversationId = $groupResponse->json('conversation.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/leave')
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Ejeren skal slette gruppen eller overdrage ejerskab foerst.');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/leave')
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('chat_participants', [
+            'conversation_id' => $conversationId,
+            'member_id' => 'chat-maja',
+            'status' => 'left',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->deleteJson('/api/chat/conversations/'.$conversationId)
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->deleteJson('/api/chat/conversations/'.$conversationId)
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('chat_conversations', [
+            'id' => $conversationId,
+            'status' => 'deleted',
+            'deleted_by_member_id' => 'demo-owner',
+        ]);
+    }
+
+    public function test_realtime_channel_auth_requires_active_chat_participant(): void
+    {
+        config([
+            'broadcasting.connections.reverb.key' => 'test-key',
+            'broadcasting.connections.reverb.secret' => 'test-secret',
+        ]);
+
+        $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
+        $this->createActiveDemoMember('chat-tobias', 'Tobias Chat', 'tobias.chat@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $tobiasToken = $this->issueTestMemberToken('chat-tobias');
+        $socketId = '1234.5678';
+
+        $this
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => 'private-chat.missing',
+            ])
+            ->assertStatus(401);
+
+        $conversationId = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'chat-maja',
+            ])
+            ->assertStatus(201)
+            ->json('conversation.id');
+
+        $channelName = 'private-chat.'.$conversationId;
+        $expectedSignature = hash_hmac('sha256', $socketId.':'.$channelName, 'test-secret');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => $channelName,
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('auth', 'test-key:'.$expectedSignature);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => 'public-chat.'.$conversationId,
+            ])
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => $channelName,
+            ])
+            ->assertStatus(404);
+    }
+
+    public function test_moderation_blocks_bad_words_and_reserved_names(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        $this
+            ->postJson('/api/classes/join', [
+                'inviteCode' => 'STU-DEMO26',
+                'schoolId' => $schoolId,
+                'firstName' => 'Admin',
+                'lastName' => 'Test',
+                'email' => 'moderation.join@example.test',
+                'birthday' => '2007-05-14',
+                'password' => 'hemmeligt123',
+                'passwordConfirmation' => 'hemmeligt123',
+                'termsAccepted' => true,
+                'privacyAccepted' => true,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('firstName');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'member_signup_name',
+            'field' => 'firstName',
+            'violation_type' => 'reserved_name',
+            'matched_term' => 'admin',
+            'action' => 'blocked',
+        ]);
+
+        $this->createActiveDemoMember('moderation-maja', 'Maja Moderation', 'maja.moderation@example.test');
+        $this->createActiveDemoMember('moderation-tobias', 'Tobias Moderation', 'tobias.moderation@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $conversationId = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'moderation-maja',
+            ])
+            ->assertStatus(201)
+            ->json('conversation.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'fuck af',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('body');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'chat_message',
+            'field' => 'body',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'blocked_term',
+            'matched_term' => 'fuck',
+            'action' => 'blocked',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'send nudes',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('body');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'chat_message',
+            'field' => 'body',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'blocked_term',
+            'matched_term' => 'send nudes',
+            'action' => 'blocked',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'Til slut ses vi ved skolen',
+            ])
+            ->assertStatus(201)
+            ->assertJsonPath('message.body', 'Til slut ses vi ved skolen');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/group', [
+                'title' => 'f.u.c.k gruppen',
+                'memberIds' => ['moderation-maja', 'moderation-tobias'],
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('title');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'chat_group_title',
+            'field' => 'title',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'compact_blocked_term',
+            'matched_term' => 'fuck',
+            'action' => 'blocked',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/group', [
+                'title' => 'Klassens kaelling',
+                'memberIds' => ['moderation-maja', 'moderation-tobias'],
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('title');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'chat_group_title',
+            'field' => 'title',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'blocked_term',
+            'matched_term' => 'kaelling',
+            'action' => 'blocked',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events', [
+                'title' => 'fuckfest',
+                'eventDate' => '2026-05-24',
+                'eventTime' => '19:00',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('title');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'event_create',
+            'field' => 'title',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'compact_blocked_term',
+            'matched_term' => 'fuck',
+            'action' => 'blocked',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events', [
+                'title' => 'hot or not',
+                'eventDate' => '2026-05-24',
+                'eventTime' => '19:00',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('title');
+
+        $this->assertDatabaseHas('moderation_violations', [
+            'source' => 'event_create',
+            'field' => 'title',
+            'member_id' => 'demo-owner',
+            'class_id' => 'demo-class',
+            'violation_type' => 'blocked_term',
+            'matched_term' => 'hot or not',
+            'action' => 'blocked',
+        ]);
     }
 
     public function test_app_can_resolve_invite_code_and_create_profile(): void
@@ -161,6 +817,14 @@ class ExampleTest extends TestCase
             ->assertJsonMissingPath('class.members.0.personalCode');
 
         $this->getJson('/api/classes/invite/STU-DEMO26?memberId=demo-owner')
+            ->assertStatus(200)
+            ->assertJsonMissingPath('class.members.0.personalCode');
+
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/classes/invite/STU-DEMO26')
             ->assertStatus(200)
             ->assertJsonStructure(['class' => ['members' => [['personalCode']]]]);
 
@@ -190,7 +854,7 @@ class ExampleTest extends TestCase
             ->assertJsonPath('session.member.profilePhotoUrl', 'file:///profile.jpg')
             ->assertJsonPath('session.member.role', 'student')
             ->assertJsonPath('session.member.status', 'pending')
-            ->assertJsonStructure(['session' => ['member' => ['personalCode']]])
+            ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt', 'member' => ['personalCode']]])
             ->assertJsonPath('class.id', 'demo-class')
             ->assertJsonPath('class.classId', 'MG-3B-26');
 
@@ -238,16 +902,39 @@ class ExampleTest extends TestCase
 
     public function test_existing_member_can_login_with_email_and_password(): void
     {
-        $this->postJson('/api/session/login', [
+        $loginResponse = $this->postJson('/api/session/login', [
             'inviteCode' => 'STU-DEMO26',
             'email' => 'chris@skole.dk',
             'password' => 'studos123',
-        ])
+        ]);
+
+        $loginResponse
             ->assertStatus(200)
             ->assertJsonPath('session.member.id', 'demo-owner')
             ->assertJsonPath('session.member.email', 'chris@skole.dk')
-            ->assertJsonStructure(['session' => ['member' => ['personalCode']]])
+            ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt', 'member' => ['personalCode']]])
             ->assertJsonPath('class.id', 'demo-class');
+
+        $token = $loginResponse->json('session.token');
+        $this->assertIsString($token);
+        $this->assertStringStartsWith('studos_', $token);
+        $this->assertDatabaseHas('member_auth_tokens', [
+            'member_id' => 'demo-owner',
+            'token_hash' => hash('sha256', $token),
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->getJson('/api/session/me')
+            ->assertStatus(200)
+            ->assertJsonPath('session.member.id', 'demo-owner')
+            ->assertJsonMissingPath('session.token')
+            ->assertJsonPath('class.id', 'demo-class');
+
+        $this
+            ->withHeader('Authorization', 'Bearer invalid-token')
+            ->getJson('/api/session/me')
+            ->assertStatus(401);
 
         $this->postJson('/api/session/login', [
             'inviteCode' => 'STU-DEMO26',
@@ -278,6 +965,7 @@ class ExampleTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('session.member.id', 'demo-owner')
             ->assertJsonPath('session.member.email', 'chris@skole.dk')
+            ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt']])
             ->assertJsonPath('class.id', 'demo-class');
     }
 

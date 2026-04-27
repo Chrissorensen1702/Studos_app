@@ -20,10 +20,13 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
+    "@react-native-community/netinfo": "11.5.2",
     "expo": "~55.0.0",
     "expo-dev-client": "~55.0.28",
     "expo-image-picker": "~55.0.19",
     "expo-secure-store": "~55.0.13",
+    "laravel-echo": "^2.3.4",
+    "pusher-js": "^8.5.0",
     "react": "19.2.0",
     "react-native": "0.83.6"
   }

@@ -10,6 +10,7 @@
   "scripts": {
     "api:dev": "php artisan serve --host=127.0.0.1 --port=8000",
     "db:init": "php artisan migrate",
+    "reverb:start": "php artisan reverb:start --host=0.0.0.0 --port=8080",
     "web:dev": "php artisan serve --host=127.0.0.1 --port=8000",
     "mobile:start": "npm --workspace @studenter-app/mobile run start",
     "mobile:start:dev-client": "npm --workspace @studenter-app/mobile run start:dev-client",
