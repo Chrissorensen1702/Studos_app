@@ -5,8 +5,8 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -208,6 +208,8 @@ class ExampleTest extends TestCase
 
     public function test_students_can_create_calendar_events_and_update_rsvp(): void
     {
+        Storage::fake('public');
+
         $this->createActiveDemoMember('calendar-maja', 'Maja Kalender', 'maja.calendar@example.test');
         $this->createActiveDemoMember('calendar-tobias', 'Tobias Kalender', 'tobias.calendar@example.test');
         $ownerToken = $this->issueTestMemberToken('demo-owner');
@@ -279,9 +281,9 @@ class ExampleTest extends TestCase
             'member_id' => 'calendar-tobias',
         ]);
 
-        $coverPath = public_path(ltrim(parse_url($coverImageUrl, PHP_URL_PATH), '/'));
-        $this->assertFileExists($coverPath);
-        File::delete($coverPath);
+        $coverPath = Str::after(parse_url($coverImageUrl, PHP_URL_PATH), '/storage/');
+        Storage::disk('public')->assertExists($coverPath);
+        Storage::disk('public')->delete($coverPath);
 
         $this
             ->withHeader('Authorization', 'Bearer '.$tobiasToken)
@@ -489,6 +491,8 @@ class ExampleTest extends TestCase
 
     public function test_authenticated_member_can_update_profile_photo(): void
     {
+        Storage::fake('public');
+
         $ownerToken = $this->issueTestMemberToken('demo-owner');
         $photoData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AVqGqAAAAABJRU5ErkJggg==';
 
@@ -517,9 +521,9 @@ class ExampleTest extends TestCase
             'profile_photo_url' => $photoUrl,
         ]);
 
-        $photoPath = public_path(ltrim(parse_url($photoUrl, PHP_URL_PATH), '/'));
-        $this->assertFileExists($photoPath);
-        File::delete($photoPath);
+        $photoPath = Str::after(parse_url($photoUrl, PHP_URL_PATH), '/storage/');
+        Storage::disk('public')->assertExists($photoPath);
+        Storage::disk('public')->delete($photoPath);
     }
 
     public function test_group_chat_owner_can_delete_and_members_can_leave(): void
@@ -806,6 +810,8 @@ class ExampleTest extends TestCase
 
     public function test_app_can_resolve_invite_code_and_create_profile(): void
     {
+        Storage::fake('public');
+
         $classResponse = $this->getJson('/api/classes/invite/STU-DEMO26');
         $classResponse
             ->assertStatus(200)
@@ -829,6 +835,7 @@ class ExampleTest extends TestCase
             ->assertJsonStructure(['class' => ['members' => [['personalCode']]]]);
 
         $schoolId = $classResponse->json('class.schoolId');
+        $photoData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AVqGqAAAAABJRU5ErkJggg==';
 
         $response = $this->postJson('/api/classes/join', [
             'inviteCode' => 'STU-DEMO26',
@@ -838,7 +845,7 @@ class ExampleTest extends TestCase
             'email' => 'maja.app@example.test',
             'phone' => '+45 12 34 56 78',
             'birthday' => '2007-05-14',
-            'profilePhotoUrl' => 'file:///profile.jpg',
+            'profilePhotoData' => $photoData,
             'password' => 'hemmeligt123',
             'passwordConfirmation' => 'hemmeligt123',
             'termsAccepted' => true,
@@ -851,7 +858,6 @@ class ExampleTest extends TestCase
             ->assertJsonPath('session.member.email', 'maja.app@example.test')
             ->assertJsonPath('session.member.phone', '+45 12 34 56 78')
             ->assertJsonPath('session.member.birthday', '2007-05-14')
-            ->assertJsonPath('session.member.profilePhotoUrl', 'file:///profile.jpg')
             ->assertJsonPath('session.member.role', 'student')
             ->assertJsonPath('session.member.status', 'pending')
             ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt', 'member' => ['personalCode']]])
@@ -868,6 +874,10 @@ class ExampleTest extends TestCase
             'status' => 'pending',
             'privacy_version' => '2026-04-26',
         ]);
+
+        $photoUrl = $response->json('session.member.profilePhotoUrl');
+        $this->assertStringContainsString('/uploads/profile-photos/', $photoUrl);
+        Storage::disk('public')->assertExists(Str::after(parse_url($photoUrl, PHP_URL_PATH), '/storage/'));
 
         $passwordHash = DB::table('members')->where('email', 'maja.app@example.test')->value('password_hash');
         $this->assertNotSame('hemmeligt123', $passwordHash);

@@ -8,9 +8,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Throwable;
@@ -988,15 +988,18 @@ class ChatController extends Controller
             abort(422, 'Billedet kunne ikke laeses.');
         }
 
-        $directory = public_path('uploads/'.$folder);
-        File::ensureDirectoryExists($directory, 0775, true);
-
         $filename = $filenamePrefix.'-'.Str::uuid().'.'.$extension;
+        $path = 'uploads/'.$folder.'/'.$filename;
+        $diskName = $this->imageUploadDiskName();
 
         try {
-            $written = File::put($directory.'/'.$filename, $binary);
+            $written = Storage::disk($diskName)->put($path, $binary, [
+                'visibility' => 'public',
+                'ContentType' => $mimeType,
+            ]);
         } catch (Throwable $exception) {
             Log::warning('Chat image upload failed.', [
+                'disk' => $diskName,
                 'folder' => $folder,
                 'error' => $exception->getMessage(),
             ]);
@@ -1006,15 +1009,34 @@ class ChatController extends Controller
 
         if ($written === false) {
             Log::warning('Chat image upload returned false.', [
+                'disk' => $diskName,
                 'folder' => $folder,
             ]);
 
             abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
         }
 
+        return $this->storedImageUrl($request, $diskName, $path);
+    }
+
+    private function imageUploadDiskName(): string
+    {
+        $defaultDisk = config('filesystems.default', 'local');
+
+        return $defaultDisk === 'local' ? 'public' : $defaultDisk;
+    }
+
+    private function storedImageUrl(Request $request, string $diskName, string $path): string
+    {
+        $url = Storage::disk($diskName)->url($path);
+
+        if (Str::startsWith($url, ['http://', 'https://'])) {
+            return $url;
+        }
+
         return $request->getSchemeAndHttpHost()
             .rtrim($request->getBaseUrl(), '/')
-            .'/uploads/'.$folder.'/'.$filename;
+            .'/'.ltrim($url, '/');
     }
 
     private function directPairKey(string $firstMemberId, string $secondMemberId): string

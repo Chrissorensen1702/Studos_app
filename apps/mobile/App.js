@@ -259,6 +259,7 @@ const emptyProfile = {
   phone: '',
   birthday: '',
   profilePhotoUrl: '',
+  profilePhotoData: '',
   password: '',
   passwordConfirmation: '',
   termsAccepted: false,
@@ -934,10 +935,15 @@ export default function App() {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.75,
+      base64: true,
     });
 
     if (!result.canceled && result.assets?.[0]?.uri) {
-      updateProfile('profilePhotoUrl', result.assets[0].uri);
+      const asset = result.assets[0];
+      const mimeType = asset.mimeType || 'image/jpeg';
+
+      updateProfile('profilePhotoUrl', asset.uri);
+      updateProfile('profilePhotoData', asset.base64 ? `data:${mimeType};base64,${asset.base64}` : '');
     }
   };
 
@@ -1036,7 +1042,7 @@ export default function App() {
       email: profile.email.trim().toLowerCase(),
       phone: profile.phone.trim(),
       birthday: profile.birthday.trim(),
-      profilePhotoUrl: profile.profilePhotoUrl,
+      profilePhotoData: profile.profilePhotoData,
       password: profile.password,
       passwordConfirmation: profile.passwordConfirmation,
       termsAccepted: profile.termsAccepted,

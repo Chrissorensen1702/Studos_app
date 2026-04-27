@@ -7,10 +7,10 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -432,6 +432,7 @@ class StudosController extends Controller
             'phone' => ['nullable', 'string', 'max:40'],
             'birthday' => ['required', 'date'],
             'profilePhotoUrl' => ['nullable', 'string', 'max:2000'],
+            'profilePhotoData' => ['nullable', 'string', 'max:7000000'],
             'password' => ['required', 'string', 'min:8'],
             'passwordConfirmation' => ['required', 'same:password'],
             'termsAccepted' => ['accepted'],
@@ -457,7 +458,7 @@ class StudosController extends Controller
         $classId = null;
         $member = null;
 
-        DB::transaction(function () use ($data, $inviteCode, $schoolId, $firstName, $lastName, $displayName, $email, &$classId, &$member): void {
+        DB::transaction(function () use ($request, $data, $inviteCode, $schoolId, $firstName, $lastName, $displayName, $email, &$classId, &$member): void {
             $schoolClass = DB::table('classes')
                 ->where('invite_code', $inviteCode)
                 ->first();
@@ -485,7 +486,6 @@ class StudosController extends Controller
             $classId = $schoolClass->id;
             $status = ($schoolClass->join_policy ?? 'approval') === 'open' ? 'active' : 'pending';
             $phone = blank($data['phone'] ?? null) ? null : trim($data['phone']);
-            $profilePhotoUrl = blank($data['profilePhotoUrl'] ?? null) ? null : trim($data['profilePhotoUrl']);
             $acceptedAt = now()->format('Y-m-d H:i:s');
             $existingMember = DB::table('members')
                 ->where('class_id', $classId)
@@ -497,6 +497,7 @@ class StudosController extends Controller
                     abort(422, 'Emailen findes allerede i klassen. Log ind paa den eksisterende profil.');
                 }
 
+                $profilePhotoUrl = $this->profilePhotoUrlForSignup($request, $data, $existingMember->id);
                 $updates = [
                     'display_name' => $displayName,
                     'personal_code' => blank($existingMember->personal_code ?? null)
@@ -536,6 +537,7 @@ class StudosController extends Controller
             }
 
             $memberId = (string) Str::uuid();
+            $profilePhotoUrl = $this->profilePhotoUrlForSignup($request, $data, $memberId);
             $joinedAt = now()->format('Y-m-d H:i:s');
 
             DB::table('members')->insert([
@@ -728,6 +730,26 @@ class StudosController extends Controller
         ]);
     }
 
+    private function profilePhotoUrlForSignup(Request $request, array $data, string $memberId): ?string
+    {
+        if (! blank($data['profilePhotoData'] ?? null)) {
+            return $this->storeBase64Image($request, $data['profilePhotoData'], 'profile-photos', $memberId);
+        }
+
+        return $this->trustedExternalImageUrl($data['profilePhotoUrl'] ?? null);
+    }
+
+    private function trustedExternalImageUrl(?string $value): ?string
+    {
+        if (blank($value)) {
+            return null;
+        }
+
+        $url = trim($value);
+
+        return Str::startsWith($url, ['http://', 'https://']) ? $url : null;
+    }
+
     private function storeBase64Image(Request $request, string $imageData, string $folder, string $filenamePrefix): string
     {
         if (! preg_match('/^data:image\/(jpeg|jpg|png|webp);base64,/', $imageData)) {
@@ -758,15 +780,18 @@ class StudosController extends Controller
             abort(422, 'Billedet kunne ikke laeses.');
         }
 
-        $directory = public_path('uploads/'.$folder);
-        File::ensureDirectoryExists($directory, 0775, true);
-
         $filename = $filenamePrefix.'-'.Str::uuid().'.'.$extension;
+        $path = 'uploads/'.$folder.'/'.$filename;
+        $diskName = $this->imageUploadDiskName();
 
         try {
-            $written = File::put($directory.'/'.$filename, $binary);
+            $written = Storage::disk($diskName)->put($path, $binary, [
+                'visibility' => 'public',
+                'ContentType' => $mimeType,
+            ]);
         } catch (Throwable $exception) {
             Log::warning('Image upload failed.', [
+                'disk' => $diskName,
                 'folder' => $folder,
                 'error' => $exception->getMessage(),
             ]);
@@ -776,15 +801,34 @@ class StudosController extends Controller
 
         if ($written === false) {
             Log::warning('Image upload returned false.', [
+                'disk' => $diskName,
                 'folder' => $folder,
             ]);
 
             abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
         }
 
+        return $this->storedImageUrl($request, $diskName, $path);
+    }
+
+    private function imageUploadDiskName(): string
+    {
+        $defaultDisk = config('filesystems.default', 'local');
+
+        return $defaultDisk === 'local' ? 'public' : $defaultDisk;
+    }
+
+    private function storedImageUrl(Request $request, string $diskName, string $path): string
+    {
+        $url = Storage::disk($diskName)->url($path);
+
+        if (Str::startsWith($url, ['http://', 'https://'])) {
+            return $url;
+        }
+
         return $request->getSchemeAndHttpHost()
             .rtrim($request->getBaseUrl(), '/')
-            .'/uploads/'.$folder.'/'.$filename;
+            .'/'.ltrim($url, '/');
     }
 
     public function storeEvent(Request $request): JsonResponse
