@@ -1,8 +1,8 @@
-const CACHE_NAME = 'studos-pwa-v5';
+const CACHE_NAME = 'studos-pwa-v6';
 const SHELL_ASSETS = [
   '/pwa/',
   '/manifest.webmanifest',
-  '/_expo/static/js/web/index-da55014314cb70490ac7ea5fe9c83915.js',
+  '/_expo/static/js/web/index-24d08ab91e2c006729f4e93208960573.js',
   '/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png',
   '/assets/assets/chat-send-rocket.deb227b670d45acc9b0a4c2f00b33687.png'
 ];
