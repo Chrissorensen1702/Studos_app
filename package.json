@@ -18,6 +18,7 @@
     "mobile:start:dev-client": "npm --workspace @studenter-app/mobile run start:dev-client",
     "mobile:ios:device": "npm --workspace @studenter-app/mobile run ios:device",
     "mobile:ios:release": "npm --workspace @studenter-app/mobile run ios:release",
+    "mobile:ios:release:cloud": "EXPO_PUBLIC_API_URL=https://studos.laravel.cloud/api EXPO_PUBLIC_CREATE_CLASS_URL=https://studos.laravel.cloud/opret-klasse EXPO_PUBLIC_REVERB_APP_KEY=DtaoEWytkVJqPm5j3qB3 EXPO_PUBLIC_REVERB_HOST=ws-a1a50b0c-3314-49b0-9204-475481930fa9-reverb.laravel.cloud EXPO_PUBLIC_REVERB_PORT=443 EXPO_PUBLIC_REVERB_SCHEME=https npm run mobile:ios:release",
     "mobile:ios:prebuild": "npm --workspace @studenter-app/mobile run ios:prebuild",
     "mobile:build:android": "npm --workspace @studenter-app/mobile run build:android",
     "mobile:build:android:dev": "npm --workspace @studenter-app/mobile run build:android:dev",
