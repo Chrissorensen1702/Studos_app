@@ -171,13 +171,14 @@ const chatMessageActionConfigFor = (actionType) => {
 const CREATE_CLASS_URL =
   process.env.EXPO_PUBLIC_CREATE_CLASS_URL
   ?? 'http://192.168.1.114/studenter-app/public/opret-klasse';
-const API_BASE_URLS = [
-  process.env.EXPO_PUBLIC_API_URL,
+const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+const LOCAL_API_BASE_URLS = [
   'http://192.168.1.114/studenter-app/public/api',
   'http://localhost/studenter-app/public/api',
   'http://127.0.0.1/studenter-app/public/api',
   'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
-].filter(Boolean);
+];
+const API_BASE_URLS = (EXPLICIT_API_BASE_URL ? [EXPLICIT_API_BASE_URL] : LOCAL_API_BASE_URLS).filter(Boolean);
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
 const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? '192.168.1.114';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
@@ -553,7 +554,15 @@ const apiFetch = async (path, options = {}) => {
         ...fetchOptions,
       });
       const text = await response.text();
-      const payload = text ? JSON.parse(text) : {};
+      let payload = {};
+
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = {};
+        }
+      }
 
       if (!response.ok) {
         const error = new Error(parseApiError(payload));

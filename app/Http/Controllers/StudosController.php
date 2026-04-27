@@ -213,7 +213,7 @@ class StudosController extends Controller
             ->where('invite_code', Str::upper(trim($code)))
             ->first();
 
-        abort_unless($schoolClass, 404);
+        abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
 
         $currentMember = $this->authenticatedMemberFromRequest($request, false, false);
         $currentMemberId = $currentMember?->class_id === $schoolClass->id ? $currentMember->id : null;
@@ -463,7 +463,7 @@ class StudosController extends Controller
                 ->first();
             $selectedSchool = DB::table('schools')->where('id', $schoolId)->first();
 
-            abort_unless($schoolClass, 404);
+            abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
             abort_unless($selectedSchool, 422, 'Vaelg en skole fra listen.');
             abort_if(($schoolClass->join_policy ?? 'approval') === 'closed', 403, 'Klassen er lukket for nye medlemmer.');
 
@@ -580,7 +580,7 @@ class StudosController extends Controller
         $email = Str::lower(trim($data['email']));
         $schoolClass = DB::table('classes')->where('invite_code', $inviteCode)->first();
 
-        abort_unless($schoolClass, 404);
+        abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
 
         $member = DB::table('members')
             ->where('class_id', $schoolClass->id)
