@@ -55,9 +55,11 @@
     <noscript>Du skal slaa JavaScript til for at bruge Studos.</noscript>
     <div id="root"></div>
     <script>
+      var STUDOS_PWA_VERSION = 'v4';
+
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js').catch(function () {});
+          navigator.serviceWorker.register('/sw.js?v=' + STUDOS_PWA_VERSION, { scope: '/' }).catch(function () {});
         });
       }
     </script>
