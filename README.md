@@ -1,7 +1,8 @@
 # Studos
 
-Global projektstatus for Studos: Laravel web/admin/API, XAMPP MySQL-database
-og native React Native iPhone-app.
+Global projektstatus for Studos: Laravel web/admin/API, lokal XAMPP
+MySQL-database, Laravel Cloud deployment, React Native iOS/Android-app og en
+midlertidig PWA til hurtig test.
 
 Denne README er en "start her igen"-note, saa projektet kan tages op uden at
 miste konteksten.
@@ -17,11 +18,14 @@ app til alt det praktiske og sociale omkring studenterforlobet.
 
 Hovedideen:
 
-- `Laravel`: website, admin, login, roller, API og database/migrations.
-- `mobile`: elevernes native app med join-flow, klasseforside, countdown,
-  events, chat og senere feed, billeder, blaa bog og notifikationer.
-- `database`: rigtig SQL via XAMPP MariaDB/MySQL, saa data kan ses og styres i
-  phpMyAdmin.
+- `Laravel`: website, admin, login, roller, API, database/migrations,
+  realtime og storage-integration.
+- `mobile`: elevernes native iOS/Android-app med join-flow, klasseforside,
+  countdown, events, chat og senere feed, billeder, blaa bog og notifikationer.
+- `pwa`: midlertidig web-wrapper af appen, saa venner kan teste flowet foer
+  TestFlight/App Store er klar.
+- `database`: rigtig SQL lokalt via XAMPP MariaDB/MySQL og i drift via Laravel
+  Cloud MySQL.
 
 ## Struktur
 
@@ -31,12 +35,12 @@ studenter-app/
   bootstrap/ Laravel bootstrap/cache
   config/    Laravel konfiguration
   database/  Laravel migrations/seeders
-  public/    XAMPP/Apache webroot
+  public/    XAMPP/Apache webroot, PWA-shell, exports og assets
   resources/ Blade views og frontend-kilder
   routes/    Laravel web/API routes
   storage/   Laravel cache/log/session storage
   apps/
-    mobile/  Expo/React Native app til iPhone
+    mobile/  Expo/React Native app til iOS/Android
   packages/
     shared/  Plads til delte typer/helpers senere
   docs/      Produktnoter og arkitektur
@@ -46,6 +50,9 @@ studenter-app/
 
 - Korer via XAMPP/Apache paa `http://localhost/studenter-app/public/`.
 - Kan ogsaa koeres med `npm run web:dev` eller `php artisan serve`.
+- Korer i drift paa Laravel Cloud: `https://studos.laravel.cloud`.
+- Laravel Cloud har app compute, MySQL database, Laravel Reverb WebSockets og
+  bucket/S3-compatible storage til uploads.
 - Bruger XAMPP MariaDB/MySQL via socket:
   `/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock`.
 - Database hedder `studenter_app`.
@@ -67,6 +74,11 @@ studenter-app/
   connect-requests paa tvaers af klasser uden at dele kontaktinfo.
 - Personlige connections er samtykke-baserede: en Studos-kode sender kun en
   request, og forbindelsen bliver foerst aktiv naar modtageren accepterer.
+- Uploads gaar via Laravel `Storage`-disk. Lokalt falder `public` disk tilbage
+  til `storage/app/public`; i Cloud kan samme disk bruge bucket/S3, naar
+  `FILESYSTEM_DISK=public` og `AWS_*` variablerne er sat.
+- `league/flysystem-aws-s3-v3` er installeret, saa Laravel Cloud bucket kan
+  bruges direkte.
 
 API endpoints:
 
@@ -139,10 +151,14 @@ Email: chris@skole.dk
 Password: studos123
 ```
 
-## Mobile/iPhone
+## Mobile / PWA
 
 - Expo/React Native app ligger i `apps/mobile`.
-- Appen hedder visuelt `Studos`.
+- Appen hedder visuelt `Studos` paa iOS/Android.
+- PWA'en ligger i `public/pwa/index.html` og kan testes paa
+  `https://studos.laravel.cloud/pwa/?v=7`.
+- PWA'en er en hurtig test-wrapper af samme app-bundle. Den bruger browser
+  storage i stedet for `expo-secure-store`, saa login virker i Safari/PWA.
 - Appens foerste flow er invitekode -> profiloprettelse -> overblik.
 - Appen gemmer lokal session i `expo-secure-store`, saa brugeren lander direkte
   paa overblik efter genstart.
@@ -150,7 +166,8 @@ Password: studos123
   web-oprettelse af klasse.
 - Profiloprettelse kraever skolevalg fra API-dropdown. Backend afviser join,
   hvis den valgte skole ikke matcher klassen bag invitekoden.
-- Profiloprettelse bruger `expo-image-picker` til valgfrit profilbillede.
+- Profiloprettelse bruger `expo-image-picker` til valgfrit profilbillede og
+  sender billedet som base64 til backend, saa Cloud kan gemme det i bucket.
 - Profiloprettelse kraever adgangskode, som gemmes hashet paa medlemmet.
 - Efter login har appen bundnavigation med `Kalender`, `Chat`, `Overblik`,
   `Wallet` og `Walls`.
@@ -186,6 +203,16 @@ Password: studos123
 - Chatten bruger Laravel Reverb til realtime via private kanaler. Hvis en
   development build mangler native NetInfo-modulet, falder appen tilbage til
   polling.
+- Native release-builds har API/Reverb-env baked ind ved build-tidspunktet og
+  kraever ikke Metro. Metro bruges kun til Expo Go/dev-client udvikling.
+- Cloud-start til Expo/Metro findes som `npm run mobile:start:cloud` og
+  `npm run mobile:start:cloud:tunnel`.
+- iOS release mod Cloud kan bygges med `npm run mobile:ios:release:cloud`.
+- Android preview/dev bygges via EAS scripts:
+  `npm run mobile:build:android` og `npm run mobile:build:android:dev`.
+- Android development-build bruger separat navn og package:
+  `Studos-dev` / `dk.studenterapp.mobile.dev`, saa den kan ligge ved siden af
+  normal `Studos` / `dk.studenterapp.mobile`.
 - `Walls`, `Wallet` og flere sidebar-sider er stadig foerste
   placeholder-/skitse-sider. `Kalender` har foerste rigtige event-flow, men
   skal stadig produktionspolishes.
@@ -244,9 +271,11 @@ Password: studos123
 Status pr. 2026-04-27:
 
 - Projektet er migreret fra statisk web + Node API til Laravel web/API.
-- XAMPP URL virker: `http://localhost/studenter-app/public/`.
-- Laravel API virker under `/api/...`.
-- SQL-databasen er XAMPP/phpMyAdmin-kompatibel.
+- XAMPP URL virker lokalt: `http://localhost/studenter-app/public/`.
+- Laravel Cloud deployment virker paa `https://studos.laravel.cloud`.
+- API health er testet i Cloud: `https://studos.laravel.cloud/api/health`.
+- SQL koerer lokalt via XAMPP/phpMyAdmin og i drift via Laravel Cloud MySQL.
+- Laravel Cloud har Reverb WebSockets og bucket/S3-compatible storage tilkoblet.
 - Web kan oprette klasse, login-bruger, admin-dashboard og invitekode.
 - Klasser har nu offentligt KlasseID ved siden af privat invitekode.
 - API kan gemme og hente klasser, profiler, medlemmer, roller, status og
@@ -260,7 +289,13 @@ Status pr. 2026-04-27:
 - Mobilappen kan slaa invitekode op i Laravel API'et, oprette profil og vise
   foerste overblik med countdown og personlig Studos-kode.
 - Eksisterende profil kan genskabes via invitekode, email og adgangskode.
-- Mobilappen har footer-navigation: Kalender, Chat, Overblik, Wallet, Walls.
+- Native iOS release-build kan koere direkte mod Cloud uden Metro, naar den er
+  bygget med Cloud-env.
+- Android har EAS preview/dev scripts, og dev-build har separat navn/package
+  (`Studos-dev`), saa den ikke konflikter med normal app.
+- PWA'en ligger live under `/pwa/` og er opdateret til cache-version `v8`.
+- Mobilappen/PWA'en har footer-navigation: Kalender, Chat, Overblik, Wallet,
+  Walls.
 - Mobilappen har nu en kompakt app-shell med topbar, footer og sidebar. `Mit
   crew` er fremhaevet i toppen af sidebaren, og de oevrige sidebar-features
   ligger som placeholder-/skitse-sider.
@@ -277,6 +312,10 @@ Status pr. 2026-04-27:
   cover-upload, dato/tid, invitationer, personvaelger med soegning og RSVP.
 - Overblik har dynamisk `Dage til studenterugen`, check-in/stemning med
   modal, "sidst opdateret", klip-container og bruger-overblik som UI-spor.
+- Profile photos, event covers og gruppechat-billeder er flyttet over paa
+  Laravel `Storage`-disk, saa nye uploads kan lande i Cloud bucket.
+- Gamle `file://` eller gamle lokale `/uploads/...` billed-URL'er er ikke
+  migreret. Upload paa ny, hvis gamle billeder ikke vises.
 - Seneste iPhone Release-build er bygget, installeret og launched paa parret
   iPhone via `devicectl`.
 - Studos-branding er lagt paa website og app-ikoner.
@@ -293,7 +332,10 @@ Ikke lavet endnu / skal afklares:
   gennemgaas og behandles.
 - Push-notifikationer.
 - TestFlight/App Store/EAS iOS distribution.
-- Produktionshosting.
+- Cloud smoke-test af nye image uploads paa iOS, Android og PWA efter bucket
+  deploy.
+- Rebuild af native iOS/Android, naar de seneste mobile/PWA fixes skal ind i
+  installerede apps.
 - Kontosletning/data-export UI, hvis det ikke allerede ender som support-flow.
 
 ## Foer drift / udgivelse
@@ -303,9 +345,10 @@ App Store/Google Play eller bruges af en rigtig klasse:
 
 - `APP_ENV=production`, `APP_DEBUG=false`, HTTPS, rigtige produktions-URL'er og
   ingen lokal XAMPP/LAN-IP i app-buildet.
-- Skrivbare upload-mapper og korrekt webserver-setup for
-  `public/uploads/profile-photos`, `public/uploads/event-covers` og
-  `public/uploads/chat-groups`. Fejl her giver permission-denied ved uploads.
+- Bucket/S3 storage skal vaere korrekt sat op i Cloud: `FILESYSTEM_DISK`,
+  `AWS_BUCKET`, `AWS_REGION`, `AWS_URL`/endpoint og
+  `league/flysystem-aws-s3-v3`. Smoke-test profile photos, event covers og
+  gruppechat-billeder efter hver deploy, der roerer uploadkode.
 - Privatlivspolitik, vilkaar/EULA og support/kontakt skal vaere live og linket
   fra app/store listing.
 - Vilkaar skal tydeligt forbyde chikanerende, diskriminerende, seksuelt,
@@ -321,7 +364,7 @@ App Store/Google Play eller bruges af en rigtig klasse:
   eller appen skal bevidst koere polling indtil realtime er klar.
 - Mail/password reset skal vaere klar, hvis elever skal kunne komme tilbage
   uden manuel support.
-- Backups af database og uploads skal planlaegges, og `.env`/keys maa ikke
+- Backups af database og bucket/uploads skal planlaegges, og `.env`/keys maa ikke
   committes.
 - Fjern/afklar demo-hardcoding foer release: fx hardcodede badge-tekster,
   demo-counts, testpersoner og placeholder-sider der kan forvirre reviewers.
@@ -388,6 +431,18 @@ Start mobilappen i Expo:
 npm run mobile:start
 ```
 
+Start mobilappen i Expo mod Laravel Cloud:
+
+```bash
+npm run mobile:start:cloud
+```
+
+Hvis Android/iOS ikke kan naa lokal Metro paa samme netvaerk, brug tunnel:
+
+```bash
+npm run mobile:start:cloud:tunnel
+```
+
 Start Reverb i et separat terminalvindue, naar chat realtime skal testes:
 
 ```bash
@@ -398,6 +453,18 @@ Byg og installer lokal iPhone-release:
 
 ```bash
 npm run mobile:ios:release
+```
+
+Byg og installer iPhone-release med Cloud-env baked ind:
+
+```bash
+npm run mobile:ios:release:cloud
+```
+
+PWA-test i Cloud:
+
+```text
+https://studos.laravel.cloud/pwa/?v=8
 ```
 
 Hvis Expo bygger appen, men haenger paa `Connecting to iPhone`, kan den byggede
@@ -427,16 +494,19 @@ Senest koert og godkendt:
 php artisan migrate
 php artisan test
 npm --workspace @studenter-app/mobile exec expo export -- --platform ios --output-dir /tmp/studos-export
+npm --workspace @studenter-app/mobile exec expo export -- --platform web --output-dir /tmp/studos-web-export
 npm --workspace @studenter-app/mobile exec expo run:ios -- --device "iPhone" --configuration Release --no-bundler --no-install
 ```
 
 Resultat:
 
-- `php artisan test`: 12 tests passed.
+- `php artisan test`: 23 tests passed, 277 assertions.
 - iOS export: OK.
+- Web export/PWA bundle: OK.
 - iPhone Release build: OK.
 - Direkte iPhone install: OK.
 - Direkte iPhone launch: OK.
+- PWA shell er senest versioneret til `v8` efter iOS footer/safe-area fix.
 
 ## Vigtige noter
 
@@ -445,17 +515,26 @@ Resultat:
   `StudenterApp`. Det er ikke et problem lige nu; brugerens app-navn og
   web-brand er `Studos`.
 - Laravel er nu kilden til web, admin, API og database-migrations.
-- Mobilappen er Expo/React Native og kalder Laravel API'et.
+- Mobilappen er Expo/React Native og kalder Laravel API'et. PWA'en bruger samme
+  app-bundle i web-export.
 - Appens lokale session ligger i `expo-secure-store`. Brug `Skift profil` i
   `Mere`, hvis onboarding/login skal testes igen.
+- PWA/browser bruger localStorage wrapper, fordi `expo-secure-store` ikke findes
+  i Safari.
+- Native Release-builds kraever ikke Metro, men env er baked ind ved build.
+  Skift mellem lokal/Cloud ved at bygge/starte med de rigtige `EXPO_PUBLIC_*`
+  variabler/scripts.
 - Chatten har foerste rigtige version og er App Store/Google Play-orienteret
   med filtering, reporting og blocking, men skal stadig testes grundigt paa to
   rigtige enheder med baade Reverb og fallback/polling.
 - Udviklingsnote: `Mit crew` i sidebaren viser lige nu mindst `120 medlemmer`
   som layout-demo. Fjern demo-counten foer produktionsbuild, saa tallet igen
   kun kommer fra `activeMembers`.
-- Profilbilleder kan uploades fra appen og gemmes under
-  `public/uploads/profile-photos`.
+- Profilbilleder, event covers og gruppechat-billeder gaar via Laravel
+  `Storage`-disk. Nye uploads skal testes mod Cloud bucket; gamle lokale
+  billed-URL'er er ikke migreret.
+- Hvis PWA'en viser gammel UI efter deploy, aabn
+  `https://studos.laravel.cloud/pwa/?v=8` eller fjern og installer PWA'en igen.
 - Engangskode-endpoints findes stadig til senere email-flow, men appen bruger
   nu email + adgangskode.
 - Notifikationer bor parkeret indtil Apple Developer-konto/provisioning er paa

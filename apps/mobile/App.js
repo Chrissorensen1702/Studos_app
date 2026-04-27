@@ -35,7 +35,9 @@ const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? StatusBar.currentH
 const APP_TOP_BAR_HEIGHT = USE_IOS_SAFE_FRAME ? 100 : 58 + ANDROID_STATUS_BAR_HEIGHT;
 const APP_TOP_BAR_PADDING_TOP = USE_IOS_SAFE_FRAME ? 42 : ANDROID_STATUS_BAR_HEIGHT;
 const APP_TOP_BAR_PADDING_BOTTOM = USE_IOS_SAFE_FRAME ? 8 : 0;
-const APP_FOOTER_PADDING_BOTTOM = Platform.OS === 'android' ? 54 : IS_MOBILE_WEB ? 0 : 8;
+const APP_MOBILE_WEB_FOOTER_SAFE_AREA = IS_MOBILE_WEB ? 34 : 0;
+const APP_FOOTER_PADDING_BOTTOM = Platform.OS === 'android' ? 54 : IS_MOBILE_WEB ? APP_MOBILE_WEB_FOOTER_SAFE_AREA : 8;
+const APP_FOOTER_BOTTOM_PULL = IS_MOBILE_WEB ? -APP_MOBILE_WEB_FOOTER_SAFE_AREA : 0;
 const APP_SCREEN_PADDING = 20;
 const APP_SCREEN_TOP_PADDING = 30;
 const APP_FOOTER_HEIGHT = 10 + 52 + APP_FOOTER_PADDING_BOTTOM;
@@ -10247,6 +10249,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 10,
     paddingBottom: APP_FOOTER_PADDING_BOTTOM,
+    marginBottom: APP_FOOTER_BOTTOM_PULL,
     overflow: 'visible',
     position: 'relative',
     elevation: 60,
