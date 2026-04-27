@@ -54,6 +54,31 @@ const CHAT_THREAD_HEADER_COUNTERS = [
   { id: 'triangle', icon: 'triangle', value: '3' },
 ];
 
+const BrowserSessionStore = {
+  getItemAsync: async (key) => {
+    try {
+      return globalThis?.localStorage?.getItem(key) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  setItemAsync: async (key, value) => {
+    try {
+      globalThis?.localStorage?.setItem(key, value);
+    } catch {
+      // Browser storage can be blocked in private/locked-down modes.
+    }
+  },
+  deleteItemAsync: async (key) => {
+    try {
+      globalThis?.localStorage?.removeItem(key);
+    } catch {
+      // Browser storage can be blocked in private/locked-down modes.
+    }
+  },
+};
+const SessionStore = Platform.OS === 'web' ? BrowserSessionStore : SecureStore;
+
 function ChatSendRocketLogo({ disabled }) {
   return (
     <View style={[styles.chatSendRocketBadge, disabled ? styles.chatSendRocketBadgeDisabled : null]}>
@@ -673,7 +698,7 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
 
-    SecureStore.getItemAsync(SESSION_STORAGE_KEY)
+    SessionStore.getItemAsync(SESSION_STORAGE_KEY)
       .then(async (storedSession) => {
         if (!storedSession || !isMounted) {
           return;
@@ -683,7 +708,7 @@ export default function App() {
         const storedToken = parsedSession?.session?.token;
 
         if (!storedToken) {
-          await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
+          await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
           return;
         }
 
@@ -694,7 +719,7 @@ export default function App() {
         };
 
         if (!nextSession?.member || !data.class) {
-          await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
+          await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
           return;
         }
 
@@ -714,7 +739,7 @@ export default function App() {
         setStep('overview');
       })
       .catch(async () => {
-        await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
+        await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
 
         if (isMounted) {
           setError('');
@@ -740,7 +765,7 @@ export default function App() {
   };
 
   const storeSession = async (data) => {
-    await SecureStore.setItemAsync(SESSION_STORAGE_KEY, JSON.stringify({
+    await SessionStore.setItemAsync(SESSION_STORAGE_KEY, JSON.stringify({
       session: data.session,
       class: data.class,
     }));
@@ -789,7 +814,7 @@ export default function App() {
   }, [session?.member?.id, session?.token]);
 
   const clearSession = async () => {
-    await SecureStore.deleteItemAsync(SESSION_STORAGE_KEY);
+    await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
     setSession(null);
     setSchoolClass(null);
     setAvailableSchools([]);
