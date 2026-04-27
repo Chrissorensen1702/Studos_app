@@ -14,8 +14,8 @@
     <style id="expo-reset">
       html,
       body {
-        height: 100%;
-        min-height: 100%;
+        height: var(--studos-pwa-height, 100vh);
+        min-height: var(--studos-pwa-height, 100vh);
         overscroll-behavior: none;
         background: #f1fbf8;
       }
@@ -28,17 +28,31 @@
 
       #root {
         display: flex;
-        height: 100%;
-        min-height: 100%;
+        height: var(--studos-pwa-height, 100vh);
+        min-height: var(--studos-pwa-height, 100vh);
         flex: 1;
+        position: relative;
+        z-index: 1;
+      }
+
+      body::after {
+        content: '';
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: env(safe-area-inset-bottom, 0px);
+        background: #ffffff;
+        pointer-events: none;
+        z-index: 0;
       }
 
       @supports (height: 100dvh) {
         html,
         body,
         #root {
-          height: 100dvh;
-          min-height: 100dvh;
+          height: var(--studos-pwa-height, 100dvh);
+          min-height: var(--studos-pwa-height, 100dvh);
         }
       }
 
@@ -46,8 +60,8 @@
         html,
         body,
         #root {
-          height: -webkit-fill-available;
-          min-height: -webkit-fill-available;
+          height: var(--studos-pwa-height, 100vh);
+          min-height: var(--studos-pwa-height, 100vh);
         }
       }
     </style>
@@ -56,7 +70,29 @@
     <noscript>Du skal slaa JavaScript til for at bruge Studos.</noscript>
     <div id="root"></div>
     <script>
-      var STUDOS_PWA_VERSION = 'v6';
+      var STUDOS_PWA_VERSION = 'v7';
+
+      (function () {
+        function setStudosViewportHeight() {
+          var layoutHeight = window.innerHeight || 0;
+          var visualHeight = window.visualViewport ? window.visualViewport.height : 0;
+          var height = Math.max(layoutHeight, visualHeight);
+
+          if (height) {
+            document.documentElement.style.setProperty('--studos-pwa-height', height + 'px');
+          }
+        }
+
+        setStudosViewportHeight();
+        window.addEventListener('resize', setStudosViewportHeight);
+        window.addEventListener('orientationchange', function () {
+          window.setTimeout(setStudosViewportHeight, 250);
+        });
+
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', setStudosViewportHeight);
+        }
+      })();
 
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {

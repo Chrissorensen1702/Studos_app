@@ -1,6 +1,6 @@
-const CACHE_NAME = 'studos-pwa-v6';
+const CACHE_NAME = 'studos-pwa-v7';
 const SHELL_ASSETS = [
-  '/pwa/',
+  '/pwa/?v=7',
   '/manifest.webmanifest',
   '/_expo/static/js/web/index-24d08ab91e2c006729f4e93208960573.js',
   '/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png',
@@ -36,7 +36,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => (
-      cached || fetch(request).catch(() => caches.match('/pwa/'))
+      cached || fetch(request).catch(() => caches.match('/pwa/?v=7'))
     ))
   );
 });
