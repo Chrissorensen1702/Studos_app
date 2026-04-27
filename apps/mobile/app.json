@@ -21,7 +21,11 @@
       "bundleIdentifier": "dk.studenterapp.mobile",
       "icon": "./assets/icon.png",
       "supportsTablet": true,
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSLocalNetworkUsageDescription": "Studos bruger lokal netvaerksadgang til at tale med udviklingsserveren paa din Mac.",
         "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
       }
