@@ -575,13 +575,15 @@ const apiFetch = async (path, options = {}) => {
 };
 
 const createChatEcho = (authToken) => {
-  if (!NativeModules?.RNCNetInfo) {
+  const isWeb = Platform.OS === 'web';
+
+  if (!isWeb && !NativeModules?.RNCNetInfo) {
     return null;
   }
 
   try {
     const EchoModule = require('laravel-echo');
-    const PusherModule = require('pusher-js/react-native');
+    const PusherModule = isWeb ? require('pusher-js') : require('pusher-js/react-native');
     const EchoClient = EchoModule.default ?? EchoModule;
     const PusherClient = PusherModule.default ?? PusherModule;
 

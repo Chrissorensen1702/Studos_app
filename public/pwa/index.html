@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="da">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#172143">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Studos">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png">
+    <title>Studos</title>
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+        overscroll-behavior: none;
+        background: #f1fbf8;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>Du skal slaa JavaScript til for at bruge Studos.</noscript>
+    <div id="root"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+      }
+    </script>
+    <script src="/_expo/static/js/web/index-270fa6892c09771fd95639a7baa12d5e.js" defer></script>
+  </body>
+</html>

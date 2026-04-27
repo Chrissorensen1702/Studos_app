@@ -1,0 +1,19 @@
+{
+  "name": "Studos",
+  "short_name": "Studos",
+  "description": "Studos til klassen",
+  "start_url": "/pwa/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1fbf8",
+  "theme_color": "#172143",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
