@@ -1,5 +1,9 @@
 <?php
 
+$useCloudPublicDisk = env('APP_ENV') === 'production'
+    && env('FILESYSTEM_DISK') === 'public'
+    && filled(env('AWS_BUCKET'));
+
 return [
 
     /*
@@ -38,7 +42,7 @@ return [
             'report' => false,
         ],
 
-        'public' => env('FILESYSTEM_DISK') === 'public' && env('AWS_BUCKET') ? [
+        'public' => $useCloudPublicDisk ? [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
             'secret' => env('AWS_SECRET_ACCESS_KEY'),

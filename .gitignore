@@ -16,6 +16,10 @@ pnpm-debug.log*
 dist/
 build/
 
+# Firebase push credentials
+*service-account*.json
+firebase-adminsdk-*.json
+
 # Native generated files, hvis Expo prebuild bruges senere
 apps/mobile/ios/
 apps/mobile/android/

@@ -3,18 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Support\ContentModeration;
+use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
-use Throwable;
 
 class StudosController extends Controller
 {
@@ -287,7 +286,7 @@ class StudosController extends Controller
                 'id' => $member->id,
                 'displayName' => $member->displayName,
                 'firstName' => $member->firstName,
-                'profilePhotoUrl' => $member->profilePhotoUrl,
+                'profilePhotoUrl' => UploadedImage::publicUrl($member->profilePhotoUrl),
                 'class' => [
                     'classId' => $member->classId,
                     'schoolName' => $member->schoolName,
@@ -497,7 +496,7 @@ class StudosController extends Controller
                     abort(422, 'Emailen findes allerede i klassen. Log ind paa den eksisterende profil.');
                 }
 
-                $profilePhotoUrl = $this->profilePhotoUrlForSignup($request, $data, $existingMember->id);
+                $profilePhotoPath = $this->profilePhotoPathForSignup($data, $existingMember->id);
                 $updates = [
                     'display_name' => $displayName,
                     'personal_code' => blank($existingMember->personal_code ?? null)
@@ -509,7 +508,7 @@ class StudosController extends Controller
                     'email' => $email,
                     'phone' => $phone,
                     'birthday' => $data['birthday'],
-                    'profile_photo_url' => $profilePhotoUrl,
+                    'profile_photo_url' => $profilePhotoPath,
                     'password_hash' => Hash::make($data['password']),
                     'terms_accepted_at' => $acceptedAt,
                     'privacy_accepted_at' => $acceptedAt,
@@ -537,7 +536,7 @@ class StudosController extends Controller
             }
 
             $memberId = (string) Str::uuid();
-            $profilePhotoUrl = $this->profilePhotoUrlForSignup($request, $data, $memberId);
+            $profilePhotoPath = $this->profilePhotoPathForSignup($data, $memberId);
             $joinedAt = now()->format('Y-m-d H:i:s');
 
             DB::table('members')->insert([
@@ -551,7 +550,7 @@ class StudosController extends Controller
                 'email' => $email,
                 'phone' => $phone,
                 'birthday' => $data['birthday'],
-                'profile_photo_url' => $profilePhotoUrl,
+                'profile_photo_url' => $profilePhotoPath,
                 'password_hash' => Hash::make($data['password']),
                 'terms_accepted_at' => $acceptedAt,
                 'privacy_accepted_at' => $acceptedAt,
@@ -699,6 +698,107 @@ class StudosController extends Controller
         ]);
     }
 
+    public function registerPushToken(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'expoPushToken' => ['required', 'string', 'max:255'],
+            'platform' => ['required', Rule::in(['android'])],
+            'deviceName' => ['nullable', 'string', 'max:190'],
+            'projectId' => ['nullable', 'string', 'max:190'],
+            'appVariant' => ['nullable', 'string', 'max:64'],
+            'nativeApplicationVersion' => ['nullable', 'string', 'max:64'],
+            'nativeBuildVersion' => ['nullable', 'string', 'max:64'],
+        ]);
+
+        abort_unless(
+            Str::startsWith($data['expoPushToken'], ['ExpoPushToken[', 'ExponentPushToken[']),
+            422,
+            'Expo push token er ugyldig.'
+        );
+
+        $now = now()->format('Y-m-d H:i:s');
+        $existingToken = DB::table('member_push_tokens')
+            ->where('expo_push_token', $data['expoPushToken'])
+            ->first();
+        $values = [
+            'member_id' => $member->id,
+            'expo_push_token' => $data['expoPushToken'],
+            'platform' => $data['platform'],
+            'device_name' => $data['deviceName'] ?? null,
+            'project_id' => $data['projectId'] ?? null,
+            'app_variant' => $data['appVariant'] ?? null,
+            'native_application_version' => $data['nativeApplicationVersion'] ?? null,
+            'native_build_version' => $data['nativeBuildVersion'] ?? null,
+            'last_registered_at' => $now,
+            'disabled_at' => null,
+            'updated_at' => $now,
+        ];
+
+        if ($existingToken) {
+            DB::table('member_push_tokens')->where('id', $existingToken->id)->update($values);
+            $tokenId = $existingToken->id;
+        } else {
+            $tokenId = (string) Str::uuid();
+
+            DB::table('member_push_tokens')->insert([
+                'id' => $tokenId,
+                ...$values,
+                'created_at' => $now,
+            ]);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'pushTokenId' => $tokenId,
+            'registeredAt' => $this->apiDateTime($now),
+        ]);
+    }
+
+    public function sendTestNotification(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'title' => ['nullable', 'string', 'max:80'],
+            'body' => ['nullable', 'string', 'max:180'],
+        ]);
+        $tokens = DB::table('member_push_tokens')
+            ->where('member_id', $member->id)
+            ->where('platform', 'android')
+            ->whereNull('disabled_at')
+            ->pluck('expo_push_token');
+
+        abort_if($tokens->isEmpty(), 422, 'Der er ikke gemt en Android push-token endnu.');
+
+        $messages = $tokens
+            ->map(fn (string $token): array => [
+                'to' => $token,
+                'sound' => 'default',
+                'channelId' => 'studos-default',
+                'title' => $data['title'] ?? 'Studos test',
+                'body' => $data['body'] ?? 'Hvis du ser den her, virker Android push.',
+                'data' => [
+                    'type' => 'test',
+                    'screen' => 'overview',
+                ],
+            ])
+            ->values()
+            ->all();
+
+        $response = Http::timeout(8)
+            ->acceptJson()
+            ->post('https://exp.host/--/api/v2/push/send', $messages);
+
+        abort_if($response->failed(), 502, 'Expo Push Service kunne ikke sende testen.');
+
+        return response()->json([
+            'ok' => true,
+            'sent' => count($messages),
+            'message' => 'Testnotifikation sendt til Android.',
+            'expoResponse' => $response->json(),
+        ]);
+    }
+
     public function updateProfilePhoto(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -706,15 +806,14 @@ class StudosController extends Controller
             'profilePhotoData' => ['required', 'string', 'max:7000000'],
         ]);
 
-        $profilePhotoUrl = $this->storeBase64Image(
-            $request,
+        $profilePhotoPath = UploadedImage::storeBase64(
             $data['profilePhotoData'],
             'profile-photos',
             $member->id,
         );
 
         DB::table('members')->where('id', $member->id)->update([
-            'profile_photo_url' => $profilePhotoUrl,
+            'profile_photo_url' => $profilePhotoPath,
         ]);
 
         $updatedMember = DB::table('members')->where('id', $member->id)->first();
@@ -730,10 +829,10 @@ class StudosController extends Controller
         ]);
     }
 
-    private function profilePhotoUrlForSignup(Request $request, array $data, string $memberId): ?string
+    private function profilePhotoPathForSignup(array $data, string $memberId): ?string
     {
         if (! blank($data['profilePhotoData'] ?? null)) {
-            return $this->storeBase64Image($request, $data['profilePhotoData'], 'profile-photos', $memberId);
+            return UploadedImage::storeBase64($data['profilePhotoData'], 'profile-photos', $memberId);
         }
 
         return $this->trustedExternalImageUrl($data['profilePhotoUrl'] ?? null);
@@ -748,87 +847,6 @@ class StudosController extends Controller
         $url = trim($value);
 
         return Str::startsWith($url, ['http://', 'https://']) ? $url : null;
-    }
-
-    private function storeBase64Image(Request $request, string $imageData, string $folder, string $filenamePrefix): string
-    {
-        if (! preg_match('/^data:image\/(jpeg|jpg|png|webp);base64,/', $imageData)) {
-            abort(422, 'Billedet kunne ikke laeses.');
-        }
-
-        $base64 = substr($imageData, strpos($imageData, ',') + 1);
-        $binary = base64_decode($base64, true);
-
-        if ($binary === false) {
-            abort(422, 'Billedet kunne ikke laeses.');
-        }
-
-        if (strlen($binary) > 4 * 1024 * 1024) {
-            abort(422, 'Billedet er for stort.');
-        }
-
-        $imageInfo = @getimagesizefromstring($binary);
-        $mimeType = $imageInfo['mime'] ?? null;
-        $extension = match ($mimeType) {
-            'image/jpeg' => 'jpg',
-            'image/png' => 'png',
-            'image/webp' => 'webp',
-            default => null,
-        };
-
-        if (! $extension) {
-            abort(422, 'Billedet kunne ikke laeses.');
-        }
-
-        $filename = $filenamePrefix.'-'.Str::uuid().'.'.$extension;
-        $path = 'uploads/'.$folder.'/'.$filename;
-        $diskName = $this->imageUploadDiskName();
-
-        try {
-            $written = Storage::disk($diskName)->put($path, $binary, [
-                'visibility' => 'public',
-                'ContentType' => $mimeType,
-            ]);
-        } catch (Throwable $exception) {
-            Log::warning('Image upload failed.', [
-                'disk' => $diskName,
-                'folder' => $folder,
-                'error' => $exception->getMessage(),
-            ]);
-
-            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
-        }
-
-        if ($written === false) {
-            Log::warning('Image upload returned false.', [
-                'disk' => $diskName,
-                'folder' => $folder,
-            ]);
-
-            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
-        }
-
-        return $this->storedImageUrl($request, $diskName, $path);
-    }
-
-    private function imageUploadDiskName(): string
-    {
-        $defaultDisk = config('filesystems.default', 'local');
-
-        return $defaultDisk === 'local' ? 'public' : $defaultDisk;
-    }
-
-    private function storedImageUrl(Request $request, string $diskName, string $path): string
-    {
-        $url = Storage::disk($diskName)->url($path);
-
-        if (Str::startsWith($url, ['http://', 'https://'])) {
-            return $url;
-        }
-
-        return $request->getSchemeAndHttpHost()
-            .rtrim($request->getBaseUrl(), '/')
-            .'/'.ltrim($url, '/');
     }
 
     public function storeEvent(Request $request): JsonResponse
@@ -854,9 +872,9 @@ class StudosController extends Controller
         $startsAt = $eventTime
             ? Carbon::createFromFormat('Y-m-d H:i', $eventDate.' '.$eventTime)->format('Y-m-d H:i:s')
             : null;
-        $coverImageUrl = blank($data['coverImageData'] ?? null)
+        $coverImagePath = blank($data['coverImageData'] ?? null)
             ? null
-            : $this->storeBase64Image($request, $data['coverImageData'], 'event-covers', $eventId);
+            : UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $eventId);
         $inviteScope = $data['inviteScope'] ?? 'class';
         $inviteMemberIds = $this->resolveEventInviteMemberIds(
             $member,
@@ -882,7 +900,7 @@ class StudosController extends Controller
             $now,
             $eventDate,
             $startsAt,
-            $coverImageUrl,
+            $coverImagePath,
             $inviteScope,
             $inviteMemberIds,
             $title,
@@ -898,7 +916,7 @@ class StudosController extends Controller
                 'event_type' => 'studentergilde',
                 'location' => $location,
                 'description' => $description,
-                'cover_image_url' => $coverImageUrl,
+                'cover_image_url' => $coverImagePath,
                 'invite_scope' => $inviteScope,
                 'created_by_member_id' => $member->id,
                 'rsvp_count' => 1,
@@ -1362,7 +1380,7 @@ class StudosController extends Controller
                         'startsAt' => $this->apiDateTime($event->starts_at ?? null),
                         'location' => $event->location ?? '',
                         'description' => $event->description ?? '',
-                        'coverImageUrl' => $event->cover_image_url ?? null,
+                        'coverImageUrl' => UploadedImage::publicUrl($event->cover_image_url ?? null),
                         'inviteScope' => $event->invite_scope ?? 'class',
                         'inviteCount' => $inviteCount,
                         'pendingCount' => $eventInvitesForEvent->isNotEmpty()
@@ -1376,7 +1394,7 @@ class StudosController extends Controller
                         'creator' => $creator ? [
                             'id' => $creator->id,
                             'displayName' => $creator->display_name,
-                            'profilePhotoUrl' => $creator->profile_photo_url ?? null,
+                            'profilePhotoUrl' => UploadedImage::publicUrl($creator->profile_photo_url ?? null),
                         ] : null,
                         'rsvpCount' => (int) $event->rsvp_count,
                         'attendingCount' => $attendees->isNotEmpty()
@@ -1388,28 +1406,28 @@ class StudosController extends Controller
                             ->map(fn (object $rsvp): array => [
                                 'memberId' => $rsvp->member_id,
                                 'displayName' => $rsvp->memberDisplayName,
-                                'profilePhotoUrl' => $rsvp->memberProfilePhotoUrl,
+                                'profilePhotoUrl' => UploadedImage::publicUrl($rsvp->memberProfilePhotoUrl),
                             ])
                             ->all(),
                         'declines' => $declines
                             ->map(fn (object $rsvp): array => [
                                 'memberId' => $rsvp->member_id,
                                 'displayName' => $rsvp->memberDisplayName,
-                                'profilePhotoUrl' => $rsvp->memberProfilePhotoUrl,
+                                'profilePhotoUrl' => UploadedImage::publicUrl($rsvp->memberProfilePhotoUrl),
                             ])
                             ->all(),
                         'invitees' => $eventInvitesForEvent
                             ->map(fn (object $invite): array => [
                                 'memberId' => $invite->member_id,
                                 'displayName' => $invite->memberDisplayName,
-                                'profilePhotoUrl' => $invite->memberProfilePhotoUrl,
+                                'profilePhotoUrl' => UploadedImage::publicUrl($invite->memberProfilePhotoUrl),
                             ])
                             ->all(),
                         'pendingInvitees' => $pendingInvites
                             ->map(fn (object $invite): array => [
                                 'memberId' => $invite->member_id,
                                 'displayName' => $invite->memberDisplayName,
-                                'profilePhotoUrl' => $invite->memberProfilePhotoUrl,
+                                'profilePhotoUrl' => UploadedImage::publicUrl($invite->memberProfilePhotoUrl),
                             ])
                             ->all(),
                     ];
@@ -1438,7 +1456,7 @@ class StudosController extends Controller
             'displayName' => $member->display_name,
             'firstName' => $firstName,
             'lastName' => $lastName,
-            'profilePhotoUrl' => $member->profile_photo_url ?? null,
+            'profilePhotoUrl' => UploadedImage::publicUrl($member->profile_photo_url ?? null),
             'role' => $this->normalizeRole($member->role),
             'status' => $this->normalizeStatus($member->status ?? 'active'),
             'joinedAt' => $this->apiDateTime($member->joined_at),
@@ -1627,7 +1645,7 @@ class StudosController extends Controller
                 'id' => $otherMember->id,
                 'displayName' => $otherMember->displayName,
                 'firstName' => $otherMember->firstName,
-                'profilePhotoUrl' => $otherMember->profilePhotoUrl,
+                'profilePhotoUrl' => UploadedImage::publicUrl($otherMember->profilePhotoUrl),
                 'lastSeenAt' => $this->apiDateTime($otherMember->lastSeenAt ?? null),
                 'isOnline' => $this->memberIsOnline($otherMember->lastSeenAt ?? null),
                 'class' => [

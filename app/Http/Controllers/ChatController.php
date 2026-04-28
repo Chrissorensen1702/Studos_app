@@ -4,19 +4,21 @@ namespace App\Http\Controllers;
 
 use App\Events\ChatMessageCreated;
 use App\Support\ContentModeration;
+use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
-use Throwable;
 
 class ChatController extends Controller
 {
+    private const CHAT_PUSH_LOGO_URL = 'https://studos.laravel.cloud/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png';
+
     public function conversations(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -146,17 +148,17 @@ class ChatController extends Controller
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
         ]);
-        $groupPhotoUrl = blank($data['groupPhotoData'] ?? null)
+        $groupPhotoPath = blank($data['groupPhotoData'] ?? null)
             ? null
-            : $this->storeBase64Image($request, $data['groupPhotoData'], 'chat-groups', $conversationId);
+            : UploadedImage::storeBase64($data['groupPhotoData'], 'chat-groups', $conversationId, 'Chat image');
 
-        DB::transaction(function () use ($conversationId, $member, $memberIds, $title, $groupPhotoUrl, $now): void {
+        DB::transaction(function () use ($conversationId, $member, $memberIds, $title, $groupPhotoPath, $now): void {
             DB::table('chat_conversations')->insert([
                 'id' => $conversationId,
                 'class_id' => $member->class_id,
                 'type' => 'group',
                 'title' => $title,
-                'group_photo_url' => $groupPhotoUrl,
+                'group_photo_url' => $groupPhotoPath,
                 'direct_pair_key' => null,
                 'owner_member_id' => $member->id,
                 'created_by_member_id' => $member->id,
@@ -284,6 +286,7 @@ class ChatController extends Controller
         });
 
         broadcast(new ChatMessageCreated($chat->id, $messageId))->toOthers();
+        $this->sendChatPushNotifications($chat, $member, $messageId, $body);
 
         $message = DB::table('chat_messages')->where('id', $messageId)->first();
         $participantRows = $this->participantsForConversations(collect([$chat->id]));
@@ -707,7 +710,7 @@ class ChatController extends Controller
             'id' => $chat->id,
             'type' => $chat->type,
             'title' => $title,
-            'groupPhotoUrl' => $chat->group_photo_url ?? null,
+            'groupPhotoUrl' => UploadedImage::publicUrl($chat->group_photo_url ?? null),
             'ownerMemberId' => $chat->owner_member_id ?? null,
             'status' => $chat->status,
             'unreadCount' => $unreadCount,
@@ -930,7 +933,7 @@ class ChatController extends Controller
             'id' => $member->id,
             'displayName' => $member->displayName,
             'firstName' => $member->firstName,
-            'profilePhotoUrl' => $member->profilePhotoUrl,
+            'profilePhotoUrl' => UploadedImage::publicUrl($member->profilePhotoUrl),
             'lastSeenAt' => $this->apiDateTime($lastSeenAt),
             'isOnline' => $this->memberIsOnline($lastSeenAt),
         ];
@@ -958,85 +961,105 @@ class ChatController extends Controller
         ]);
     }
 
-    private function storeBase64Image(Request $request, string $imageData, string $folder, string $filenamePrefix): string
+    private function sendChatPushNotifications(object $chat, object $sender, string $messageId, string $body): void
     {
-        if (! preg_match('/^data:image\/(jpeg|jpg|png|webp);base64,/', $imageData)) {
-            abort(422, 'Billedet kunne ikke laeses.');
+        if (! Schema::hasTable('member_push_tokens')) {
+            return;
         }
 
-        $base64 = substr($imageData, strpos($imageData, ',') + 1);
-        $binary = base64_decode($base64, true);
+        $now = now()->format('Y-m-d H:i:s');
+        $tokens = DB::table('chat_participants')
+            ->join('member_push_tokens', 'member_push_tokens.member_id', '=', 'chat_participants.member_id')
+            ->where('chat_participants.conversation_id', $chat->id)
+            ->where('chat_participants.status', 'active')
+            ->where('chat_participants.member_id', '!=', $sender->id)
+            ->where('member_push_tokens.platform', 'android')
+            ->whereNull('member_push_tokens.disabled_at')
+            ->where(function ($query) use ($now): void {
+                $query
+                    ->whereNull('chat_participants.muted_until')
+                    ->orWhere('chat_participants.muted_until', '<=', $now);
+            })
+            ->pluck('member_push_tokens.expo_push_token')
+            ->filter()
+            ->unique()
+            ->values();
 
-        if ($binary === false) {
-            abort(422, 'Billedet kunne ikke laeses.');
+        if ($tokens->isEmpty()) {
+            return;
         }
 
-        if (strlen($binary) > 4 * 1024 * 1024) {
-            abort(422, 'Billedet er for stort.');
-        }
-
-        $imageInfo = @getimagesizefromstring($binary);
-        $mimeType = $imageInfo['mime'] ?? null;
-        $extension = match ($mimeType) {
-            'image/jpeg' => 'jpg',
-            'image/png' => 'png',
-            'image/webp' => 'webp',
-            default => null,
-        };
-
-        if (! $extension) {
-            abort(422, 'Billedet kunne ikke laeses.');
-        }
-
-        $filename = $filenamePrefix.'-'.Str::uuid().'.'.$extension;
-        $path = 'uploads/'.$folder.'/'.$filename;
-        $diskName = $this->imageUploadDiskName();
+        $senderName = $sender->display_name ?? 'Studos';
+        $preview = Str::limit(trim(preg_replace('/\s+/', ' ', $body)), 120);
+        $chatContext = $chat->type === 'group'
+            ? (blank($chat->title) ? 'Gruppechat' : $chat->title)
+            : null;
+        $chatTitle = $senderName;
+        $pushBody = $chatContext ? $chatContext.' · '.$preview : $preview;
+        $messages = $tokens
+            ->map(fn (string $token): array => [
+                'to' => $token,
+                'sound' => 'default',
+                'channelId' => 'studos-default',
+                'title' => $chatTitle,
+                'body' => $pushBody,
+                'richContent' => [
+                    'image' => self::CHAT_PUSH_LOGO_URL,
+                ],
+                'data' => [
+                    'type' => 'chat_message',
+                    'screen' => 'chat',
+                    'conversationId' => $chat->id,
+                    'messageId' => $messageId,
+                    'senderMemberId' => $sender->id,
+                ],
+            ])
+            ->all();
 
         try {
-            $written = Storage::disk($diskName)->put($path, $binary, [
-                'visibility' => 'public',
-                'ContentType' => $mimeType,
-            ]);
-        } catch (Throwable $exception) {
-            Log::warning('Chat image upload failed.', [
-                'disk' => $diskName,
-                'folder' => $folder,
+            $response = Http::timeout(5)
+                ->acceptJson()
+                ->post('https://exp.host/--/api/v2/push/send', $messages);
+
+            if ($response->failed()) {
+                Log::warning('Expo chat push failed.', [
+                    'conversation_id' => $chat->id,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return;
+            }
+
+            $this->disableInvalidExpoPushTokens($response->json(), $tokens);
+        } catch (\Throwable $exception) {
+            Log::warning('Expo chat push exception.', [
+                'conversation_id' => $chat->id,
                 'error' => $exception->getMessage(),
             ]);
+        }
+    }
 
-            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
+    private function disableInvalidExpoPushTokens(mixed $expoResponse, $tokens): void
+    {
+        $tickets = collect($expoResponse['data'] ?? []);
+        $invalidTokens = $tickets
+            ->values()
+            ->filter(fn ($ticket, int $index): bool => ($ticket['details']['error'] ?? null) === 'DeviceNotRegistered'
+                && filled($tokens->get($index)))
+            ->map(fn ($ticket, int $index): string => $tokens->get($index))
+            ->values();
+
+        if ($invalidTokens->isEmpty()) {
+            return;
         }
 
-        if ($written === false) {
-            Log::warning('Chat image upload returned false.', [
-                'disk' => $diskName,
-                'folder' => $folder,
+        DB::table('member_push_tokens')
+            ->whereIn('expo_push_token', $invalidTokens)
+            ->update([
+                'disabled_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
             ]);
-
-            abort(500, 'Billedet kunne ikke gemmes. Proev igen om lidt.');
-        }
-
-        return $this->storedImageUrl($request, $diskName, $path);
-    }
-
-    private function imageUploadDiskName(): string
-    {
-        $defaultDisk = config('filesystems.default', 'local');
-
-        return $defaultDisk === 'local' ? 'public' : $defaultDisk;
-    }
-
-    private function storedImageUrl(Request $request, string $diskName, string $path): string
-    {
-        $url = Storage::disk($diskName)->url($path);
-
-        if (Str::startsWith($url, ['http://', 'https://'])) {
-            return $url;
-        }
-
-        return $request->getSchemeAndHttpHost()
-            .rtrim($request->getBaseUrl(), '/')
-            .'/'.ltrim($url, '/');
     }
 
     private function directPairKey(string $firstMemberId, string $secondMemberId): string

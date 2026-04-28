@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -253,12 +254,13 @@ class ExampleTest extends TestCase
         $coverImageUrl = $createResponse->json('class.events.0.coverImageUrl');
 
         $this->assertStringContainsString('/uploads/event-covers/'.$eventId.'-', $coverImageUrl);
+        $coverPath = Str::after(parse_url($coverImageUrl, PHP_URL_PATH), '/storage/');
 
         $this->assertDatabaseHas('events', [
             'id' => $eventId,
             'class_id' => 'demo-class',
             'created_by_member_id' => 'demo-owner',
-            'cover_image_url' => $coverImageUrl,
+            'cover_image_url' => $coverPath,
             'rsvp_count' => 1,
         ]);
         $this->assertDatabaseHas('event_rsvps', [
@@ -281,7 +283,6 @@ class ExampleTest extends TestCase
             'member_id' => 'calendar-tobias',
         ]);
 
-        $coverPath = Str::after(parse_url($coverImageUrl, PHP_URL_PATH), '/storage/');
         Storage::disk('public')->assertExists($coverPath);
         Storage::disk('public')->delete($coverPath);
 
@@ -311,6 +312,69 @@ class ExampleTest extends TestCase
         ]);
     }
 
+    public function test_authenticated_member_can_register_android_push_token(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $expoPushToken = 'ExpoPushToken['.Str::random(32).']';
+
+        $this
+            ->postJson('/api/notifications/push-token', [
+                'expoPushToken' => $expoPushToken,
+                'platform' => 'android',
+            ])->assertStatus(401);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/notifications/push-token', [
+                'expoPushToken' => $expoPushToken,
+                'platform' => 'ios',
+            ])->assertStatus(422);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/notifications/push-token', [
+                'expoPushToken' => $expoPushToken,
+                'platform' => 'android',
+                'deviceName' => 'Pixel Test',
+                'projectId' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+                'appVariant' => 'development',
+                'nativeApplicationVersion' => '0.0.1',
+                'nativeBuildVersion' => '1',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_push_tokens', [
+            'member_id' => 'demo-owner',
+            'expo_push_token' => $expoPushToken,
+            'platform' => 'android',
+            'device_name' => 'Pixel Test',
+            'disabled_at' => null,
+        ]);
+
+        Http::fake([
+            'https://exp.host/--/api/v2/push/send' => Http::response([
+                'data' => [
+                    ['status' => 'ok'],
+                ],
+            ]),
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/notifications/test', [
+                'title' => 'Studos test',
+                'body' => 'Android push test.',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('sent', 1)
+            ->assertJsonPath('message', 'Testnotifikation sendt til Android.');
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
+            && $request[0]['to'] === $expoPushToken
+            && $request[0]['channelId'] === 'studos-default');
+    }
+
     public function test_direct_chat_uses_auth_member_as_sender_and_tracks_read_status(): void
     {
         $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
@@ -335,6 +399,30 @@ class ExampleTest extends TestCase
             ->assertJsonPath('conversation.canDeleteForEveryone', false);
 
         $conversationId = $conversationResponse->json('conversation.id');
+        $majaPushToken = 'ExpoPushToken['.Str::random(32).']';
+
+        DB::table('member_push_tokens')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => 'chat-maja',
+            'expo_push_token' => $majaPushToken,
+            'platform' => 'android',
+            'device_name' => 'Pixel Chat',
+            'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+            'app_variant' => 'development',
+            'native_application_version' => '0.0.1',
+            'native_build_version' => '1',
+            'last_registered_at' => now(),
+            'disabled_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            'https://exp.host/--/api/v2/push/send' => Http::response([
+                'data' => [
+                    ['status' => 'ok'],
+                ],
+            ]),
+        ]);
 
         $messageResponse = $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
@@ -349,6 +437,16 @@ class ExampleTest extends TestCase
             ->assertJsonPath('message.isMine', true)
             ->assertJsonPath('message.readByOther', false)
             ->assertJsonPath('message.body', 'Hej Maja 👋');
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
+            && $request[0]['to'] === $majaPushToken
+            && $request[0]['channelId'] === 'studos-default'
+            && $request[0]['title'] === 'Chris'
+            && $request[0]['body'] === 'Hej Maja 👋'
+            && $request[0]['richContent']['image'] === 'https://studos.laravel.cloud/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png'
+            && $request[0]['data']['type'] === 'chat_message'
+            && $request[0]['data']['screen'] === 'chat'
+            && $request[0]['data']['conversationId'] === $conversationId);
 
         $messageId = $messageResponse->json('message.id');
 
@@ -489,6 +587,59 @@ class ExampleTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_chat_push_skips_muted_recipients(): void
+    {
+        $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $conversationId = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'chat-maja',
+            ])
+            ->assertStatus(201)
+            ->json('conversation.id');
+
+        DB::table('member_push_tokens')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => 'chat-maja',
+            'expo_push_token' => 'ExpoPushToken['.Str::random(32).']',
+            'platform' => 'android',
+            'device_name' => 'Pixel Muted',
+            'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+            'app_variant' => 'development',
+            'native_application_version' => '0.0.1',
+            'native_build_version' => '1',
+            'last_registered_at' => now(),
+            'disabled_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::table('chat_participants')
+            ->where('conversation_id', $conversationId)
+            ->where('member_id', 'chat-maja')
+            ->update([
+                'muted_until' => now()->addHour()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+        Http::fake([
+            'https://exp.host/--/api/v2/push/send' => Http::response([
+                'data' => [
+                    ['status' => 'ok'],
+                ],
+            ]),
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/messages', [
+                'body' => 'Muted ping',
+            ])
+            ->assertStatus(201);
+
+        Http::assertSentCount(0);
+    }
+
     public function test_authenticated_member_can_update_profile_photo(): void
     {
         Storage::fake('public');
@@ -516,12 +667,12 @@ class ExampleTest extends TestCase
         $photoUrl = $response->json('session.member.profilePhotoUrl');
 
         $this->assertStringContainsString('/uploads/profile-photos/demo-owner-', $photoUrl);
+        $photoPath = Str::after(parse_url($photoUrl, PHP_URL_PATH), '/storage/');
         $this->assertDatabaseHas('members', [
             'id' => 'demo-owner',
-            'profile_photo_url' => $photoUrl,
+            'profile_photo_url' => $photoPath,
         ]);
 
-        $photoPath = Str::after(parse_url($photoUrl, PHP_URL_PATH), '/storage/');
         Storage::disk('public')->assertExists($photoPath);
         Storage::disk('public')->delete($photoPath);
     }

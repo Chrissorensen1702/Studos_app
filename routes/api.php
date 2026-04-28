@@ -20,6 +20,8 @@ Route::post('/session/login', [StudosController::class, 'loginWithPassword']);
 Route::post('/session/request-code', [StudosController::class, 'requestLoginCode']);
 Route::post('/session/verify-code', [StudosController::class, 'verifyLoginCode']);
 Route::get('/session/me', [StudosController::class, 'sessionMe']);
+Route::post('/notifications/push-token', [StudosController::class, 'registerPushToken'])->middleware('throttle:20,1');
+Route::post('/notifications/test', [StudosController::class, 'sendTestNotification'])->middleware('throttle:6,1');
 Route::post('/profile/photo', [StudosController::class, 'updateProfilePhoto'])->middleware('throttle:12,1');
 Route::post('/classes/{class}/members/{member}/access', [StudosController::class, 'updateMemberAccess']);
 Route::post('/events', [StudosController::class, 'storeEvent'])->middleware('throttle:12,1');
