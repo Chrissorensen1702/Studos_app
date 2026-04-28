@@ -443,7 +443,7 @@ class ExampleTest extends TestCase
             && $request[0]['channelId'] === 'studos-default'
             && $request[0]['title'] === 'Chris'
             && $request[0]['body'] === 'Hej Maja 👋'
-            && $request[0]['richContent']['image'] === 'https://studos.laravel.cloud/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png'
+            && ! array_key_exists('richContent', $request[0])
             && $request[0]['data']['type'] === 'chat_message'
             && $request[0]['data']['screen'] === 'chat'
             && $request[0]['data']['conversationId'] === $conversationId);

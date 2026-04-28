@@ -17,8 +17,6 @@ use Illuminate\Validation\Rule;
 
 class ChatController extends Controller
 {
-    private const CHAT_PUSH_LOGO_URL = 'https://studos.laravel.cloud/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png';
-
     public function conversations(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -1003,9 +1001,6 @@ class ChatController extends Controller
                 'channelId' => 'studos-default',
                 'title' => $chatTitle,
                 'body' => $pushBody,
-                'richContent' => [
-                    'image' => self::CHAT_PUSH_LOGO_URL,
-                ],
                 'data' => [
                     'type' => 'chat_message',
                     'screen' => 'chat',
