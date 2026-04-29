@@ -12,8 +12,9 @@ hashet i Laravel.
 
 `Min profil` findes i sidebaren. Den kan pt. vise profilinfo og uploade/skifte
 profilbillede. Uploaden sendes til Laravel som base64-image, gemmes under
-`public/uploads/profile-photos`, og URL'en gemmes paa medlemmet. `Test Jensen`
-har et fiktivt AI-genereret demo-profilbillede.
+`uploads/profile-photos` via Laravel `Storage`-disk, og storage-pathen gemmes
+paa medlemmet. API'et returnerer en lokal `/storage/...` URL i dev og en
+bucket/S3 URL i Cloud.
 
 Brugeren skal acceptere vilkaar og privatlivspolitik ved oprettelse. Backend
 gemmer samtykket med version, saa appen bygges med App Store-godkendelse for
@@ -181,19 +182,92 @@ Android keyboard-layout er sat til `resize` i `app.json`. Chatinputfeltet er
 tilpasset keyboard paa baade iOS og Android, men skal stadig regressions-testes
 paa rigtige enheder efter stoerre layoutaendringer.
 
+## Android Push / Firebase
+
+Push paa Android kraever Firebase/FCM native config. Metro/dev-server kan teste
+JavaScript-flowet, men den native Android app skal vaere bygget med korrekt
+Firebase config, foer `getExpoPushTokenAsync` virker.
+
+For Android app-id `dk.studenterapp.mobile`:
+
+1. Opret/vaelg Firebase-projekt.
+2. Tilfoej en Android app med package name `dk.studenterapp.mobile`.
+3. Hvis der testes i development-client, tilfoej ogsaa Android app med package
+   name `dk.studenterapp.mobile.dev`.
+4. Download `google-services.json`.
+5. Laeg filen som `apps/mobile/google-services.json`.
+6. Koer lokalt:
+
+```bash
+STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1 npx expo config --type public
+```
+
+Outputtet skal vise:
+
+```text
+android.googleServicesFile: ./google-services.json
+plugins: ... expo-notifications ...
+extra.eas.projectId: b4da2c62-b9cd-442c-b8da-facc8e6dc689
+```
+
+Derudover skal FCM V1 service account key uploades til Expo/EAS credentials for
+Android application identifier `dk.studenterapp.mobile`, saa Expo Push Service
+kan sende beskeder videre til FCM. Hvis der skal sendes push til en
+development-client med package `dk.studenterapp.mobile.dev`, skal den
+application identifier ogsaa have FCM credentials. Private service-account
+JSON-filer maa ikke committes; `.gitignore` ignorerer dem.
+`google-services.json` er public-facing Firebase app config og kan godt ligge i
+projektet.
+
+Status pr. 2026-04-28:
+
+- `apps/mobile/google-services.json` findes og matcher
+  `dk.studenterapp.mobile`.
+- `apps/mobile/google-services.dev.json` findes og matcher
+  `dk.studenterapp.mobile.dev`.
+- Firebase project id: `studos-app-820f7`.
+- Firebase project number: `959040548905`.
+- FCM V1 service account key er uploadet til EAS credentials for baade Android
+  `preview` / `dk.studenterapp.mobile` og Android
+  `development` / `dk.studenterapp.mobile.dev`.
+- `app.config.js` auto-skifter Firebase config efter build-variant:
+  `preview`/APK bruger `google-services.json` for `dk.studenterapp.mobile`,
+  mens `development`/dev-client bruger `google-services.dev.json` eller en
+  samlet `google-services.json`, hvis den indeholder
+  `dk.studenterapp.mobile.dev`.
+- `npm run mobile:push:check` validerer begge varianter og er groen.
+- Seneste Android Cloud preview/APK build blev startet 2026-04-28 kl. 23.46:
+  `https://expo.dev/accounts/chrissorensen/projects/studos/builds/23a3ddaa-796a-449c-9001-4389d8b2efec`.
+  Det build er taenkt som den naeste rigtige Android-test med Cloud API/Reverb,
+  Firebase push, chat-push og ny notification-icon config.
+
+## Aktuel teknisk status
+
+- `SafeAreaView has been deprecated` er rettet ved at fjerne importen fra
+  React Native og bruge almindelige `View`-containere i appens root states.
+- `Encountered two children with the same key` er rettet ved at dedupe
+  conversations, messages, events og attendee previews foer render.
+- `Chat realtime is unavailable in this build. [TypeError: constructor is not callable]`
+  er rettet i `createChatEcho`: `pusher-js/react-native` eksporterer
+  `Pusher`, og den sendes nu direkte til Laravel Echo via `Pusher` optionen.
+- Android og iOS JS export blev koert groent efter rettelserne.
+
 ## Fortsaet Herfra
 
-1. Test chat paa to enheder med Metro paa `8081` og Reverb paa `8080`: send,
-   read-status, realtime/polling, swipe tilbage, long-press, blokering,
-   rapportering og keyboard paa iOS/Android.
-2. Lav admin/moderationsside, saa `member_reports`,
+1. Installer seneste Android EAS preview/APK naar buildet er faerdigt, og test
+   notifikationer mellem to Android-enheder: permission popup, token-gemning,
+   chat-push, notification-icon og tap ind i appen.
+2. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
+   Reverb paa `8080`: send, read-status, realtime/polling, swipe tilbage,
+   long-press, blokering, rapportering og keyboard paa iOS/Android.
+3. Lav admin/moderationsside, saa `member_reports`,
    `moderation_violations`, blocks og chat-events kan gennemgaas og handles
    paa foer drift.
-3. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
+4. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
    invitationer, RSVP og tomme states.
-4. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
+5. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
    badge-tekster, testpersoner og ufaerdige sidebar-sider.
-5. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
+6. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
    privacy/terms/support links, demo-login til review og korrekt content
    rating for brugerchat/UGC.
 

@@ -11,7 +11,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
+          "photosPermission": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed."
         }
       ],
       "expo-secure-store",
@@ -26,8 +26,7 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocalNetworkUsageDescription": "Studos bruger lokal netvaerksadgang til at tale med udviklingsserveren paa din Mac.",
-        "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vaelger, som profilbillede i klassen."
+        "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed."
       }
     },
     "android": {

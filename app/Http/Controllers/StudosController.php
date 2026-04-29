@@ -19,6 +19,14 @@ class StudosController extends Controller
 {
     private const PRIVACY_VERSION = '2026-04-26';
 
+    private const EVENT_COVER_TEMPLATE_IDS = [
+        'sunset',
+        'cap',
+        'night',
+        'garden',
+        'gold',
+    ];
+
     private const ROLES = [
         [
             'id' => 'owner',
@@ -849,6 +857,67 @@ class StudosController extends Controller
         return Str::startsWith($url, ['http://', 'https://']) ? $url : null;
     }
 
+    private function eventCoverTemplatePath(?string $templateId): ?string
+    {
+        if (blank($templateId)) {
+            return null;
+        }
+
+        $templateId = trim($templateId);
+
+        return in_array($templateId, self::EVENT_COVER_TEMPLATE_IDS, true)
+            ? 'template:'.$templateId
+            : null;
+    }
+
+    private function eventCoverTemplateIdFromPath(?string $value): ?string
+    {
+        if (blank($value) || ! Str::startsWith($value, 'template:')) {
+            return null;
+        }
+
+        $templateId = Str::after($value, 'template:');
+
+        return in_array($templateId, self::EVENT_COVER_TEMPLATE_IDS, true)
+            ? $templateId
+            : null;
+    }
+
+    private function resolveEventCoverPath(array $data, string $eventId, ?string $existingPath = null): ?string
+    {
+        $mode = $data['coverImageMode'] ?? null;
+
+        if ($mode === 'keep') {
+            return $existingPath;
+        }
+
+        if ($mode === 'none') {
+            return null;
+        }
+
+        if ($mode === 'upload') {
+            abort_if(blank($data['coverImageData'] ?? null), 422, 'Vaelg et cover-billede.');
+
+            return UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $eventId);
+        }
+
+        if ($mode === 'template') {
+            $templatePath = $this->eventCoverTemplatePath($data['coverImageTemplateId'] ?? null);
+
+            abort_if(! $templatePath, 422, 'Vaelg et cover-billede.');
+
+            return $templatePath;
+        }
+
+        if (! blank($data['coverImageData'] ?? null)) {
+            return UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $eventId);
+        }
+
+        $templatePath = $this->eventCoverTemplatePath($data['coverImageTemplateId'] ?? null);
+
+        return $templatePath ?? $existingPath;
+    }
+
     public function storeEvent(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -858,7 +927,9 @@ class StudosController extends Controller
             'eventTime' => ['nullable', 'date_format:H:i'],
             'location' => ['nullable', 'string', 'max:190'],
             'description' => ['nullable', 'string', 'max:1200'],
+            'coverImageMode' => ['nullable', Rule::in(['keep', 'none', 'upload', 'template'])],
             'coverImageData' => ['nullable', 'string', 'max:7000000'],
+            'coverImageTemplateId' => ['nullable', Rule::in(self::EVENT_COVER_TEMPLATE_IDS)],
             'inviteScope' => ['nullable', Rule::in(['class', 'crew', 'custom'])],
             'invitedMemberIds' => ['nullable', 'array', 'max:250'],
             'invitedMemberIds.*' => ['string', 'max:36'],
@@ -872,9 +943,7 @@ class StudosController extends Controller
         $startsAt = $eventTime
             ? Carbon::createFromFormat('Y-m-d H:i', $eventDate.' '.$eventTime)->format('Y-m-d H:i:s')
             : null;
-        $coverImagePath = blank($data['coverImageData'] ?? null)
-            ? null
-            : UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $eventId);
+        $coverImagePath = $this->resolveEventCoverPath($data, $eventId);
         $inviteScope = $data['inviteScope'] ?? 'class';
         $inviteMemberIds = $this->resolveEventInviteMemberIds(
             $member,
@@ -987,6 +1056,28 @@ class StudosController extends Controller
         return array_values(array_unique([...$validMemberIds, $member->id]));
     }
 
+    private function abortUnlessMemberCanAccessEvent(object $event, object $member): void
+    {
+        if (! Schema::hasTable('event_invites')) {
+            return;
+        }
+
+        $hasInvites = DB::table('event_invites')
+            ->where('event_id', $event->id)
+            ->exists();
+
+        if (! $hasInvites) {
+            return;
+        }
+
+        $isInvited = DB::table('event_invites')
+            ->where('event_id', $event->id)
+            ->where('member_id', $member->id)
+            ->exists();
+
+        abort_if(! $isInvited, 403, 'Du er ikke inviteret til begivenheden.');
+    }
+
     public function updateEvent(Request $request, string $event): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -1008,7 +1099,9 @@ class StudosController extends Controller
             'eventTime' => ['nullable', 'date_format:H:i'],
             'location' => ['nullable', 'string', 'max:190'],
             'description' => ['nullable', 'string', 'max:1200'],
+            'coverImageMode' => ['nullable', Rule::in(['keep', 'none', 'upload', 'template'])],
             'coverImageData' => ['nullable', 'string', 'max:7000000'],
+            'coverImageTemplateId' => ['nullable', Rule::in(self::EVENT_COVER_TEMPLATE_IDS)],
             'inviteScope' => ['nullable', Rule::in(['class', 'crew', 'custom'])],
             'invitedMemberIds' => ['nullable', 'array', 'max:250'],
             'invitedMemberIds.*' => ['string', 'max:36'],
@@ -1020,9 +1113,7 @@ class StudosController extends Controller
         $startsAt = $eventTime
             ? Carbon::createFromFormat('Y-m-d H:i', $eventDate.' '.$eventTime)->format('Y-m-d H:i:s')
             : null;
-        $coverImagePath = blank($data['coverImageData'] ?? null)
-            ? ($schoolEvent->cover_image_url ?? null)
-            : UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $event);
+        $coverImagePath = $this->resolveEventCoverPath($data, $event, $schoolEvent->cover_image_url ?? null);
         $inviteScope = $data['inviteScope'] ?? 'class';
         $inviteMemberIds = $this->resolveEventInviteMemberIds(
             $member,
@@ -1153,6 +1244,95 @@ class StudosController extends Controller
         ]);
     }
 
+    public function reportEvent(Request $request, string $event): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $schoolEvent = DB::table('events')
+            ->where('id', $event)
+            ->where('class_id', $member->class_id)
+            ->first();
+
+        abort_unless($schoolEvent, 404, 'Begivenheden findes ikke.');
+        $this->abortUnlessMemberCanAccessEvent($schoolEvent, $member);
+
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:190'],
+            'details' => ['nullable', 'string', 'max:2000'],
+        ]);
+        $reason = trim($data['reason'] ?? '') ?: 'Begivenhed rapporteret';
+        $details = trim($data['details'] ?? '');
+        $coverImageTemplateId = $this->eventCoverTemplateIdFromPath($schoolEvent->cover_image_url ?? null);
+        $moderationDetails = trim(implode("\n", array_filter([
+            $details ?: null,
+            'Titel: '.($schoolEvent->title ?? ''),
+            'Har cover: '.(blank($schoolEvent->cover_image_url ?? null) ? 'nej' : 'ja'),
+            $coverImageTemplateId ? 'Cover-skabelon: '.$coverImageTemplateId : null,
+        ])));
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::table('member_reports')->insert([
+            'id' => (string) Str::uuid(),
+            'reporter_member_id' => $member->id,
+            'reported_member_id' => $schoolEvent->created_by_member_id ?? null,
+            'target_type' => 'calendar_event',
+            'target_id' => $schoolEvent->id,
+            'reason' => $reason,
+            'details' => $moderationDetails ?: null,
+            'status' => 'pending',
+            'reviewed_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function blockMember(Request $request, string $member): JsonResponse
+    {
+        $currentMember = $this->authenticatedMemberFromRequest($request);
+        $targetMember = DB::table('members')
+            ->where('id', $member)
+            ->where('class_id', $currentMember->class_id)
+            ->where('status', '!=', 'removed')
+            ->first();
+
+        abort_unless($targetMember, 404, 'Personen findes ikke.');
+        abort_if((string) $targetMember->id === (string) $currentMember->id, 422, 'Du kan ikke blokere dig selv.');
+
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:190'],
+        ]);
+        $reason = trim($data['reason'] ?? '') ?: 'Blokeret fra kalender';
+        $now = now()->format('Y-m-d H:i:s');
+        $existingBlock = DB::table('member_blocks')
+            ->where('blocker_member_id', $currentMember->id)
+            ->where('blocked_member_id', $targetMember->id)
+            ->first();
+
+        if ($existingBlock) {
+            DB::table('member_blocks')
+                ->where('id', $existingBlock->id)
+                ->update([
+                    'reason' => $reason,
+                    'updated_at' => $now,
+                ]);
+        } else {
+            DB::table('member_blocks')->insert([
+                'id' => (string) Str::uuid(),
+                'blocker_member_id' => $currentMember->id,
+                'blocked_member_id' => $targetMember->id,
+                'reason' => $reason,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'class' => $this->loadClassById($currentMember->class_id, $currentMember->id),
+        ]);
+    }
+
     public function respondToEvent(Request $request, string $event): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -1165,19 +1345,7 @@ class StudosController extends Controller
             ->first();
 
         abort_unless($schoolEvent, 404, 'Begivenheden findes ikke.');
-
-        if (Schema::hasTable('event_invites')) {
-            $hasInvites = DB::table('event_invites')
-                ->where('event_id', $event)
-                ->exists();
-
-            $isInvited = DB::table('event_invites')
-                ->where('event_id', $event)
-                ->where('member_id', $member->id)
-                ->exists();
-
-            abort_if($hasInvites && ! $isInvited, 403, 'Du er ikke inviteret til begivenheden.');
-        }
+        $this->abortUnlessMemberCanAccessEvent($schoolEvent, $member);
 
         $now = now()->format('Y-m-d H:i:s');
 
@@ -1396,6 +1564,22 @@ class StudosController extends Controller
         $events = $eventRows->groupBy('class_id');
         $eventRsvps = collect();
         $eventInvites = collect();
+        $blockedMemberIds = collect();
+
+        if ($currentMemberId && Schema::hasTable('member_blocks')) {
+            $blockedMemberIds = DB::table('member_blocks')
+                ->where('blocker_member_id', $currentMemberId)
+                ->orWhere('blocked_member_id', $currentMemberId)
+                ->get()
+                ->map(fn (object $block): ?string => (
+                    (string) $block->blocker_member_id === (string) $currentMemberId
+                        ? $block->blocked_member_id
+                        : $block->blocker_member_id
+                ))
+                ->filter()
+                ->unique()
+                ->values();
+        }
 
         if (Schema::hasTable('event_rsvps') && $eventRows->isNotEmpty()) {
             $eventRsvps = DB::table('event_rsvps')
@@ -1453,6 +1637,7 @@ class StudosController extends Controller
                 $eventInvites,
                 $contentBlocks->get($schoolClass->id, collect()),
                 $currentMemberId,
+                $blockedMemberIds,
             ))
             ->values()
             ->all();
@@ -1475,7 +1660,9 @@ class StudosController extends Controller
         $eventInvites,
         $contentBlocks,
         ?string $currentMemberId = null,
+        $blockedMemberIds = null,
     ): array {
+        $blockedMemberIds ??= collect();
         $serializedMembers = $members
             ->map(fn ($member) => $this->serializeMember(
                 $member,
@@ -1505,9 +1692,16 @@ class StudosController extends Controller
             'members' => $serializedMembers->all(),
             'memberSummary' => $this->memberSummary($serializedMembers),
             'events' => $events
-                ->filter(function (object $event) use ($currentMemberId, $eventInvites): bool {
+                ->filter(function (object $event) use ($currentMemberId, $eventInvites, $blockedMemberIds): bool {
                     if (! $currentMemberId) {
                         return ($event->invite_scope ?? 'class') !== 'custom';
+                    }
+
+                    if (
+                        ! blank($event->created_by_member_id ?? null)
+                        && $blockedMemberIds->contains($event->created_by_member_id)
+                    ) {
+                        return false;
                     }
 
                     if (($event->invite_scope ?? 'class') !== 'custom') {
@@ -1537,6 +1731,7 @@ class StudosController extends Controller
                     $inviteCount = $eventInvitesForEvent->isNotEmpty()
                         ? $eventInvitesForEvent->count()
                         : $members->where('status', 'active')->count();
+                    $coverImageTemplateId = $this->eventCoverTemplateIdFromPath($event->cover_image_url ?? null);
 
                     return [
                         'id' => $event->id,
@@ -1546,7 +1741,10 @@ class StudosController extends Controller
                         'startsAt' => $this->apiDateTime($event->starts_at ?? null),
                         'location' => $event->location ?? '',
                         'description' => $event->description ?? '',
-                        'coverImageUrl' => UploadedImage::publicUrl($event->cover_image_url ?? null),
+                        'coverImageUrl' => $coverImageTemplateId
+                            ? null
+                            : UploadedImage::publicUrl($event->cover_image_url ?? null),
+                        'coverImageTemplateId' => $coverImageTemplateId,
                         'inviteScope' => $event->invite_scope ?? 'class',
                         'inviteCount' => $inviteCount,
                         'pendingCount' => $eventInvitesForEvent->isNotEmpty()

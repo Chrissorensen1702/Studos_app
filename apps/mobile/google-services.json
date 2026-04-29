@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "959040548905",
+    "project_id": "studos-app-820f7",
+    "storage_bucket": "studos-app-820f7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:959040548905:android:b0d46217e84d6c42dcec38",
+        "android_client_info": {
+          "package_name": "dk.studenterapp.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBMb9Vi4xyasdKJ-7LgeN9UUqsugq_Us3k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

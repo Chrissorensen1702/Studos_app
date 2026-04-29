@@ -23,12 +23,14 @@ Route::get('/session/me', [StudosController::class, 'sessionMe']);
 Route::post('/notifications/push-token', [StudosController::class, 'registerPushToken'])->middleware('throttle:20,1');
 Route::post('/notifications/test', [StudosController::class, 'sendTestNotification'])->middleware('throttle:6,1');
 Route::post('/profile/photo', [StudosController::class, 'updateProfilePhoto'])->middleware('throttle:12,1');
+Route::post('/members/{member}/block', [StudosController::class, 'blockMember'])->middleware('throttle:20,1');
 Route::post('/classes/{class}/members/{member}/access', [StudosController::class, 'updateMemberAccess']);
 Route::post('/events', [StudosController::class, 'storeEvent'])->middleware('throttle:12,1');
 Route::patch('/events/{event}', [StudosController::class, 'updateEvent'])->middleware('throttle:20,1');
 Route::delete('/events/{event}', [StudosController::class, 'destroyEvent'])->middleware('throttle:20,1');
 Route::post('/events/{event}/update', [StudosController::class, 'updateEvent'])->middleware('throttle:20,1');
 Route::post('/events/{event}/delete', [StudosController::class, 'destroyEvent'])->middleware('throttle:20,1');
+Route::post('/events/{event}/report', [StudosController::class, 'reportEvent'])->middleware('throttle:10,1');
 Route::post('/events/{event}/rsvp', [StudosController::class, 'respondToEvent'])->middleware('throttle:40,1');
 
 Route::get('/chat/conversations', [ChatController::class, 'conversations']);

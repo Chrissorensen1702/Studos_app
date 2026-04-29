@@ -1,10 +1,11 @@
-const CACHE_NAME = 'studos-pwa-v9';
+const CACHE_NAME = 'studos-pwa-v15';
+const scopeUrl = (path) => new URL(path, self.registration.scope).toString();
 const SHELL_ASSETS = [
-  '/pwa/?v=9',
-  '/manifest.webmanifest',
-  '/_expo/static/js/web/index-5fc66f9ab3104871eb4b5ec12237cd19.js',
-  '/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png',
-  '/assets/assets/chat-send-rocket.deb227b670d45acc9b0a4c2f00b33687.png'
+  scopeUrl('pwa/?v=15'),
+  scopeUrl('manifest.webmanifest'),
+  scopeUrl('_expo/static/js/web/index-8a0cb6f74838a39dd74bc0e17b677f4f.js'),
+  scopeUrl('assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png'),
+  scopeUrl('assets/assets/chat-send-rocket.deb227b670d45acc9b0a4c2f00b33687.png')
 ];
 
 self.addEventListener('install', (event) => {
@@ -42,7 +43,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => (
-      cached || fetch(request).catch(() => caches.match('/pwa/?v=9'))
+      cached || fetch(request).catch(() => caches.match(scopeUrl('pwa/?v=15')))
     ))
   );
 });

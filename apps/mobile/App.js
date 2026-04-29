@@ -12,7 +12,6 @@ import {
   NativeModules,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -21,10 +20,13 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
+const ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.androidNotificationPrompt.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
 const CHAT_SEND_ROCKET = require('./assets/chat-send-rocket.png');
 const APP_WINDOW_WIDTH = Dimensions.get('window').width;
@@ -44,6 +46,9 @@ const APP_FOOTER_HEIGHT = 10 + 52 + APP_FOOTER_PADDING_BOTTOM;
 const CHAT_THREAD_TOP_PADDING = USE_IOS_SAFE_FRAME ? 54 : ANDROID_STATUS_BAR_HEIGHT + 14;
 const CHAT_THREAD_BOTTOM_PADDING = Platform.OS === 'android' ? APP_FOOTER_PADDING_BOTTOM : IS_MOBILE_WEB ? 0 : 10;
 const CHAT_THREAD_KEYBOARD_VERTICAL_OFFSET = 0;
+const ANDROID_NOTIFICATIONS_ENABLED = Platform.OS === 'android' && !IS_WEB;
+const STUDOS_NOTIFICATION_CHANNEL_ID = 'studos-default';
+const STUDOS_EAS_PROJECT_ID = 'b4da2c62-b9cd-442c-b8da-facc8e6dc689';
 const CHAT_LIST_HEADER_SCROLL_PADDING_TOP = 160;
 const CHAT_LIST_HEADER_COLLAPSE_DISTANCE = 260;
 const CHAT_LIST_HEADER_CLAMP_DISTANCE = 14;
@@ -58,7 +63,7 @@ const CHAT_THREAD_HEADER_COUNTERS = [
   { id: 'square', icon: 'square', value: '6' },
   { id: 'triangle', icon: 'triangle', value: '3' },
 ];
-
+const OVERVIEW_STUDOS_BOTTOM_WAVE_CURVES = Array.from({ length: 10 }, (_, index) => index);
 const BrowserSessionStore = {
   getItemAsync: async (key) => {
     try {
@@ -83,6 +88,69 @@ const BrowserSessionStore = {
   },
 };
 const SessionStore = Platform.OS === 'web' ? BrowserSessionStore : SecureStore;
+let androidNotificationHandlerConfigured = false;
+let chatRealtimeFallbackLogged = false;
+
+const androidExpoRuntimeReady = () => {
+  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+    return false;
+  }
+
+  return Boolean(globalThis?.expo?.EventEmitter);
+};
+
+const loadAndroidExpoModule = (moduleName) => {
+  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+    return null;
+  }
+
+  if (!androidExpoRuntimeReady()) {
+    console.warn('Android Expo native runtime is not ready for notification modules.');
+    return null;
+  }
+
+  try {
+    switch (moduleName) {
+      case 'expo-notifications':
+        return require('expo-notifications');
+      case 'expo-device':
+        return require('expo-device');
+      case 'expo-constants':
+        return require('expo-constants');
+      default:
+        return null;
+    }
+  } catch (error) {
+    console.warn(`${moduleName} is unavailable in this build.`, error);
+    return null;
+  }
+};
+
+const loadAndroidNotificationsModule = () => loadAndroidExpoModule('expo-notifications');
+const loadAndroidDeviceModule = () => loadAndroidExpoModule('expo-device');
+const loadAndroidConstantsModule = () => loadAndroidExpoModule('expo-constants');
+
+const configureAndroidNotificationHandler = (notifications) => {
+  if (!notifications || androidNotificationHandlerConfigured) {
+    return Boolean(notifications);
+  }
+
+  try {
+    notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    androidNotificationHandlerConfigured = true;
+    return true;
+  } catch (error) {
+    console.warn('Android notification handler could not be configured.', error);
+    return false;
+  }
+};
 
 function ChatSendRocketLogo({ disabled }) {
   return (
@@ -175,6 +243,33 @@ const chatActionConfigFor = (actionType, conversation) => {
   }
 };
 
+const ensureTextEncoder = () => {
+  if (typeof globalThis.TextEncoder !== 'undefined') {
+    return;
+  }
+
+  globalThis.TextEncoder = class TextEncoder {
+    encode(value = '') {
+      const encoded = unescape(encodeURIComponent(String(value)));
+      const bytes = new Uint8Array(encoded.length);
+
+      for (let index = 0; index < encoded.length; index += 1) {
+        bytes[index] = encoded.charCodeAt(index);
+      }
+
+      return bytes;
+    }
+  };
+};
+
+const encodeQrCells = (value) => {
+  ensureTextEncoder();
+
+  const { toQR } = require('toqr');
+
+  return toQR(value || 'STUDOS');
+};
+
 const chatMessageActionConfigFor = (actionType) => {
   switch (actionType) {
     case 'delete-message':
@@ -212,13 +307,14 @@ const createWebPublicBaseUrl = () => {
 const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
 const CREATE_CLASS_URL =
   process.env.EXPO_PUBLIC_CREATE_CLASS_URL
-  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://192.168.1.114/studenter-app/public/opret-klasse');
+  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/opret-klasse');
+const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'support@studos.dk';
 const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const LOCAL_API_BASE_URLS = [
-  'http://192.168.1.114/studenter-app/public/api',
+  'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
+  'http://10.171.168.162/studenter-app/public/api',
   'http://localhost/studenter-app/public/api',
   'http://127.0.0.1/studenter-app/public/api',
-  'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
 ];
 const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/api` : null;
 const API_BASE_URLS = (EXPLICIT_API_BASE_URL
@@ -228,7 +324,7 @@ const API_BASE_URLS = (EXPLICIT_API_BASE_URL
     : LOCAL_API_BASE_URLS
 ).filter(Boolean);
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
-const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? '192.168.1.114';
+const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'MacBook-Air-tilhrende-Chris.local';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
 const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'http';
 const REVERB_FORCE_TLS = REVERB_SCHEME === 'https' || REVERB_PORT === 443;
@@ -317,6 +413,8 @@ const createCalendarDraft = () => {
     description: '',
     coverImageUri: '',
     coverImageData: '',
+    coverImageTemplateId: '',
+    coverImageMode: 'none',
     inviteScope: 'class',
     invitedMemberIds: [],
   };
@@ -326,11 +424,107 @@ const CALENDAR_WEEKDAYS = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 const CALENDAR_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => `${index}`.padStart(2, '0'));
 const CALENDAR_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => `${index}`.padStart(2, '0'));
 const CALENDAR_TIME_WHEEL_ITEM_HEIGHT = 36;
+const CALENDAR_DAY_RAIL_ITEM_WIDTH = 44;
+const CALENDAR_DAY_RAIL_GAP = 4;
+const CALENDAR_ATTENDEE_STACK_LIMIT = 7;
 const CALENDAR_INVITE_SCOPE_OPTIONS = [
   { id: 'class', label: 'Hele klassen', icon: 'school' },
   { id: 'crew', label: 'Mit crew', icon: 'people' },
   { id: 'custom', label: 'Vælg personer', icon: 'person-add' },
 ];
+const EVENT_COVER_TEMPLATES = [
+  {
+    id: 'sunset',
+    label: 'Sommergilde',
+    backgroundColor: '#FFE1B1',
+    softColor: '#FFF4D8',
+    accentColor: '#FF6F73',
+    deepColor: '#172143',
+    lineColor: '#75DED0',
+    uploadAsset: require('./assets/event-cover-sunset.png'),
+  },
+  {
+    id: 'cap',
+    label: 'Dimission',
+    backgroundColor: '#F7FAFA',
+    softColor: '#BDEFE8',
+    accentColor: '#172143',
+    deepColor: '#75DED0',
+    lineColor: '#FFD46D',
+    uploadAsset: require('./assets/event-cover-cap.png'),
+  },
+  {
+    id: 'night',
+    label: 'Natfest',
+    backgroundColor: '#172143',
+    softColor: '#5C7E83',
+    accentColor: '#FF6F73',
+    deepColor: '#FFD46D',
+    lineColor: '#BDEFE8',
+    uploadAsset: require('./assets/event-cover-night.png'),
+  },
+  {
+    id: 'garden',
+    label: 'Havefest',
+    backgroundColor: '#BDEFE8',
+    softColor: '#F7FAFA',
+    accentColor: '#75DED0',
+    deepColor: '#172143',
+    lineColor: '#FF9DA0',
+    uploadAsset: require('./assets/event-cover-garden.png'),
+  },
+  {
+    id: 'gold',
+    label: 'Guldtime',
+    backgroundColor: '#FFF4D8',
+    softColor: '#FFD46D',
+    accentColor: '#172143',
+    deepColor: '#FF6F73',
+    lineColor: '#75DED0',
+    uploadAsset: require('./assets/event-cover-gold.png'),
+  },
+];
+
+const eventCoverTemplateFor = (templateId) => (
+  EVENT_COVER_TEMPLATES.find((template) => template.id === templateId) ?? null
+);
+
+const dataUrlFromBlob = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+
+  reader.onloadend = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(blob);
+});
+
+const eventCoverTemplateUploadData = async (templateId) => {
+  const template = eventCoverTemplateFor(templateId);
+
+  if (!template?.uploadAsset) {
+    return '';
+  }
+
+  const asset = Asset.fromModule(template.uploadAsset);
+  await asset.downloadAsync();
+  const uri = asset.localUri ?? asset.uri;
+
+  if (!uri) {
+    return '';
+  }
+
+  if (IS_WEB) {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+
+    return dataUrlFromBlob(blob);
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  return `data:image/png;base64,${base64}`;
+};
 
 const dateFromInput = (value) => {
   const date = value ? new Date(`${value}T12:00:00`) : new Date();
@@ -355,6 +549,16 @@ const monthTitle = (date) => new Intl.DateTimeFormat('da-DK', {
 }).format(date);
 
 const addCalendarMonths = (date, count) => new Date(date.getFullYear(), date.getMonth() + count, 1, 12);
+
+const calendarDayKeysForMonth = (date) => {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0, 12).getDate();
+
+  return Array.from({ length: daysInMonth }, (_, index) => (
+    formatInputDate(new Date(year, month, index + 1, 12))
+  ));
+};
 
 const calendarDaysForMonth = (date) => {
   const year = date.getFullYear();
@@ -406,12 +610,271 @@ const formatCalendarTime = (value) => {
   return '';
 };
 
+const calendarDayKeyFor = (value) => {
+  const text = String(value ?? '');
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return text.slice(0, 10);
+  }
+
+  const date = text ? new Date(text) : null;
+
+  if (!date || Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return formatInputDate(date);
+};
+
+const eventDayKeyFor = (event) => calendarDayKeyFor(event?.date ?? event?.startsAt);
+
+const addCalendarDays = (date, count) => {
+  const nextDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+  nextDate.setDate(nextDate.getDate() + count);
+
+  return nextDate;
+};
+
+const compareCalendarDayKeys = (first, second) => (
+  Date.parse(`${first}T12:00:00`) - Date.parse(`${second}T12:00:00`)
+);
+
+const calendarDayKeysBetween = (startKey, endKey) => {
+  const start = dateFromInput(startKey);
+  const end = dateFromInput(endKey);
+
+  if (start.getTime() > end.getTime()) {
+    return [];
+  }
+
+  const dayKeys = [];
+  let current = start;
+
+  while (current.getTime() <= end.getTime()) {
+    dayKeys.push(formatInputDate(current));
+    current = addCalendarDays(current, 1);
+  }
+
+  return dayKeys;
+};
+
+const formatCalendarRailWeekday = (date) => new Intl.DateTimeFormat('da-DK', {
+  weekday: 'short',
+}).format(date).replace('.', '');
+
+const formatCalendarRailMonth = (date) => new Intl.DateTimeFormat('da-DK', {
+  month: 'short',
+}).format(date).replace('.', '');
+
+const capitalizeCalendarLabel = (value) => (
+  value ? `${value.charAt(0).toLocaleUpperCase('da-DK')}${value.slice(1)}` : value
+);
+
+const defaultCalendarDayForMonth = (monthDate, events = [], todayKey) => {
+  const monthDayKeys = calendarDayKeysForMonth(monthDate);
+  const upcomingEventInMonth = events.find((event) => {
+    const dayKey = eventDayKeyFor(event);
+
+    return monthDayKeys.includes(dayKey) && compareCalendarDayKeys(dayKey, todayKey) >= 0;
+  });
+
+  if (upcomingEventInMonth) {
+    return eventDayKeyFor(upcomingEventInMonth);
+  }
+
+  const eventInMonth = events.find((event) => monthDayKeys.includes(eventDayKeyFor(event)));
+
+  if (monthDayKeys.includes(todayKey)) {
+    return todayKey;
+  }
+
+  return eventDayKeyFor(eventInMonth) || monthDayKeys[0] || todayKey;
+};
+
+const isSameCalendarMonth = (firstDate, secondDate) => (
+  firstDate.getFullYear() === secondDate.getFullYear()
+  && firstDate.getMonth() === secondDate.getMonth()
+);
+
+const calendarRailOffsetForDayIndex = (dayIndex, railWidth) => {
+  const itemCenter = APP_SCREEN_PADDING
+    + (dayIndex * (CALENDAR_DAY_RAIL_ITEM_WIDTH + CALENDAR_DAY_RAIL_GAP))
+    + (CALENDAR_DAY_RAIL_ITEM_WIDTH / 2);
+
+  return Math.max(0, itemCenter - (railWidth / 2));
+};
+
+const calendarRailDayKeysFor = (eventDayKeys = [], selectedDayKey, todayKey) => {
+  const anchorDayKeys = uniqueByKey(
+    [todayKey, selectedDayKey, ...eventDayKeys].filter(Boolean),
+    (dayKey) => dayKey,
+  ).sort(compareCalendarDayKeys);
+
+  if (!anchorDayKeys.length) {
+    return calendarDayKeysForMonth(new Date());
+  }
+
+  const firstAnchor = anchorDayKeys[0];
+  const lastAnchor = anchorDayKeys[anchorDayKeys.length - 1];
+  const startKey = formatInputDate(addCalendarDays(dateFromInput(firstAnchor), -7));
+  const endKey = formatInputDate(addCalendarDays(dateFromInput(lastAnchor), 7));
+
+  return calendarDayKeysBetween(startKey, endKey);
+};
+
+const eventSortTime = (event) => {
+  const startsAt = event?.startsAt;
+
+  if (startsAt) {
+    const parsed = Date.parse(startsAt);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  const day = eventDayKeyFor(event);
+
+  return day ? Date.parse(`${day}T00:00:00`) : Number.MAX_SAFE_INTEGER;
+};
+
+const uniqueByKey = (items = [], keyFor) => {
+  const seen = new Set();
+
+  return (items ?? []).filter((item, index) => {
+    const rawKey = keyFor(item, index);
+
+    if (rawKey === null || rawKey === undefined || rawKey === '') {
+      return true;
+    }
+
+    const key = String(rawKey);
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+};
+
+const uniqueById = (items = []) => uniqueByKey(items, (item) => item?.id);
+
+const calendarDraftFromEvent = (event, activeMemberId) => {
+  const activeMemberKey = String(activeMemberId ?? '');
+  const invitedMemberIds = uniqueByKey(event?.invitees ?? [], (person) => person?.memberId ?? person?.id)
+    .map((person) => String(person?.memberId ?? person?.id ?? ''))
+    .filter((memberId) => memberId && memberId !== activeMemberKey);
+
+  return {
+    ...createCalendarDraft(),
+    title: event?.title ?? '',
+    eventDate: eventDayKeyFor(event) || formatInputDate(new Date()),
+    eventTime: formatCalendarTime(event?.startsAt) || '19:00',
+    location: event?.location ?? '',
+    description: event?.description ?? '',
+    coverImageUri: event?.coverImageUrl ?? '',
+    coverImageData: '',
+    coverImageTemplateId: event?.coverImageTemplateId ?? '',
+    coverImageMode: event?.coverImageTemplateId ? 'template' : (event?.coverImageUrl ? 'upload' : 'none'),
+    inviteScope: event?.inviteScope ?? 'class',
+    invitedMemberIds,
+  };
+};
+
+function EventCoverTemplateArt({ templateId, style }) {
+  const template = eventCoverTemplateFor(templateId) ?? EVENT_COVER_TEMPLATES[0];
+
+  return (
+    <View style={[
+      styles.eventCoverTemplateArt,
+      style,
+      { backgroundColor: template.backgroundColor },
+    ]}>
+      <View style={[
+        styles.eventCoverTemplateSoftBlock,
+        { backgroundColor: template.softColor },
+      ]} />
+      <View style={[
+        styles.eventCoverTemplateAccentBlock,
+        { backgroundColor: template.accentColor },
+      ]} />
+      <View style={[
+        styles.eventCoverTemplateDeepCircle,
+        { backgroundColor: template.deepColor },
+      ]} />
+      <View style={[
+        styles.eventCoverTemplateLine,
+        { backgroundColor: template.lineColor },
+      ]} />
+      <View style={[
+        styles.eventCoverTemplateSmallMark,
+        { backgroundColor: template.lineColor },
+      ]} />
+    </View>
+  );
+}
+
+const mergeUniqueById = (items = [], nextItem) => {
+  if (!nextItem?.id) {
+    return uniqueById(nextItem ? [...(items ?? []), nextItem] : items);
+  }
+
+  let replaced = false;
+  const merged = (items ?? []).map((item) => {
+    if (item?.id === nextItem.id) {
+      replaced = true;
+      return nextItem;
+    }
+
+    return item;
+  });
+
+  if (!replaced) {
+    merged.push(nextItem);
+  }
+
+  return uniqueById(merged);
+};
+
+const moduleDefault = (module) => module?.default ?? module;
+
+const resolvePusherClient = (module) => (
+  module?.default?.Pusher
+  ?? module?.Pusher
+  ?? module?.default
+  ?? module
+);
+
 const formatMoodUpdatedAt = (date = new Date()) => new Intl.DateTimeFormat('da-DK', {
   day: '2-digit',
   month: 'short',
   hour: '2-digit',
   minute: '2-digit',
 }).format(date);
+
+const moodDayKeyFor = (date = new Date()) => {
+  const value = date instanceof Date ? date : new Date(date);
+
+  if (Number.isNaN(value.getTime())) {
+    return '';
+  }
+
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+};
+
+const millisecondsUntilNextMidnight = (date = new Date()) => {
+  const nextMidnight = new Date(date);
+
+  nextMidnight.setHours(24, 0, 0, 0);
+
+  return Math.max(1000, nextMidnight.getTime() - date.getTime());
+};
 
 const formatChatTime = (value) => {
   if (!value) {
@@ -632,6 +1095,108 @@ const apiFetch = async (path, options = {}) => {
   throw lastError ?? new Error('API kunne ikke naas.');
 };
 
+const androidNotificationProjectId = (constants) =>
+  constants?.expoConfig?.extra?.eas?.projectId
+  ?? constants?.easConfig?.projectId
+  ?? constants?.manifest2?.extra?.eas?.projectId
+  ?? constants?.manifest?.extra?.eas?.projectId
+  ?? STUDOS_EAS_PROJECT_ID;
+
+const androidAppVariant = (constants) => {
+  if (constants?.expoConfig?.name === 'Studos-dev') {
+    return 'development';
+  }
+
+  return process.env.APP_VARIANT || process.env.EAS_BUILD_PROFILE || 'local';
+};
+
+const ensureAndroidNotificationChannelAsync = async () => {
+  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+    return;
+  }
+
+  const notifications = loadAndroidNotificationsModule();
+
+  if (!notifications) {
+    throw new Error('Android builden mangler Expo notification-runtime. Installer nyeste Android build og start Metro igen med clear cache.');
+  }
+
+  if (!configureAndroidNotificationHandler(notifications)) {
+    throw new Error('Android notification-runtime kunne ikke startes i denne build.');
+  }
+
+  await notifications.setNotificationChannelAsync(STUDOS_NOTIFICATION_CHANNEL_ID, {
+    name: 'Studos',
+    importance: notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#EF7476',
+  });
+};
+
+const registerForAndroidPushNotificationsAsync = async () => {
+  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+    return {
+      supported: false,
+      message: 'Push-notifikationer er kun slået til for Android lige nu.',
+    };
+  }
+
+  await ensureAndroidNotificationChannelAsync();
+
+  const notifications = loadAndroidNotificationsModule();
+  const device = loadAndroidDeviceModule();
+  const constants = loadAndroidConstantsModule();
+
+  if (!notifications || !device || !constants) {
+    return {
+      supported: false,
+      message: 'Android push kræver en ny build med notification-modulerne.',
+    };
+  }
+
+  if (!device.isDevice) {
+    return {
+      supported: false,
+      message: 'Android push kræver en fysisk enhed, ikke emulator.',
+    };
+  }
+
+  const existingPermission = await notifications.getPermissionsAsync();
+  let permissionStatus = existingPermission.status;
+
+  if (permissionStatus !== 'granted') {
+    const requestedPermission = await notifications.requestPermissionsAsync();
+    permissionStatus = requestedPermission.status;
+  }
+
+  if (permissionStatus !== 'granted') {
+    return {
+      supported: true,
+      permissionStatus,
+      message: 'Notifikationer blev ikke tilladt på enheden.',
+    };
+  }
+
+  const projectId = androidNotificationProjectId(constants);
+
+  if (!projectId) {
+    throw new Error('Expo projectId mangler i app-konfigurationen.');
+  }
+
+  const pushToken = await notifications.getExpoPushTokenAsync({ projectId });
+
+  return {
+    supported: true,
+    permissionStatus,
+    projectId,
+    expoPushToken: pushToken.data,
+    deviceName: device.deviceName || device.modelName || 'Android',
+    appVariant: androidAppVariant(constants),
+    nativeApplicationVersion: constants?.expoConfig?.version ?? null,
+    nativeBuildVersion: constants?.nativeBuildVersion ?? null,
+  };
+};
+
 const createChatEcho = (authToken) => {
   const isWeb = Platform.OS === 'web';
 
@@ -642,14 +1207,23 @@ const createChatEcho = (authToken) => {
   try {
     const EchoModule = require('laravel-echo');
     const PusherModule = isWeb ? require('pusher-js') : require('pusher-js/react-native');
-    const EchoClient = EchoModule.default ?? EchoModule;
-    const PusherClient = PusherModule.default ?? PusherModule;
+    const EchoClient = moduleDefault(EchoModule);
+    const PusherClient = resolvePusherClient(PusherModule);
+
+    if (typeof EchoClient !== 'function' || typeof PusherClient !== 'function') {
+      throw new Error('Chat realtime client is not available in this runtime.');
+    }
 
     globalThis.Pusher = PusherClient;
+
+    if (typeof window !== 'undefined') {
+      window.Pusher = PusherClient;
+    }
 
     return new EchoClient({
       broadcaster: 'reverb',
       key: REVERB_APP_KEY,
+      Pusher: PusherClient,
       wsHost: REVERB_HOST,
       wsPort: REVERB_PORT,
       wssPort: REVERB_PORT,
@@ -671,10 +1245,23 @@ const createChatEcho = (authToken) => {
       }),
     });
   } catch (error) {
-    console.warn('Chat realtime is unavailable in this build.', error);
+    if (!chatRealtimeFallbackLogged) {
+      chatRealtimeFallbackLogged = true;
+      console.log('Chat realtime fallback polling active.', error?.message ?? error);
+    }
+
     return null;
   }
 };
+
+const chatUnreadCountForConversations = (conversations = []) =>
+  conversations.reduce((total, conversation) => {
+    const unreadCount = Number(conversation?.unreadCount ?? 0);
+
+    return total + (Number.isFinite(unreadCount) ? unreadCount : 0);
+  }, 0);
+
+const formatUnreadBadgeCount = (count) => (count > 99 ? '99+' : String(count));
 
 const profileFromMember = (member) => ({
   firstName: member?.firstName ?? '',
@@ -698,9 +1285,22 @@ export default function App() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [notificationState, setNotificationState] = useState({
+    expoPushToken: '',
+    permissionStatus: 'unknown',
+    registeredAt: '',
+    message: ANDROID_NOTIFICATIONS_ENABLED
+      ? 'Android push er ikke aktiveret på denne enhed endnu.'
+      : 'Push-notifikationer er kun slået til for Android lige nu.',
+    error: '',
+    loading: false,
+    testLoading: false,
+  });
   const appScrollRef = useRef(null);
 
-  const activeClass = session?.class ?? schoolClass;
+  const activeClass = schoolClass ?? session?.class;
   const activeMember = session?.member ?? null;
   const events = activeClass?.events ?? [];
   const contentBlocks = activeClass?.contentBlocks ?? [];
@@ -780,6 +1380,82 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      !ANDROID_NOTIFICATIONS_ENABLED
+      || (!notificationState.expoPushToken && notificationState.permissionStatus !== 'granted')
+    ) {
+      return undefined;
+    }
+
+    const notifications = loadAndroidNotificationsModule();
+
+    if (!notifications || !configureAndroidNotificationHandler(notifications)) {
+      return undefined;
+    }
+
+    let receivedSubscription = null;
+    let responseSubscription = null;
+
+    try {
+      receivedSubscription = notifications.addNotificationReceivedListener((notification) => {
+        const title = notification?.request?.content?.title ?? 'Notifikation modtaget';
+
+        setNotificationState((current) => ({
+          ...current,
+          message: `Senest modtaget: ${title}`,
+        }));
+      });
+      responseSubscription = notifications.addNotificationResponseReceivedListener((response) => {
+        const targetScreen = response?.notification?.request?.content?.data?.screen;
+
+        if (targetScreen === 'chat' || targetScreen === 'calendar' || targetScreen === 'overview') {
+          setActiveTab(targetScreen);
+        }
+      });
+    } catch (error) {
+      console.warn('Android notification listeners could not be registered.', error);
+      return undefined;
+    }
+
+    return () => {
+      receivedSubscription?.remove();
+      responseSubscription?.remove();
+    };
+  }, [notificationState.expoPushToken, notificationState.permissionStatus]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (
+      !ANDROID_NOTIFICATIONS_ENABLED
+      || step !== 'overview'
+      || !session?.token
+      || notificationState.expoPushToken
+      || notificationState.permissionStatus === 'granted'
+    ) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    SessionStore.getItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY)
+      .then((promptSeen) => {
+        if (isMounted && promptSeen !== 'seen') {
+          setNotificationPromptVisible(true);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setNotificationPromptVisible(true);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [notificationState.expoPushToken, notificationState.permissionStatus, session?.token, step]);
+
   const updateProfile = (key, value) => {
     setProfile((current) => ({ ...current, [key]: value }));
   };
@@ -837,6 +1513,41 @@ export default function App() {
     };
   }, [session?.member?.id, session?.token]);
 
+  useEffect(() => {
+    let isMounted = true;
+    const token = session?.token;
+
+    if (!token || step !== 'overview') {
+      setChatUnreadCount(0);
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const refreshChatUnreadCount = async () => {
+      try {
+        const data = await apiFetch('/chat/conversations', {
+          authToken: token,
+        });
+
+        if (isMounted) {
+          setChatUnreadCount(chatUnreadCountForConversations(data.conversations ?? []));
+        }
+      } catch {
+        // The chat screen surfaces fetch errors; the footer badge should stay quiet.
+      }
+    };
+
+    refreshChatUnreadCount();
+    const interval = setInterval(refreshChatUnreadCount, 15000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [session?.token, step]);
+
   const clearSession = async () => {
     await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
     setSession(null);
@@ -847,9 +1558,130 @@ export default function App() {
     setExistingLogin({ inviteCode: '', email: '', password: '' });
     setActiveTab('overview');
     setSidebarOpen(false);
+    setChatUnreadCount(0);
+    setNotificationState((current) => ({
+      ...current,
+      error: '',
+      message: ANDROID_NOTIFICATIONS_ENABLED
+        ? 'Android push er ikke aktiveret på denne enhed endnu.'
+        : 'Push-notifikationer er kun slået til for Android lige nu.',
+    }));
     setError('');
     setStep('invite');
   };
+
+  const enableAndroidNotifications = useCallback(async () => {
+    if (!session?.token) {
+      setNotificationState((current) => ({
+        ...current,
+        error: 'Login mangler.',
+      }));
+      return;
+    }
+
+    setNotificationState((current) => ({
+      ...current,
+      error: '',
+      loading: true,
+      message: 'Gør Android push klar...',
+    }));
+
+    try {
+      const registration = await registerForAndroidPushNotificationsAsync();
+
+      if (!registration.expoPushToken) {
+        setNotificationState((current) => ({
+          ...current,
+          error: registration.message ?? 'Kunne ikke hente Expo push token.',
+          loading: false,
+          permissionStatus: registration.permissionStatus ?? current.permissionStatus,
+        }));
+        return;
+      }
+
+      await apiFetch('/notifications/push-token', {
+        authToken: session.token,
+        method: 'POST',
+        body: JSON.stringify({
+          expoPushToken: registration.expoPushToken,
+          platform: 'android',
+          deviceName: registration.deviceName,
+          projectId: registration.projectId,
+          appVariant: registration.appVariant,
+          nativeApplicationVersion: registration.nativeApplicationVersion,
+          nativeBuildVersion: registration.nativeBuildVersion,
+        }),
+      });
+
+      setNotificationState((current) => ({
+        ...current,
+        expoPushToken: registration.expoPushToken,
+        permissionStatus: registration.permissionStatus,
+        registeredAt: new Date().toISOString(),
+        error: '',
+        loading: false,
+        message: 'Android push er aktiv og token er gemt.',
+      }));
+    } catch (notificationError) {
+      setNotificationState((current) => ({
+        ...current,
+        error: notificationError.message || 'Android push kunne ikke aktiveres.',
+        loading: false,
+      }));
+    }
+  }, [session?.token]);
+
+  const closeAndroidNotificationPrompt = useCallback(async () => {
+    setNotificationPromptVisible(false);
+    await SessionStore.setItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
+  }, []);
+
+  const enableAndroidNotificationsFromPrompt = useCallback(async () => {
+    setNotificationPromptVisible(false);
+    await SessionStore.setItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
+    await enableAndroidNotifications();
+  }, [enableAndroidNotifications]);
+
+  const sendAndroidNotificationTest = useCallback(async () => {
+    if (!session?.token) {
+      setNotificationState((current) => ({
+        ...current,
+        error: 'Login mangler.',
+      }));
+      return;
+    }
+
+    setNotificationState((current) => ({
+      ...current,
+      error: '',
+      testLoading: true,
+      message: 'Sender testnotifikation...',
+    }));
+
+    try {
+      const data = await apiFetch('/notifications/test', {
+        authToken: session.token,
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'Studos tester lige 🔔',
+          body: 'Hvis den her lander på Android, er push-vejen åben.',
+        }),
+      });
+
+      setNotificationState((current) => ({
+        ...current,
+        error: '',
+        testLoading: false,
+        message: data.message ?? 'Testnotifikation sendt.',
+      }));
+    } catch (notificationError) {
+      setNotificationState((current) => ({
+        ...current,
+        error: notificationError.message || 'Testnotifikationen kunne ikke sendes.',
+        testLoading: false,
+      }));
+    }
+  }, [session?.token]);
 
   const submitInviteCode = async () => {
     const code = inviteCode.trim().toUpperCase();
@@ -1011,8 +1843,12 @@ export default function App() {
     setSchoolClass(nextClass);
 
     if (session) {
+      setSession((current) => (
+        current?.class ? { ...current, class: nextClass } : current
+      ));
+
       await storeSession({
-        session,
+        session: session.class ? { ...session, class: nextClass } : session,
         class: nextClass,
       });
     }
@@ -1027,6 +1863,76 @@ export default function App() {
       authToken: session.token,
       method: 'POST',
       body: JSON.stringify(eventPayload),
+    });
+
+    if (data.class) {
+      await syncActiveClass(data.class);
+    }
+
+    return data;
+  };
+
+  const updateCalendarEvent = async (eventId, eventPayload) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const data = await apiFetch(`/events/${encodeURIComponent(eventId)}/update`, {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify(eventPayload),
+    });
+
+    if (data.class) {
+      await syncActiveClass(data.class);
+    }
+
+    return data;
+  };
+
+  const deleteCalendarEvent = async (eventId) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const data = await apiFetch(`/events/${encodeURIComponent(eventId)}/delete`, {
+      authToken: session.token,
+      method: 'POST',
+    });
+
+    if (data.class) {
+      await syncActiveClass(data.class);
+    }
+
+    return data;
+  };
+
+  const reportCalendarEvent = async (eventId) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    return apiFetch(`/events/${encodeURIComponent(eventId)}/report`, {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify({
+        reason: 'Begivenhed rapporteret',
+        details: 'Rapporteret fra kalenderen i Studos.',
+      }),
+    });
+  };
+
+  const blockClassMember = async (memberId) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const data = await apiFetch(`/members/${encodeURIComponent(memberId)}/block`, {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify({
+        reason: 'Blokeret fra kalender',
+      }),
     });
 
     if (data.class) {
@@ -1128,13 +2034,13 @@ export default function App() {
 
   if (checkingSession) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <View style={styles.safeArea}>
         <StatusBar barStyle="dark-content" />
         <View style={styles.loadingScreen}>
           <Image source={STUDOS_LOGO} style={styles.logoMark} />
           <ActivityIndicator color="#ef5b3f" />
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -1159,6 +2065,8 @@ export default function App() {
             {appContentDetached ? (
               <View style={[
                 styles.appScreen,
+                activeTab === 'calendar' ? styles.appScreenDetached : null,
+                activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
               ]}>
                 <AppTabScreen
@@ -1170,14 +2078,23 @@ export default function App() {
                   events={events}
                   loading={loading}
                   nextEvent={nextEvent}
+                  onChatUnreadCountChange={setChatUnreadCount}
+                  onChangeTab={setActiveTab}
                   onCreateEvent={createCalendarEvent}
+                  onDeleteEvent={deleteCalendarEvent}
+                  onEnableAndroidNotifications={enableAndroidNotifications}
+                  onBlockMember={blockClassMember}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
                   onRequestScrollTop={scrollAppToTop}
+                  onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
+                  onSendAndroidNotificationTest={sendAndroidNotificationTest}
+                  onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
                   profile={profile}
                   schoolClass={activeClass}
                   sessionToken={session.token}
+                  notificationState={notificationState}
                 />
               </View>
             ) : (
@@ -1196,18 +2113,31 @@ export default function App() {
                   events={events}
                   loading={loading}
                   nextEvent={nextEvent}
+                  onChatUnreadCountChange={setChatUnreadCount}
+                  onChangeTab={setActiveTab}
                   onCreateEvent={createCalendarEvent}
+                  onDeleteEvent={deleteCalendarEvent}
+                  onEnableAndroidNotifications={enableAndroidNotifications}
+                  onBlockMember={blockClassMember}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
                   onRequestScrollTop={scrollAppToTop}
+                  onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
+                  onSendAndroidNotificationTest={sendAndroidNotificationTest}
+                  onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
                   profile={profile}
                   schoolClass={activeClass}
                   sessionToken={session.token}
+                  notificationState={notificationState}
                 />
               </ScrollView>
             )}
-            <FooterNav activeTab={activeTab} onChangeTab={setActiveTab} />
+            <FooterNav
+              activeTab={activeTab}
+              chatUnreadCount={chatUnreadCount}
+              onChangeTab={setActiveTab}
+            />
             <AppSidebar
               activeMember={activeMember}
               activeMembers={activeMembers}
@@ -1220,6 +2150,12 @@ export default function App() {
                 setSidebarOpen(false);
               }}
             />
+            <AndroidNotificationPromptModal
+              loading={notificationState.loading}
+              visible={notificationPromptVisible}
+              onDismiss={closeAndroidNotificationPrompt}
+              onEnable={enableAndroidNotificationsFromPrompt}
+            />
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -1227,7 +2163,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1278,7 +2214,7 @@ export default function App() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1340,14 +2276,23 @@ function AppTabScreen({
   events,
   loading,
   nextEvent,
+  onChatUnreadCountChange,
+  onChangeTab,
   onCreateEvent,
+  onDeleteEvent,
+  onEnableAndroidNotifications,
+  onBlockMember,
   onProfilePhotoUpdate,
   onRequestScrollTop,
+  onReportEvent,
   onRespondToEvent,
+  onSendAndroidNotificationTest,
+  onUpdateEvent,
   pinnedContent,
   profile,
   schoolClass,
   sessionToken,
+  notificationState,
 }) {
   if (activeTab === 'chat') {
     return (
@@ -1356,6 +2301,7 @@ function AppTabScreen({
         activeMembers={activeMembers}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
+        onUnreadCountChange={onChatUnreadCountChange}
       />
     );
   }
@@ -1404,8 +2350,12 @@ function AppTabScreen({
         activeMembers={activeMembers}
         events={events}
         onCreateEvent={onCreateEvent}
+        onDeleteEvent={onDeleteEvent}
+        onBlockMember={onBlockMember}
         onRequestScrollTop={onRequestScrollTop}
+        onReportEvent={onReportEvent}
         onRespondToEvent={onRespondToEvent}
+        onUpdateEvent={onUpdateEvent}
       />
     );
   }
@@ -1528,6 +2478,17 @@ function AppTabScreen({
     );
   }
 
+  if (activeTab === 'settings') {
+    return (
+      <SettingsScreen
+        notificationState={notificationState}
+        schoolClass={schoolClass}
+        onEnableAndroidNotifications={onEnableAndroidNotifications}
+        onSendAndroidNotificationTest={onSendAndroidNotificationTest}
+      />
+    );
+  }
+
   return (
     <OverviewScreen
       activeMember={activeMember}
@@ -1535,6 +2496,7 @@ function AppTabScreen({
       countdown={countdown}
       events={events}
       nextEvent={nextEvent}
+      onOpenCalendar={() => onChangeTab?.('calendar')}
       pinnedContent={pinnedContent}
       profile={profile}
       schoolClass={schoolClass}
@@ -1547,6 +2509,7 @@ function ChatScreen({
   activeMembers,
   schoolClass,
   sessionToken,
+  onUnreadCountChange,
 }) {
   const [conversations, setConversations] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
@@ -1590,9 +2553,10 @@ function ChatScreen({
   const chatThreadTouchLatestRef = useRef(null);
   const chatThreadSwipeActiveRef = useRef(false);
   const chatConversationLongPressHandledRef = useRef(false);
+  const hasSyncedConversationsRef = useRef(false);
 
   const chatMembers = useMemo(
-    () => (activeMembers ?? []).filter((member) => member.id !== activeMember?.id),
+    () => uniqueById(activeMembers ?? []).filter((member) => member.id !== activeMember?.id),
     [activeMembers, activeMember?.id],
   );
   const directPickerMembers = useMemo(() => {
@@ -1635,6 +2599,15 @@ function ChatScreen({
       return searchableName.includes(query);
     });
   }, [chatMembers, groupPickerQuery]);
+
+  useEffect(() => {
+    if (!hasSyncedConversationsRef.current) {
+      hasSyncedConversationsRef.current = true;
+      return;
+    }
+
+    onUnreadCountChange?.(chatUnreadCountForConversations(conversations));
+  }, [conversations, onUnreadCountChange]);
   const filteredConversations = useMemo(() => {
     const query = chatSearchQuery.trim().toLocaleLowerCase('da-DK');
     const sortedConversations = [...conversations].sort((left, right) => {
@@ -1948,7 +2921,7 @@ function ChatScreen({
       const data = await apiFetch('/chat/conversations', {
         authToken: sessionToken,
       });
-      const nextConversations = data.conversations ?? [];
+      const nextConversations = uniqueById(data.conversations ?? []);
 
       setConversations(nextConversations);
 
@@ -1986,7 +2959,7 @@ function ChatScreen({
       const data = await apiFetch(`/chat/conversations/${encodeURIComponent(conversation.id)}/messages`, {
         authToken: sessionToken,
       });
-      const nextMessages = data.messages ?? [];
+      const nextMessages = uniqueById(data.messages ?? []);
       const lastMessage = nextMessages[nextMessages.length - 1];
       const nextConversation = data.conversation ?? conversation;
 
@@ -2027,7 +3000,7 @@ function ChatScreen({
     })
       .then((data) => {
         if (isMounted) {
-          setConversations(data.conversations ?? []);
+          setConversations(uniqueById(data.conversations ?? []));
         }
       })
       .catch((apiError) => {
@@ -2305,7 +3278,7 @@ function ChatScreen({
 
       setMessageBody('');
       setSelectedConversation(data.conversation ?? selectedConversation);
-      setMessages((current) => [...current, data.message]);
+      setMessages((current) => mergeUniqueById(current, data.message));
       await loadConversations();
     } catch (apiError) {
       setChatError(apiError.message || 'Beskeden kunne ikke sendes.');
@@ -2349,9 +3322,9 @@ function ChatScreen({
       return;
     }
 
-    setConversations((current) => current.map((conversation) => (
+    setConversations((current) => uniqueById(current.map((conversation) => (
       conversation.id === nextConversation.id ? nextConversation : conversation
-    )));
+    ))));
 
     if (selectedConversation?.id === nextConversation.id) {
       setSelectedConversation(nextConversation);
@@ -3579,28 +4552,57 @@ function CalendarScreen({
   activeMembers = [],
   events,
   onCreateEvent,
+  onDeleteEvent,
+  onBlockMember,
   onRequestScrollTop,
+  onReportEvent,
   onRespondToEvent,
+  onUpdateEvent,
 }) {
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [draft, setDraft] = useState(() => createCalendarDraft());
   const [visibleMonth, setVisibleMonth] = useState(() => dateFromInput(createCalendarDraft().eventDate));
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [selectingInvitees, setSelectingInvitees] = useState(false);
+  const [editingEventId, setEditingEventId] = useState('');
   const [invitePeopleSearch, setInvitePeopleSearch] = useState('');
   const [formError, setFormError] = useState('');
   const [calendarError, setCalendarError] = useState('');
+  const [calendarStatus, setCalendarStatus] = useState('');
+  const [deleteEventError, setDeleteEventError] = useState('');
   const [calendarHeaderScrolled, setCalendarHeaderScrolled] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingEventId, setDeletingEventId] = useState('');
+  const [reportingEventId, setReportingEventId] = useState('');
+  const [blockingMemberId, setBlockingMemberId] = useState('');
   const [respondingEventId, setRespondingEventId] = useState('');
+  const [pendingResponsePageOpen, setPendingResponsePageOpen] = useState(false);
+  const [calendarAttendanceEventId, setCalendarAttendanceEventId] = useState('');
+  const [calendarActionEventId, setCalendarActionEventId] = useState('');
+  const [calendarDeleteEventId, setCalendarDeleteEventId] = useState('');
   const calendarHeaderScrolledRef = useRef(false);
   const calendarScrollY = useRef(new Animated.Value(0)).current;
+  const calendarDayRailRef = useRef(null);
   const hourWheelRef = useRef(null);
   const minuteWheelRef = useRef(null);
+  const calendarSubpageDragX = useRef(new Animated.Value(0)).current;
+  const calendarSubpageWidthRef = useRef(APP_WINDOW_WIDTH);
+  const calendarSubpageTouchStartRef = useRef(null);
+  const calendarSubpageTouchLatestRef = useRef(null);
+  const calendarSubpageSwipeActiveRef = useRef(false);
+  const calendarRailProgrammaticScrollRef = useRef(false);
+  const calendarRailLastJumpAtRef = useRef(0);
+  const calendarRailDragStartXRef = useRef(0);
+  const [calendarDayRailWidth, setCalendarDayRailWidth] = useState(0);
   const visibleMonthDays = useMemo(() => calendarDaysForMonth(visibleMonth), [visibleMonth]);
   const selectedTime = useMemo(() => splitCalendarTime(draft.eventTime), [draft.eventTime]);
+  const selectedCoverTemplate = useMemo(
+    () => EVENT_COVER_TEMPLATES.find((template) => template.id === draft.coverImageTemplateId),
+    [draft.coverImageTemplateId],
+  );
   const invitableMembers = useMemo(
-    () => (activeMembers ?? [])
+    () => uniqueById(activeMembers ?? [])
       .filter((member) => member.status === 'active' && member.id !== activeMember?.id)
       .sort((first, second) => (first.displayName ?? '').localeCompare(second.displayName ?? '', 'da')),
     [activeMember?.id, activeMembers],
@@ -3643,8 +4645,9 @@ function CalendarScreen({
   const customInviteMeta = selectedInviteCount
     ? `${inviteSelectorMeta}${selectedInviteNames ? ` · ${selectedInviteNames}` : ''}`
     : 'Ingen valgt endnu';
+  const todayKey = useMemo(() => formatInputDate(new Date()), []);
   const sortedEvents = useMemo(
-    () => [...(events ?? [])].sort((first, second) => {
+    () => uniqueById(events ?? []).sort((first, second) => {
       const firstTime = Date.parse(first.startsAt ?? `${first.date}T12:00:00`);
       const secondTime = Date.parse(second.startsAt ?? `${second.date}T12:00:00`);
 
@@ -3652,6 +4655,153 @@ function CalendarScreen({
     }),
     [events],
   );
+  const initialSelectedCalendarDay = useMemo(() => {
+    const upcomingEvent = sortedEvents.find((event) => {
+      const dayKey = eventDayKeyFor(event);
+
+      return dayKey && compareCalendarDayKeys(dayKey, todayKey) >= 0;
+    });
+
+    return eventDayKeyFor(upcomingEvent) || todayKey;
+  }, [sortedEvents, todayKey]);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(initialSelectedCalendarDay);
+  const [calendarRailMonth, setCalendarRailMonth] = useState(() => dateFromInput(initialSelectedCalendarDay));
+  const selectedCalendarDayTouchedRef = useRef(false);
+  const eventCountByDay = useMemo(() => sortedEvents.reduce((counts, event) => {
+    const dayKey = eventDayKeyFor(event);
+
+    if (!dayKey) {
+      return counts;
+    }
+
+    return {
+      ...counts,
+      [dayKey]: (counts[dayKey] ?? 0) + 1,
+    };
+  }, {}), [sortedEvents]);
+  const calendarEventDayKeys = useMemo(() => uniqueByKey(
+    sortedEvents
+      .map((event) => eventDayKeyFor(event))
+      .filter(Boolean),
+    (dayKey) => dayKey,
+  ).sort(compareCalendarDayKeys), [sortedEvents]);
+  const calendarRailMonthTitle = capitalizeCalendarLabel(monthTitle(calendarRailMonth));
+  const calendarRailDays = useMemo(() => {
+    return calendarRailDayKeysFor(calendarEventDayKeys, selectedCalendarDay, todayKey)
+      .map((dayKey) => {
+        const date = dateFromInput(dayKey);
+
+        return {
+          id: dayKey,
+          day: new Intl.DateTimeFormat('da-DK', { day: '2-digit' }).format(date).replace('.', ''),
+          eventCount: eventCountByDay[dayKey] ?? 0,
+          isToday: dayKey === todayKey,
+          month: formatCalendarRailMonth(date),
+          weekday: formatCalendarRailWeekday(date),
+        };
+      });
+  }, [calendarEventDayKeys, eventCountByDay, selectedCalendarDay, todayKey]);
+  const calendarRailSnapOffsets = useMemo(() => {
+    if (!calendarDayRailWidth) {
+      return [];
+    }
+
+    return calendarRailDays.reduce((offsets, day, index) => {
+      if (!day.eventCount) {
+        return offsets;
+      }
+
+      return [...offsets, calendarRailOffsetForDayIndex(index, calendarDayRailWidth)];
+    }, []);
+  }, [calendarDayRailWidth, calendarRailDays]);
+  const selectedCalendarDayEvents = useMemo(
+    () => sortedEvents.filter((event) => eventDayKeyFor(event) === selectedCalendarDay),
+    [selectedCalendarDay, sortedEvents],
+  );
+  const memberOwnsEvent = useCallback((event) => (
+    Boolean(event?.createdByMemberId && activeMember?.id)
+    && String(event.createdByMemberId) === String(activeMember.id)
+  ), [activeMember?.id]);
+  const calendarActionEvent = useMemo(
+    () => sortedEvents.find((event) => event.id === calendarActionEventId) ?? null,
+    [calendarActionEventId, sortedEvents],
+  );
+  const calendarDeleteEvent = useMemo(
+    () => sortedEvents.find((event) => event.id === calendarDeleteEventId) ?? null,
+    [calendarDeleteEventId, sortedEvents],
+  );
+  const calendarAttendanceEvent = useMemo(
+    () => sortedEvents.find((event) => event.id === calendarAttendanceEventId) ?? null,
+    [calendarAttendanceEventId, sortedEvents],
+  );
+  const calendarAttendancePeople = useMemo(() => {
+    if (!calendarAttendanceEvent) {
+      return [];
+    }
+
+    const memberIdFor = (person) => String(person?.memberId ?? person?.id ?? '');
+    const attendingIds = new Set((calendarAttendanceEvent.attendees ?? []).map(memberIdFor).filter(Boolean));
+    const declinedIds = new Set((calendarAttendanceEvent.declines ?? []).map(memberIdFor).filter(Boolean));
+    const pendingIds = new Set((calendarAttendanceEvent.pendingInvitees ?? []).map(memberIdFor).filter(Boolean));
+    const fallbackInvitees = activeMembers
+      .filter((member) => member.status === 'active')
+      .map((member) => ({
+        memberId: member.id,
+        displayName: member.displayName,
+        profilePhotoUrl: member.profilePhotoUrl,
+      }));
+    const baseInvitees = calendarAttendanceEvent.invitees?.length
+      ? calendarAttendanceEvent.invitees
+      : fallbackInvitees;
+
+    return uniqueByKey([
+      ...baseInvitees,
+      ...(calendarAttendanceEvent.attendees ?? []),
+      ...(calendarAttendanceEvent.declines ?? []),
+      ...(calendarAttendanceEvent.pendingInvitees ?? []),
+    ], memberIdFor)
+      .map((person) => {
+        const memberId = memberIdFor(person);
+        const status = attendingIds.has(memberId)
+          ? 'attending'
+          : declinedIds.has(memberId)
+            ? 'not_attending'
+            : pendingIds.has(memberId)
+              ? 'pending'
+              : 'pending';
+
+        return {
+          ...person,
+          memberId,
+          status,
+        };
+      })
+      .sort((first, second) => {
+        const statusOrder = { attending: 0, pending: 1, not_attending: 2 };
+        const statusDelta = (statusOrder[first.status] ?? 9) - (statusOrder[second.status] ?? 9);
+
+        if (statusDelta !== 0) {
+          return statusDelta;
+        }
+
+        return String(first.displayName ?? '').localeCompare(String(second.displayName ?? ''), 'da');
+      });
+  }, [activeMembers, calendarAttendanceEvent]);
+  const pendingResponseEvents = useMemo(
+    () => sortedEvents.filter((event) => event.myInviteStatus === 'invited' && !event.myRsvp),
+    [sortedEvents],
+  );
+  const pendingResponseCount = pendingResponseEvents.length;
+  const pendingResponseSummary = pendingResponseCount
+    ? `${pendingResponseCount} ${pendingResponseCount === 1 ? 'begivenhed' : 'begivenheder'}`
+    : 'Ingen afventer';
+  const calendarSubpageMode = pendingResponsePageOpen
+    ? 'pendingResponses'
+    : creatingEvent && selectingInvitees
+      ? 'invitees'
+      : creatingEvent
+        ? 'create'
+        : '';
   const calendarHeaderContainerStyle = useMemo(() => ({
     transform: [
       {
@@ -3674,12 +4824,177 @@ function CalendarScreen({
       },
     ],
   }), [calendarScrollY]);
+  const calendarSubpageDragStyle = useMemo(() => ({
+    transform: [{ translateX: calendarSubpageDragX }],
+  }), [calendarSubpageDragX]);
+
+  const handleCalendarSubpageLayout = useCallback((event) => {
+    calendarSubpageWidthRef.current = Math.max(event.nativeEvent.layout.width, 1);
+  }, []);
 
   useEffect(() => {
     if (creatingEvent && selectingInvitees) {
       onRequestScrollTop?.();
     }
   }, [creatingEvent, onRequestScrollTop, selectingInvitees]);
+
+  useEffect(() => {
+    if (!calendarSubpageMode) {
+      return;
+    }
+
+    calendarSubpageSwipeActiveRef.current = false;
+    calendarSubpageDragX.stopAnimation();
+    calendarSubpageDragX.setValue(Math.max(calendarSubpageWidthRef.current, APP_WINDOW_WIDTH));
+
+    requestAnimationFrame(() => {
+      Animated.timing(calendarSubpageDragX, {
+        toValue: 0,
+        duration: 285,
+        easing: Easing.out(Easing.poly(4)),
+        useNativeDriver: false,
+      }).start();
+    });
+  }, [calendarSubpageDragX, calendarSubpageMode]);
+
+  useEffect(() => {
+    if (selectedCalendarDayTouchedRef.current || selectedCalendarDay === initialSelectedCalendarDay) {
+      return;
+    }
+
+    setSelectedCalendarDay(initialSelectedCalendarDay);
+    setCalendarRailMonth(dateFromInput(initialSelectedCalendarDay));
+  }, [initialSelectedCalendarDay, selectedCalendarDay]);
+
+  const centerCalendarDayInRail = useCallback((dayKey, animated = true) => {
+    if (!calendarDayRailWidth) {
+      return;
+    }
+
+    const dayIndex = calendarRailDays.findIndex((day) => day.id === dayKey);
+
+    if (dayIndex < 0) {
+      return;
+    }
+
+    const x = calendarRailOffsetForDayIndex(dayIndex, calendarDayRailWidth);
+
+    setTimeout(() => {
+      calendarRailProgrammaticScrollRef.current = true;
+      calendarDayRailRef.current?.scrollTo({ x, animated });
+      setTimeout(() => {
+        calendarRailProgrammaticScrollRef.current = false;
+      }, 420);
+    }, 0);
+  }, [calendarDayRailWidth, calendarRailDays]);
+
+  useEffect(() => {
+    if (!isSameCalendarMonth(calendarRailMonth, dateFromInput(selectedCalendarDay))) {
+      return;
+    }
+
+    centerCalendarDayInRail(selectedCalendarDay);
+  }, [calendarRailMonth, centerCalendarDayInRail, selectedCalendarDay]);
+
+  const selectCalendarDay = useCallback((dayKey) => {
+    selectedCalendarDayTouchedRef.current = true;
+    setSelectedCalendarDay(dayKey);
+    setCalendarRailMonth(dateFromInput(dayKey));
+  }, []);
+
+  const shiftCalendarRailMonth = useCallback((count) => {
+    const nextMonth = addCalendarMonths(calendarRailMonth, count);
+
+    selectedCalendarDayTouchedRef.current = true;
+    setCalendarRailMonth(nextMonth);
+    setSelectedCalendarDay(defaultCalendarDayForMonth(nextMonth, sortedEvents, todayKey));
+  }, [calendarRailMonth, sortedEvents, todayKey]);
+
+  const jumpCalendarRailToEventDay = useCallback((dayKey) => {
+    if (!dayKey || dayKey === selectedCalendarDay) {
+      return;
+    }
+
+    calendarRailLastJumpAtRef.current = Date.now();
+    selectedCalendarDayTouchedRef.current = true;
+    setSelectedCalendarDay(dayKey);
+    setCalendarRailMonth(dateFromInput(dayKey));
+  }, [selectedCalendarDay]);
+
+  const openPendingResponsePage = useCallback(() => {
+    if (!pendingResponseEvents.length) {
+      return;
+    }
+    setCalendarError('');
+    setCalendarStatus('');
+    setCreatingEvent(false);
+    setSelectingInvitees(false);
+    setPendingResponsePageOpen(true);
+  }, [pendingResponseEvents]);
+
+  const handleCalendarDayRailScrollBeginDrag = useCallback((event) => {
+    calendarRailProgrammaticScrollRef.current = false;
+    calendarRailDragStartXRef.current = event.nativeEvent.contentOffset?.x ?? 0;
+  }, []);
+
+  const handleCalendarDayRailScrollEnd = useCallback((event) => {
+    if (calendarRailProgrammaticScrollRef.current) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (now - calendarRailLastJumpAtRef.current < 450) {
+      return;
+    }
+
+    const {
+      contentOffset,
+      contentSize,
+      layoutMeasurement,
+    } = event.nativeEvent;
+    const maxX = Math.max(0, (contentSize?.width ?? 0) - (layoutMeasurement?.width ?? 0));
+    const x = contentOffset?.x ?? 0;
+    const edgeThreshold = CALENDAR_DAY_RAIL_ITEM_WIDTH;
+    const deltaX = x - calendarRailDragStartXRef.current;
+    const eventSwipeThreshold = 14;
+
+    if (Math.abs(deltaX) >= eventSwipeThreshold) {
+      const targetEventDayKey = deltaX > 0
+        ? calendarEventDayKeys.find((dayKey) => compareCalendarDayKeys(dayKey, selectedCalendarDay) > 0)
+        : [...calendarEventDayKeys].reverse().find((dayKey) => compareCalendarDayKeys(dayKey, selectedCalendarDay) < 0);
+
+      if (targetEventDayKey) {
+        jumpCalendarRailToEventDay(targetEventDayKey);
+        return;
+      }
+    }
+
+    if (maxX <= 0) {
+      centerCalendarDayInRail(selectedCalendarDay);
+      return;
+    }
+
+    if (x >= maxX - edgeThreshold) {
+      const nextEventDayKey = calendarEventDayKeys.find((dayKey) => (
+        compareCalendarDayKeys(dayKey, selectedCalendarDay) > 0
+      ));
+
+      jumpCalendarRailToEventDay(nextEventDayKey);
+      return;
+    }
+
+    if (x <= edgeThreshold) {
+      const previousEventDayKey = [...calendarEventDayKeys].reverse().find((dayKey) => (
+        compareCalendarDayKeys(dayKey, selectedCalendarDay) < 0
+      ));
+
+      jumpCalendarRailToEventDay(previousEventDayKey);
+      return;
+    }
+
+    centerCalendarDayInRail(selectedCalendarDay);
+  }, [calendarEventDayKeys, centerCalendarDayInRail, jumpCalendarRailToEventDay, selectedCalendarDay]);
 
   const updateCalendarHeaderScrolled = useCallback((scrolled) => {
     if (calendarHeaderScrolledRef.current === scrolled) {
@@ -3723,13 +5038,43 @@ function CalendarScreen({
   const openCreatePage = () => {
     const nextDraft = createCalendarDraft();
 
+    setEditingEventId('');
     setDraft(nextDraft);
     setVisibleMonth(dateFromInput(nextDraft.eventDate));
     setDatePickerOpen(false);
+    setCoverPickerOpen(false);
     setSelectingInvitees(false);
     setInvitePeopleSearch('');
     setCalendarError('');
+    setCalendarStatus('');
     setFormError('');
+    setDeleteEventError('');
+    setPendingResponsePageOpen(false);
+    resetCalendarHeaderScroll();
+    setCreatingEvent(true);
+    scrollTimeWheelsTo(nextDraft.eventTime);
+  };
+
+  const openEditPage = (event) => {
+    if (!memberOwnsEvent(event)) {
+      return;
+    }
+
+    const nextDraft = calendarDraftFromEvent(event, activeMember?.id);
+
+    setCalendarActionEventId('');
+    setEditingEventId(event.id);
+    setDraft(nextDraft);
+    setVisibleMonth(dateFromInput(nextDraft.eventDate));
+    setDatePickerOpen(false);
+    setCoverPickerOpen(false);
+    setSelectingInvitees(false);
+    setInvitePeopleSearch('');
+    setCalendarError('');
+    setCalendarStatus('');
+    setFormError('');
+    setDeleteEventError('');
+    setPendingResponsePageOpen(false);
     resetCalendarHeaderScroll();
     setCreatingEvent(true);
     scrollTimeWheelsTo(nextDraft.eventTime);
@@ -3814,15 +5159,152 @@ function CalendarScreen({
     }
 
     setCreatingEvent(false);
+    setEditingEventId('');
     setDatePickerOpen(false);
+    setCoverPickerOpen(false);
     setSelectingInvitees(false);
     setInvitePeopleSearch('');
     setFormError('');
     resetCalendarHeaderScroll();
   };
 
+  const resetCalendarSubpageDrag = useCallback(() => {
+    calendarSubpageSwipeActiveRef.current = false;
+
+    Animated.spring(calendarSubpageDragX, {
+      toValue: 0,
+      tension: 135,
+      friction: 19,
+      useNativeDriver: false,
+    }).start();
+  }, [calendarSubpageDragX]);
+
+  const returnFromCalendarSubpage = useCallback((onBack) => {
+    Keyboard.dismiss();
+
+    Animated.timing(calendarSubpageDragX, {
+      toValue: Math.max(calendarSubpageWidthRef.current, APP_WINDOW_WIDTH),
+      duration: 245,
+      easing: Easing.out(Easing.poly(4)),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) {
+        return;
+      }
+
+      const didLeave = onBack?.();
+
+      if (didLeave === false) {
+        resetCalendarSubpageDrag();
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        calendarSubpageSwipeActiveRef.current = false;
+        calendarSubpageDragX.setValue(0);
+      });
+    });
+  }, [calendarSubpageDragX, resetCalendarSubpageDrag]);
+
+  const createCalendarSubpageTouchHandlers = useCallback((onBack) => {
+    const touchFromEvent = (event) => event.nativeEvent.touches?.[0] ?? event.nativeEvent;
+
+    const releaseCalendarSubpageSwipe = () => {
+      const latest = calendarSubpageTouchLatestRef.current;
+      const start = calendarSubpageTouchStartRef.current;
+
+      if (!latest || !start || !calendarSubpageSwipeActiveRef.current) {
+        calendarSubpageTouchStartRef.current = null;
+        calendarSubpageTouchLatestRef.current = null;
+        calendarSubpageSwipeActiveRef.current = false;
+        return;
+      }
+
+      const elapsed = Math.max(1, latest.time - start.time);
+      const velocityX = latest.dx / elapsed;
+      const movedFarEnough = latest.dx > Math.max(
+        CHAT_THREAD_BACK_SWIPE_DISTANCE,
+        calendarSubpageWidthRef.current * 0.08,
+      );
+      const flickedRight = latest.dx > CHAT_THREAD_BACK_SWIPE_FAST_DISTANCE
+        && velocityX > CHAT_THREAD_BACK_SWIPE_VELOCITY;
+
+      calendarSubpageTouchStartRef.current = null;
+      calendarSubpageTouchLatestRef.current = null;
+      calendarSubpageSwipeActiveRef.current = false;
+
+      if (movedFarEnough || flickedRight) {
+        returnFromCalendarSubpage(onBack);
+        return;
+      }
+
+      resetCalendarSubpageDrag();
+    };
+
+    return {
+      onTouchStart: (event) => {
+        const touch = touchFromEvent(event);
+
+        if (!Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) {
+          return;
+        }
+
+        calendarSubpageTouchStartRef.current = {
+          x: touch.pageX,
+          y: touch.pageY,
+          time: Date.now(),
+        };
+        calendarSubpageTouchLatestRef.current = null;
+        calendarSubpageSwipeActiveRef.current = false;
+      },
+      onTouchMove: (event) => {
+        const start = calendarSubpageTouchStartRef.current;
+        const touch = touchFromEvent(event);
+
+        if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) {
+          return;
+        }
+
+        const dx = touch.pageX - start.x;
+        const dy = touch.pageY - start.y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        if (dx <= CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE) {
+          return;
+        }
+
+        const isSwipeIntent = calendarSubpageSwipeActiveRef.current
+          || (
+            absDx > CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE
+            && absDx > absDy * CHAT_THREAD_BACK_SWIPE_VERTICAL_RATIO
+          );
+
+        if (!isSwipeIntent) {
+          return;
+        }
+
+        if (!calendarSubpageSwipeActiveRef.current) {
+          Keyboard.dismiss();
+          calendarSubpageDragX.stopAnimation();
+          calendarSubpageSwipeActiveRef.current = true;
+        }
+
+        calendarSubpageTouchLatestRef.current = {
+          dx,
+          dy,
+          time: Date.now(),
+        };
+        calendarSubpageDragX.setValue(Math.min(Math.max(dx, 0), calendarSubpageWidthRef.current));
+      },
+      onTouchEnd: releaseCalendarSubpageSwipe,
+      onTouchCancel: releaseCalendarSubpageSwipe,
+    };
+  }, [calendarSubpageDragX, resetCalendarSubpageDrag, returnFromCalendarSubpage]);
+
   const pickEventCoverImage = async () => {
     setFormError('');
+    setCoverPickerOpen(false);
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
@@ -3856,6 +5338,20 @@ function CalendarScreen({
       ...current,
       coverImageUri: asset.uri,
       coverImageData: `data:${mimeType};base64,${asset.base64}`,
+      coverImageTemplateId: '',
+      coverImageMode: 'upload',
+    }));
+  };
+
+  const selectEventCoverTemplate = (template) => {
+    setFormError('');
+    setCoverPickerOpen(false);
+    setDraft((current) => ({
+      ...current,
+      coverImageUri: '',
+      coverImageData: '',
+      coverImageTemplateId: template.id,
+      coverImageMode: 'template',
     }));
   };
 
@@ -3869,8 +5365,21 @@ function CalendarScreen({
       inviteScope: draft.inviteScope,
     };
 
-    if (draft.coverImageData) {
+    if (draft.coverImageTemplateId) {
+      nextDraft.coverImageMode = 'template';
+      nextDraft.coverImageTemplateId = draft.coverImageTemplateId;
+
+      const templateUploadData = draft.coverImageData
+        || await eventCoverTemplateUploadData(draft.coverImageTemplateId);
+
+      if (templateUploadData) {
+        nextDraft.coverImageData = templateUploadData;
+      }
+    } else if (draft.coverImageData) {
+      nextDraft.coverImageMode = 'upload';
       nextDraft.coverImageData = draft.coverImageData;
+    } else {
+      nextDraft.coverImageMode = editingEventId ? 'keep' : 'none';
     }
 
     if (draft.inviteScope === 'custom') {
@@ -3900,28 +5409,121 @@ function CalendarScreen({
     setSaving(true);
     setFormError('');
     setCalendarError('');
+    setCalendarStatus('');
 
     try {
-      await onCreateEvent(nextDraft);
+      if (editingEventId) {
+        await onUpdateEvent(editingEventId, nextDraft);
+      } else {
+        await onCreateEvent(nextDraft);
+      }
+
       setDraft(createCalendarDraft());
       setCreatingEvent(false);
+      setEditingEventId('');
       setDatePickerOpen(false);
+      setCoverPickerOpen(false);
       setSelectingInvitees(false);
       setInvitePeopleSearch('');
+      selectCalendarDay(nextDraft.eventDate);
       resetCalendarHeaderScroll();
     } catch (apiError) {
-      setFormError(apiError.message || 'Begivenheden kunne ikke oprettes.');
+      setFormError(apiError.message || (editingEventId
+        ? 'Begivenheden kunne ikke gemmes.'
+        : 'Begivenheden kunne ikke oprettes.'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteEvent = async () => {
+    if (!calendarDeleteEvent || deletingEventId) {
+      return;
+    }
+
+    const deletedEventId = calendarDeleteEvent.id;
+    const deletedEventDay = eventDayKeyFor(calendarDeleteEvent);
+
+    setDeletingEventId(deletedEventId);
+    setDeleteEventError('');
+
+    try {
+      await onDeleteEvent(deletedEventId);
+      setCalendarDeleteEventId('');
+      setCalendarActionEventId('');
+      setCalendarAttendanceEventId((current) => (current === deletedEventId ? '' : current));
+
+      if (deletedEventDay === selectedCalendarDay) {
+        const nextEvent = sortedEvents.find((event) => (
+          event.id !== deletedEventId
+          && eventDayKeyFor(event)
+          && compareCalendarDayKeys(eventDayKeyFor(event), selectedCalendarDay) >= 0
+        )) ?? sortedEvents.find((event) => event.id !== deletedEventId && eventDayKeyFor(event));
+
+        if (nextEvent) {
+          selectCalendarDay(eventDayKeyFor(nextEvent));
+        }
+      }
+    } catch (apiError) {
+      setDeleteEventError(apiError.message || 'Begivenheden kunne ikke slettes.');
+    } finally {
+      setDeletingEventId('');
+    }
+  };
+
+  const reportEvent = async (event) => {
+    if (!event || reportingEventId) {
+      return;
+    }
+
+    setReportingEventId(event.id);
+    setCalendarError('');
+    setCalendarStatus('');
+
+    try {
+      await onReportEvent(event.id);
+      setCalendarActionEventId('');
+      setCalendarStatus('Tak - begivenheden er rapporteret til moderation.');
+    } catch (apiError) {
+      setCalendarError(apiError.message || 'Begivenheden kunne ikke rapporteres.');
+    } finally {
+      setReportingEventId('');
+    }
+  };
+
+  const blockEventCreator = async (event) => {
+    const creatorId = event?.createdByMemberId ?? event?.creator?.id;
+
+    if (!event || !creatorId || blockingMemberId) {
+      return;
+    }
+
+    setBlockingMemberId(String(creatorId));
+    setCalendarError('');
+    setCalendarStatus('');
+
+    try {
+      await onBlockMember(String(creatorId));
+      setCalendarActionEventId('');
+      setCalendarAttendanceEventId((current) => (current === event.id ? '' : current));
+      setCalendarStatus('Arrangøren er blokeret, og begivenheder fra personen er skjult.');
+    } catch (apiError) {
+      setCalendarError(apiError.message || 'Personen kunne ikke blokeres.');
+    } finally {
+      setBlockingMemberId('');
     }
   };
 
   const respondToEvent = async (eventId, status) => {
     setRespondingEventId(`${eventId}:${status}`);
     setCalendarError('');
+    setCalendarStatus('');
 
     try {
       await onRespondToEvent(eventId, status);
+      if (pendingResponsePageOpen && pendingResponseCount <= 1) {
+        setPendingResponsePageOpen(false);
+      }
     } catch (apiError) {
       setCalendarError(apiError.message || 'Dit svar kunne ikke gemmes.');
     } finally {
@@ -3929,30 +5531,215 @@ function CalendarScreen({
     }
   };
 
-  if (creatingEvent && selectingInvitees) {
+  if (pendingResponsePageOpen) {
+    const closePendingResponsePage = () => {
+      setPendingResponsePageOpen(false);
+      return true;
+    };
+    const calendarSubpageTouchHandlers = createCalendarSubpageTouchHandlers(closePendingResponsePage);
+
     return (
-      <ScrollView
-        contentContainerStyle={styles.calendarScreenScrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        style={styles.calendarScreenScroll}
+      <Modal
+        animationType="none"
+        onRequestClose={() => returnFromCalendarSubpage(closePendingResponsePage)}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={pendingResponsePageOpen}
       >
-        <View style={styles.calendarCreatePageHeader}>
-          <Pressable
-            accessibilityLabel="Tilbage til opret gilde"
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={() => setSelectingInvitees(false)}
-            style={({ pressed }) => [
-              styles.calendarCreateBackButton,
-              pressed ? styles.footerItemPressed : null,
-            ]}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.calendarSubpageModalHost}
+        >
+          <View
+            onLayout={handleCalendarSubpageLayout}
+            style={styles.calendarSubpageModalContent}
           >
-            <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
-            <Text style={styles.calendarCreateBackText}>Opret gilde</Text>
-          </Pressable>
-          <Text style={styles.calendarCreatePageTitle}>Vælg personer</Text>
+      <Animated.View
+        {...calendarSubpageTouchHandlers}
+        style={[
+          styles.calendarSubpageFullscreen,
+          styles.calendarSubpageDraggable,
+          calendarSubpageDragStyle,
+        ]}
+      >
+        <ScrollView
+          {...calendarSubpageTouchHandlers}
+          contentContainerStyle={styles.calendarScreenScrollContent}
+          showsVerticalScrollIndicator={false}
+          style={styles.calendarScreenScroll}
+        >
+          <View style={styles.calendarCreatePageHeader} {...calendarSubpageTouchHandlers}>
+            <Pressable
+              accessibilityLabel="Tilbage til kalender"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => returnFromCalendarSubpage(closePendingResponsePage)}
+              style={({ pressed }) => [
+                styles.calendarCreateBackButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarCreateBackText}>Kalender</Text>
+            </Pressable>
+            <Text style={styles.calendarCreatePageTitle}>Afventer svar</Text>
+          </View>
+
+        {calendarError ? <Text style={styles.errorText}>{calendarError}</Text> : null}
+        {calendarStatus ? <Text style={styles.successText}>{calendarStatus}</Text> : null}
+
+        <View style={styles.calendarPendingResponsePage}>
+          <Text style={styles.calendarPendingResponsePageSummary}>
+            {pendingResponseSummary}
+          </Text>
+
+          {pendingResponseEvents.length ? (
+            <View style={styles.calendarPendingResponseList}>
+              {pendingResponseEvents.map((event) => {
+                const dateParts = formatCalendarDateParts(event.date);
+                const eventTime = formatCalendarTime(event.startsAt);
+                const attendingLoading = respondingEventId === `${event.id}:attending`;
+                const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
+                const responseLocked = Boolean(respondingEventId);
+
+                return (
+                  <View key={event.id} style={styles.calendarPendingResponseRow}>
+                    <View style={styles.calendarPendingResponseDateStack}>
+                      <View style={styles.calendarPendingResponseDate}>
+                        <Text style={styles.calendarPendingResponseDateDay}>{dateParts.day}</Text>
+                        <Text style={styles.calendarPendingResponseDateMonth}>{dateParts.month}</Text>
+                      </View>
+                      {event.creator ? (
+                        <View style={styles.calendarPendingResponseCreatorAvatar}>
+                          <Avatar profile={event.creator} variant="calendarPendingResponseCreator" />
+                        </View>
+                      ) : null}
+                    </View>
+                    <View style={styles.calendarPendingResponseCopy}>
+                      <Text numberOfLines={1} style={styles.calendarPendingResponseTitle}>
+                        {event.title}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.calendarPendingResponseMeta}>
+                        {dateParts.weekday}{eventTime ? ` kl. ${eventTime}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.calendarPendingResponseActions}>
+                      <Pressable
+                        accessibilityLabel={`Deltager i ${event.title}`}
+                        accessibilityRole="button"
+                        disabled={responseLocked}
+                        onPress={() => respondToEvent(event.id, 'attending')}
+                        style={({ pressed }) => [
+                          styles.calendarPendingResponseActionButton,
+                          styles.calendarPendingResponseActionAccept,
+                          pressed && !responseLocked ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        {attendingLoading ? (
+                          <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                        ) : (
+                          <Ionicons name="checkmark" size={17} color={STUDOS_THEME.ink} />
+                        )}
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Deltager ikke i ${event.title}`}
+                        accessibilityRole="button"
+                        disabled={responseLocked}
+                        onPress={() => respondToEvent(event.id, 'not_attending')}
+                        style={({ pressed }) => [
+                          styles.calendarPendingResponseActionButton,
+                          styles.calendarPendingResponseActionDecline,
+                          pressed && !responseLocked ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        {notAttendingLoading ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <Ionicons name="close" size={17} color="#FFFFFF" />
+                        )}
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <View style={styles.calendarPendingResponseEmpty}>
+              <Ionicons name="checkmark-circle" size={28} color={STUDOS_THEME.blue} />
+              <Text style={styles.calendarPendingResponseEmptyText}>
+                Du mangler ikke at svare på noget lige nu.
+              </Text>
+            </View>
+          )}
         </View>
+        </ScrollView>
+      </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
+
+  if (creatingEvent && selectingInvitees) {
+    const closeInviteeSelectPage = () => {
+      setSelectingInvitees(false);
+      return true;
+    };
+    const calendarSubpageTouchHandlers = createCalendarSubpageTouchHandlers(closeInviteeSelectPage);
+
+    return (
+      <Modal
+        animationType="none"
+        onRequestClose={() => returnFromCalendarSubpage(closeInviteeSelectPage)}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={creatingEvent && selectingInvitees}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.calendarSubpageModalHost}
+        >
+          <View
+            onLayout={handleCalendarSubpageLayout}
+            style={styles.calendarSubpageModalContent}
+          >
+      <Animated.View
+        {...calendarSubpageTouchHandlers}
+        style={[
+          styles.calendarSubpageFullscreen,
+          styles.calendarSubpageDraggable,
+          calendarSubpageDragStyle,
+        ]}
+      >
+        <ScrollView
+          {...calendarSubpageTouchHandlers}
+          contentContainerStyle={styles.calendarScreenScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.calendarScreenScroll}
+        >
+          <View style={styles.calendarCreatePageHeader} {...calendarSubpageTouchHandlers}>
+            <Pressable
+              accessibilityLabel={editingEventId ? 'Tilbage til rediger gilde' : 'Tilbage til opret gilde'}
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => returnFromCalendarSubpage(closeInviteeSelectPage)}
+              style={({ pressed }) => [
+                styles.calendarCreateBackButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarCreateBackText}>
+                {editingEventId ? 'Rediger gilde' : 'Opret gilde'}
+              </Text>
+            </Pressable>
+            <Text style={styles.calendarCreatePageTitle}>Vælg personer</Text>
+          </View>
 
         <View style={styles.calendarInviteSelectPage}>
           <View style={styles.calendarInviteSearchRow}>
@@ -4045,36 +5832,78 @@ function CalendarScreen({
             )}
           </View>
 
-          <Button label="Færdig" onPress={() => setSelectingInvitees(false)} />
+          <Button label="Færdig" onPress={() => returnFromCalendarSubpage(closeInviteeSelectPage)} />
         </View>
-      </ScrollView>
+        </ScrollView>
+      </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     );
   }
 
   if (creatingEvent) {
+    const closeCreatePage = () => {
+      if (saving) {
+        return false;
+      }
+
+      closeCreate();
+      return true;
+    };
+    const calendarSubpageTouchHandlers = createCalendarSubpageTouchHandlers(closeCreatePage);
+
     return (
-      <ScrollView
-        contentContainerStyle={styles.calendarScreenScrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        style={styles.calendarScreenScroll}
+      <Modal
+        animationType="none"
+        onRequestClose={() => returnFromCalendarSubpage(closeCreatePage)}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={creatingEvent}
       >
-        <View style={styles.calendarCreatePageHeader}>
-          <Pressable
-            accessibilityLabel="Tilbage til kalender"
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={closeCreate}
-            style={({ pressed }) => [
-              styles.calendarCreateBackButton,
-              pressed ? styles.footerItemPressed : null,
-            ]}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.calendarSubpageModalHost}
+        >
+          <View
+            onLayout={handleCalendarSubpageLayout}
+            style={styles.calendarSubpageModalContent}
           >
-            <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
-            <Text style={styles.calendarCreateBackText}>Kalender</Text>
-          </Pressable>
-          <Text style={styles.calendarCreatePageTitle}>Opret gilde</Text>
-        </View>
+      <Animated.View
+        {...calendarSubpageTouchHandlers}
+        style={[
+          styles.calendarSubpageFullscreen,
+          styles.calendarSubpageDraggable,
+          calendarSubpageDragStyle,
+        ]}
+      >
+        <ScrollView
+          {...calendarSubpageTouchHandlers}
+          contentContainerStyle={styles.calendarScreenScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.calendarScreenScroll}
+        >
+          <View style={styles.calendarCreatePageHeader} {...calendarSubpageTouchHandlers}>
+            <Pressable
+              accessibilityLabel="Tilbage til kalender"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => returnFromCalendarSubpage(closeCreatePage)}
+              style={({ pressed }) => [
+                styles.calendarCreateBackButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarCreateBackText}>Kalender</Text>
+            </Pressable>
+            <Text style={styles.calendarCreatePageTitle}>
+              {editingEventId ? 'Rediger gilde' : 'Opret gilde'}
+            </Text>
+          </View>
 
         <View style={styles.calendarCreatePageCard}>
           <View style={styles.calendarField}>
@@ -4093,13 +5922,18 @@ function CalendarScreen({
             <Text style={styles.calendarFieldLabel}>Cover-billede</Text>
             <Pressable
               accessibilityRole="button"
-              onPress={pickEventCoverImage}
+              onPress={() => setCoverPickerOpen(true)}
               style={({ pressed }) => [
                 styles.calendarCoverPicker,
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              {draft.coverImageUri ? (
+              {selectedCoverTemplate ? (
+                <EventCoverTemplateArt
+                  templateId={selectedCoverTemplate.id}
+                  style={styles.calendarCoverPreview}
+                />
+              ) : draft.coverImageUri ? (
                 <Image
                   resizeMode="cover"
                   source={{ uri: draft.coverImageUri }}
@@ -4112,14 +5946,14 @@ function CalendarScreen({
               )}
               <View style={styles.calendarCoverCopy}>
                 <Text style={styles.calendarCoverTitle}>
-                  {draft.coverImageUri ? 'Cover valgt' : 'Vælg et cover'}
+                  {selectedCoverTemplate?.label ?? (draft.coverImageUri ? 'Cover valgt' : 'Vælg et cover')}
                 </Text>
                 <Text style={styles.calendarCoverText}>
                   Billedet vises øverst på begivenheden.
                 </Text>
               </View>
               <View style={styles.calendarCoverAction}>
-                <Ionicons name={draft.coverImageUri ? 'swap-horizontal' : 'add'} size={18} color="#FFFFFF" />
+                <Ionicons name={draft.coverImageUri || selectedCoverTemplate ? 'swap-horizontal' : 'add'} size={18} color="#FFFFFF" />
               </View>
             </Pressable>
           </View>
@@ -4405,9 +6239,96 @@ function CalendarScreen({
 
           {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
-          <Button label="Opret gilde" loading={saving} onPress={submitEvent} />
+          <Button
+            label={editingEventId ? 'Gem ændringer' : 'Opret gilde'}
+            loading={saving}
+            onPress={submitEvent}
+          />
         </View>
-      </ScrollView>
+        </ScrollView>
+        {coverPickerOpen ? (
+          <View style={styles.calendarCoverPickerLayer}>
+            <Pressable
+              accessibilityLabel="Luk covervalg"
+              onPress={() => setCoverPickerOpen(false)}
+              style={styles.calendarCoverPickerBackdrop}
+            />
+            <View style={[styles.chatModalPanel, styles.calendarCoverTemplatePanel]}>
+              <View style={styles.chatModalHeader}>
+                <View>
+                  <Text style={styles.chatModalKicker}>Cover</Text>
+                  <Text style={styles.chatModalTitle}>Vælg billede</Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="Luk"
+                  accessibilityRole="button"
+                  onPress={() => setCoverPickerOpen(false)}
+                  style={({ pressed }) => [
+                    styles.chatModalCloseButton,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+                </Pressable>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={pickEventCoverImage}
+                style={({ pressed }) => [
+                  styles.calendarCoverUploadOption,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={styles.calendarCoverUploadIcon}>
+                  <Ionicons name="cloud-upload" size={18} color={STUDOS_THEME.ink} />
+                </View>
+                <View style={styles.calendarCoverUploadCopy}>
+                  <Text style={styles.calendarCoverUploadTitle}>Upload selv</Text>
+                  <Text style={styles.calendarCoverUploadText}>Vælg et billede fra telefonen</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#8B94A6" />
+              </Pressable>
+
+              <View style={styles.calendarCoverTemplateGrid}>
+                {EVENT_COVER_TEMPLATES.map((template) => {
+                  const selected = draft.coverImageTemplateId === template.id;
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={`Vælg ${template.label}`}
+                      accessibilityRole="button"
+                      key={template.id}
+                      onPress={() => selectEventCoverTemplate(template)}
+                      style={({ pressed }) => [
+                        styles.calendarCoverTemplateCard,
+                        selected ? styles.calendarCoverTemplateCardSelected : null,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <EventCoverTemplateArt
+                        templateId={template.id}
+                        style={styles.calendarCoverTemplateImage}
+                      />
+                      <Text numberOfLines={1} style={styles.calendarCoverTemplateLabel}>
+                        {template.label}
+                      </Text>
+                      {selected ? (
+                        <View style={styles.calendarCoverTemplateCheck}>
+                          <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                        </View>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+        ) : null}
+      </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     );
   }
 
@@ -4421,160 +6342,339 @@ function CalendarScreen({
         showsVerticalScrollIndicator={false}
         style={styles.calendarGridScroll}
       >
+      <View style={styles.calendarDayRailBlock}>
+        <View style={styles.calendarMonthLine}>
+          <Pressable
+            accessibilityLabel="Forrige måned"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => shiftCalendarRailMonth(-1)}
+            style={({ pressed }) => [
+              styles.calendarMonthLineButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={15} color={STUDOS_THEME.ink} />
+          </Pressable>
+          <Text numberOfLines={1} style={styles.calendarMonthLineTitle}>
+            {calendarRailMonthTitle}
+          </Text>
+          <Pressable
+            accessibilityLabel="Næste måned"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => shiftCalendarRailMonth(1)}
+            style={({ pressed }) => [
+              styles.calendarMonthLineButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="chevron-forward" size={15} color={STUDOS_THEME.ink} />
+          </Pressable>
+        </View>
+
+        <ScrollView
+          contentContainerStyle={styles.calendarDayRailContent}
+          decelerationRate="fast"
+          horizontal
+          onLayout={(event) => setCalendarDayRailWidth(event.nativeEvent.layout.width)}
+          onMomentumScrollEnd={handleCalendarDayRailScrollEnd}
+          onScrollBeginDrag={handleCalendarDayRailScrollBeginDrag}
+          onScrollEndDrag={handleCalendarDayRailScrollEnd}
+          ref={calendarDayRailRef}
+          showsHorizontalScrollIndicator={false}
+          snapToOffsets={calendarRailSnapOffsets.length ? calendarRailSnapOffsets : undefined}
+        >
+          {calendarRailDays.map((day) => {
+            const active = selectedCalendarDay === day.id;
+            const empty = !day.eventCount;
+
+            return (
+              <Pressable
+                accessibilityLabel={`${day.weekday} ${day.day}. ${day.month}`}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: empty, selected: active }}
+                disabled={empty}
+                key={day.id}
+                onPress={() => selectCalendarDay(day.id)}
+                style={({ pressed }) => [
+                  styles.calendarDayRailItem,
+                  active ? styles.calendarDayRailItemActive : null,
+                  day.isToday && !active ? styles.calendarDayRailItemToday : null,
+                  empty ? styles.calendarDayRailItemMuted : null,
+                  pressed && !empty ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={[
+                  styles.calendarDayRailWeekday,
+                  active ? styles.calendarDayRailTextActive : null,
+                ]}>
+                  {day.weekday}
+                </Text>
+                <Text style={[
+                  styles.calendarDayRailNumber,
+                  active ? styles.calendarDayRailTextActive : null,
+                ]}>
+                  {day.day}
+                </Text>
+                <View style={[
+                  styles.calendarDayRailSignal,
+                  day.eventCount ? styles.calendarDayRailSignalFilled : null,
+                ]} />
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+
       {calendarError ? <Text style={styles.errorText}>{calendarError}</Text> : null}
+      {calendarStatus ? <Text style={styles.successText}>{calendarStatus}</Text> : null}
 
       {sortedEvents.length ? (
+        selectedCalendarDayEvents.length ? (
         <View style={styles.calendarEventList}>
-          {sortedEvents.map((event) => {
+          {selectedCalendarDayEvents.map((event) => {
             const dateParts = formatCalendarDateParts(event.date);
             const eventTime = formatCalendarTime(event.startsAt);
-            const attendeePreview = (event.attendees ?? []).slice(0, 3);
             const attendingCount = event.attendingCount ?? event.rsvpCount ?? 0;
             const notAttendingCount = event.notAttendingCount ?? 0;
-            const inviteCount = event.inviteCount ?? Math.max(attendingCount + notAttendingCount, attendingCount);
-            const pendingCount = event.pendingCount ?? Math.max(0, inviteCount - attendingCount - notAttendingCount);
+            const attendeePreview = uniqueByKey(event.attendees ?? [], (person) => person?.memberId).slice(0, CALENDAR_ATTENDEE_STACK_LIMIT);
+            const attendeeOverflowCount = Math.max(0, attendingCount - attendeePreview.length);
             const attendingLoading = respondingEventId === `${event.id}:attending`;
             const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
             const responseLocked = Boolean(respondingEventId);
+            const manageable = memberOwnsEvent(event);
+            const eventCoverTemplate = eventCoverTemplateFor(event.coverImageTemplateId);
+            const hasEventCover = Boolean(event.coverImageUrl || eventCoverTemplate);
 
             return (
               <View key={event.id} style={styles.calendarEventCard}>
-                {event.coverImageUrl ? (
-                  <Image
-                    resizeMode="cover"
-                    source={{ uri: event.coverImageUrl }}
-                    style={styles.calendarEventCoverImage}
-                  />
-                ) : null}
-                <View style={styles.calendarEventTopRow}>
-                  <View style={styles.calendarDateBadge}>
-                    <Text style={styles.calendarDateDay}>{dateParts.day}</Text>
-                    <Text style={styles.calendarDateMonth}>{dateParts.month}</Text>
-                  </View>
-                  <View style={styles.calendarEventCopy}>
-                    <View style={styles.calendarEventTitleRow}>
-                      <Text numberOfLines={2} style={styles.calendarEventTitle}>
+                {hasEventCover ? (
+                  <View style={styles.calendarEventCoverWrap}>
+                    {eventCoverTemplate ? (
+                      <EventCoverTemplateArt
+                        templateId={eventCoverTemplate.id}
+                        style={styles.calendarEventCoverImage}
+                      />
+                    ) : (
+                      <Image
+                        resizeMode="cover"
+                        source={{ uri: event.coverImageUrl }}
+                        style={styles.calendarEventCoverImage}
+                      />
+                    )}
+                    <View style={styles.calendarEventCoverShade} pointerEvents="none" />
+                    <View style={[
+                      styles.calendarEventCoverTitleBlock,
+                      event.creator ? styles.calendarEventCoverTitleBlockWithAvatar : null,
+                    ]}>
+                      <Text numberOfLines={2} style={styles.calendarEventCoverTitle}>
                         {event.title}
                       </Text>
-                      <View style={styles.calendarEventTypePill}>
-                        <Text style={styles.calendarEventTypeText}>Gilde</Text>
+                    </View>
+                    <Pressable
+                      accessibilityLabel={`Handlinger for ${event.title}`}
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => setCalendarActionEventId(event.id)}
+                      style={({ pressed }) => [
+                        styles.calendarEventCoverActionButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={18} color="#FFFFFF" />
+                    </Pressable>
+                    {event.creator ? (
+                      <View style={styles.calendarEventCreatorAvatar}>
+                        <Avatar profile={event.creator} variant="calendarCreator" />
                       </View>
+                    ) : null}
+                  </View>
+                ) : null}
+                <View style={styles.calendarEventBody}>
+                  <View style={[
+                    styles.calendarEventTopRow,
+                    hasEventCover ? styles.calendarEventTopRowCentered : null,
+                  ]}>
+                    <View style={[
+                      styles.calendarDateBadge,
+                      hasEventCover && event.creator ? styles.calendarDateBadgeUnderAvatar : null,
+                    ]}>
+                      <Text style={styles.calendarDateDay}>{dateParts.day}</Text>
+                      <Text style={styles.calendarDateMonth}>{dateParts.month}</Text>
                     </View>
-                    <View style={styles.calendarMetaLine}>
-                      <Ionicons name="calendar" size={14} color={STUDOS_THEME.red} />
-                      <Text numberOfLines={1} style={styles.calendarMetaText}>
-                        {dateParts.weekday}{eventTime ? ` kl. ${eventTime}` : ''}
-                      </Text>
-                    </View>
-                    {event.location ? (
+                    <View style={[
+                      styles.calendarEventCopy,
+                      hasEventCover ? styles.calendarEventCopyBesideDate : null,
+                    ]}>
+                      {!hasEventCover ? (
+                        <View style={styles.calendarEventTitleRow}>
+                          <Text numberOfLines={2} style={styles.calendarEventTitle}>
+                            {event.title}
+                          </Text>
+                          <Pressable
+                            accessibilityLabel={`Handlinger for ${event.title}`}
+                            accessibilityRole="button"
+                            hitSlop={8}
+                            onPress={() => setCalendarActionEventId(event.id)}
+                            style={({ pressed }) => [
+                              styles.calendarEventActionButton,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Ionicons name="ellipsis-horizontal" size={18} color={STUDOS_THEME.ink} />
+                          </Pressable>
+                        </View>
+                      ) : null}
+                      {event.creator?.displayName ? (
+                        <Text numberOfLines={1} style={styles.calendarCreatorText}>
+                          Oprettet af {event.creator.displayName}
+                        </Text>
+                      ) : null}
                       <View style={styles.calendarMetaLine}>
-                        <Ionicons name="location" size={14} color={STUDOS_THEME.blue} />
+                        <Ionicons name="calendar" size={14} color={STUDOS_THEME.red} />
                         <Text numberOfLines={1} style={styles.calendarMetaText}>
-                          {event.location}
+                          {dateParts.weekday}{eventTime ? ` kl. ${eventTime}` : ''}
                         </Text>
                       </View>
-                    ) : null}
-                    {event.creator?.displayName ? (
-                      <Text numberOfLines={1} style={styles.calendarCreatorText}>
-                        Oprettet af {event.creator.displayName}
+                      {event.location ? (
+                        <View style={styles.calendarMetaLine}>
+                          <Ionicons name="location" size={14} color={STUDOS_THEME.ink} />
+                          <Text numberOfLines={1} style={styles.calendarMetaText}>
+                            {event.location}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+
+                  {event.description ? (
+                    <Text style={styles.calendarDescription}>{event.description}</Text>
+                  ) : null}
+
+                  <Pressable
+                    accessibilityLabel={`Vis svar for ${event.title}`}
+                    accessibilityRole="button"
+                    onPress={() => setCalendarAttendanceEventId(event.id)}
+                    style={({ pressed }) => [
+                      styles.calendarStatsRow,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <View style={styles.calendarAttendeeStack}>
+                      {attendeePreview.map((person, index) => (
+                        <View
+                          key={person.memberId ? `${person.memberId}-${index}` : `attendee-${index}`}
+                          style={[
+                            styles.calendarAttendeeStackItem,
+                            index ? styles.calendarAttendeeStackItemOverlap : null,
+                            { zIndex: index + 1 },
+                          ]}
+                        >
+                          <Avatar
+                            profile={{
+                              displayName: person.displayName ?? 'Ukendt',
+                              profilePhotoUrl: person.profilePhotoUrl,
+                            }}
+                            variant="calendarAttendeeCard"
+                          />
+                        </View>
+                      ))}
+                      {attendeeOverflowCount > 0 ? (
+                        <View
+                          style={[
+                            styles.calendarAttendeeOverflowCard,
+                            attendeePreview.length ? styles.calendarAttendeeStackItemOverlap : null,
+                            { zIndex: attendeePreview.length + 1 },
+                          ]}
+                        >
+                          <Text numberOfLines={1} style={styles.calendarAttendeeOverflowText}>
+                            +{attendeeOverflowCount}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <View style={styles.calendarStatTextGroup}>
+                      <Text style={styles.calendarStatText}>{attendingCount} deltager</Text>
+                      <View style={styles.calendarStatDot} />
+                      <Text style={styles.calendarStatText}>{notAttendingCount} kan ikke</Text>
+                    </View>
+                  </Pressable>
+
+                  <View style={styles.calendarRsvpRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={responseLocked}
+                      onPress={() => respondToEvent(event.id, 'attending')}
+                      style={({ pressed }) => [
+                        styles.calendarRsvpButton,
+                        event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
+                        pressed && !responseLocked ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      {attendingLoading ? (
+                        <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                      ) : (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={17}
+                          color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.calendarRsvpText,
+                          event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                        ]}
+                      >
+                        Deltager
                       </Text>
-                    ) : null}
-                  </View>
-                </View>
-
-                {event.description ? (
-                  <Text style={styles.calendarDescription}>{event.description}</Text>
-                ) : null}
-
-                <View style={styles.calendarInviteMetaRow}>
-                  <View style={styles.calendarInviteMetaPill}>
-                    <Text style={styles.calendarInviteMetaText}>{inviteCount} inviteret</Text>
-                  </View>
-                  <View style={styles.calendarInviteMetaPill}>
-                    <Text style={styles.calendarInviteMetaText}>{pendingCount} mangler svar</Text>
-                  </View>
-                </View>
-
-                <View style={styles.calendarStatsRow}>
-                  <View style={styles.calendarAttendeePreview}>
-                    {attendeePreview.map((person) => (
-                      <Avatar
-                        key={person.memberId}
-                        profile={{
-                          displayName: person.displayName,
-                          profilePhotoUrl: person.profilePhotoUrl,
-                        }}
-                        variant="smallCircle"
-                      />
-                    ))}
-                  </View>
-                  <Text style={styles.calendarStatText}>{attendingCount} deltager</Text>
-                  <View style={styles.calendarStatDot} />
-                  <Text style={styles.calendarStatText}>{notAttendingCount} kan ikke</Text>
-                </View>
-
-                <View style={styles.calendarRsvpRow}>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={responseLocked}
-                    onPress={() => respondToEvent(event.id, 'attending')}
-                    style={({ pressed }) => [
-                      styles.calendarRsvpButton,
-                      event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
-                      pressed && !responseLocked ? styles.footerItemPressed : null,
-                    ]}
-                  >
-                    {attendingLoading ? (
-                      <ActivityIndicator color="#FFFFFF" size="small" />
-                    ) : (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={17}
-                        color={event.myRsvp === 'attending' ? '#FFFFFF' : STUDOS_THEME.red}
-                      />
-                    )}
-                    <Text
-                      style={[
-                        styles.calendarRsvpText,
-                        event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={responseLocked}
+                      onPress={() => respondToEvent(event.id, 'not_attending')}
+                      style={({ pressed }) => [
+                        styles.calendarRsvpButton,
+                        event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
+                        pressed && !responseLocked ? styles.footerItemPressed : null,
                       ]}
                     >
-                      Deltager
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={responseLocked}
-                    onPress={() => respondToEvent(event.id, 'not_attending')}
-                    style={({ pressed }) => [
-                      styles.calendarRsvpButton,
-                      event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
-                      pressed && !responseLocked ? styles.footerItemPressed : null,
-                    ]}
-                  >
-                    {notAttendingLoading ? (
-                      <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
-                    ) : (
-                      <Ionicons
-                        name="close-circle"
-                        size={17}
-                        color={event.myRsvp === 'not_attending' ? STUDOS_THEME.ink : '#65748b'}
-                      />
-                    )}
-                    <Text
-                      style={[
-                        styles.calendarRsvpText,
-                        event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
-                      ]}
-                    >
-                      Deltager ikke
-                    </Text>
-                  </Pressable>
+                      {notAttendingLoading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Ionicons
+                          name="close-circle"
+                          size={17}
+                          color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.calendarRsvpText,
+                          event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
+                        ]}
+                      >
+                        Deltager ikke
+                      </Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             );
           })}
         </View>
+        ) : (
+          <View style={styles.calendarDayEmptyState}>
+            <View style={styles.calendarDayEmptyIcon}>
+              <Ionicons name="sparkles" size={26} color={STUDOS_THEME.red} />
+            </View>
+            <Text style={styles.calendarDayEmptyTitle}>Fri bane den dag</Text>
+            <Text style={styles.calendarDayEmptyText}>
+              Vælg en dato med markering i rækken, eller opret et nyt gilde på dagen.
+            </Text>
+          </View>
+        )
       ) : (
         <View style={styles.calendarEmptyState}>
           <View style={styles.calendarEmptyIcon}>
@@ -4588,6 +6688,303 @@ function CalendarScreen({
       )}
       </Animated.ScrollView>
 
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setCalendarAttendanceEventId('')}
+        transparent
+        visible={Boolean(calendarAttendanceEvent)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk deltagere"
+            onPress={() => setCalendarAttendanceEventId('')}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.calendarAttendanceModalPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.calendarAttendanceModalTitleWrap}>
+                <Text style={styles.chatModalKicker}>Svar</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  {calendarAttendanceEvent?.title ?? 'Deltagere'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setCalendarAttendanceEventId('')}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={styles.calendarAttendanceList}
+              showsVerticalScrollIndicator={false}
+              style={styles.calendarAttendanceScroll}
+            >
+              {calendarAttendancePeople.length ? calendarAttendancePeople.map((person) => {
+                const statusConfig = {
+                  attending: {
+                    icon: 'checkmark',
+                    label: 'Deltager',
+                    tagStyle: styles.calendarAttendanceTagAttending,
+                    style: styles.calendarAttendanceStatusAttending,
+                    color: '#FFFFFF',
+                  },
+                  not_attending: {
+                    icon: 'close',
+                    label: 'Deltager ikke',
+                    tagStyle: styles.calendarAttendanceTagDeclined,
+                    style: styles.calendarAttendanceStatusDeclined,
+                    color: STUDOS_THEME.ink,
+                  },
+                  pending: {
+                    icon: 'remove',
+                    label: 'Mangler svar',
+                    tagStyle: styles.calendarAttendanceTagPending,
+                    style: styles.calendarAttendanceStatusPending,
+                    color: '#65748b',
+                  },
+                }[person.status] ?? {
+                  icon: 'remove',
+                  label: 'Mangler svar',
+                  tagStyle: styles.calendarAttendanceTagPending,
+                  style: styles.calendarAttendanceStatusPending,
+                  color: '#65748b',
+                };
+                const displayName = person.displayName ?? 'Ukendt';
+
+                return (
+                  <View
+                    accessible
+                    accessibilityLabel={`${displayName}, ${statusConfig.label}`}
+                    key={person.memberId || displayName}
+                    style={[styles.calendarAttendanceTag, statusConfig.tagStyle]}
+                  >
+                    <Avatar
+                      profile={{
+                        displayName,
+                        profilePhotoUrl: person.profilePhotoUrl,
+                      }}
+                      variant="calendarAttendanceTag"
+                    />
+                    <Text numberOfLines={1} style={styles.calendarAttendanceName}>
+                      {displayName}
+                    </Text>
+                    <View style={[styles.calendarAttendanceStatusIcon, statusConfig.style]}>
+                      <Ionicons name={statusConfig.icon} size={12} color={statusConfig.color} />
+                    </View>
+                  </View>
+                );
+              }) : (
+                <View style={styles.calendarPendingResponseEmpty}>
+                  <Ionicons name="people" size={28} color={STUDOS_THEME.blue} />
+                  <Text style={styles.calendarPendingResponseEmptyText}>
+                    Ingen deltagere er fundet endnu.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setCalendarActionEventId('')}
+        transparent
+        visible={Boolean(calendarActionEvent)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk begivenhedsmenu"
+            onPress={() => setCalendarActionEventId('')}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatConversationActionMenuHeading}>
+                <Text style={styles.chatModalKicker}>Begivenhed</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  {calendarActionEvent?.title ?? 'Gilde'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setCalendarActionEventId('')}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.chatConversationActionMenuList}>
+              {calendarActionEvent && memberOwnsEvent(calendarActionEvent) ? (
+                <>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => openEditPage(calendarActionEvent)}
+                    style={({ pressed }) => [
+                      styles.chatConversationActionMenuItem,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconWarning]}>
+                      <Ionicons name="pencil" size={18} color={STUDOS_THEME.ink} />
+                    </View>
+                    <Text style={styles.chatConversationActionMenuText}>Rediger</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      if (!calendarActionEvent) {
+                        return;
+                      }
+
+                      setDeleteEventError('');
+                      setCalendarDeleteEventId(calendarActionEvent.id);
+                      setCalendarActionEventId('');
+                    }}
+                    style={({ pressed }) => [
+                      styles.chatConversationActionMenuItem,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconDanger]}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </View>
+                    <Text style={styles.chatConversationActionMenuText}>Slet begivenhed</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                  </Pressable>
+                </>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                disabled={Boolean(reportingEventId)}
+                onPress={() => reportEvent(calendarActionEvent)}
+                style={({ pressed }) => [
+                  styles.chatConversationActionMenuItem,
+                  pressed && !reportingEventId ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconWarning]}>
+                  <Ionicons name="flag" size={18} color={STUDOS_THEME.ink} />
+                </View>
+                <Text style={styles.chatConversationActionMenuText}>Rapportér begivenhed</Text>
+                {reportingEventId === calendarActionEvent?.id ? (
+                  <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                ) : (
+                  <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                )}
+              </Pressable>
+              {calendarActionEvent?.createdByMemberId
+                && String(calendarActionEvent.createdByMemberId) !== String(activeMember?.id ?? '') ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={Boolean(blockingMemberId)}
+                  onPress={() => blockEventCreator(calendarActionEvent)}
+                  style={({ pressed }) => [
+                    styles.chatConversationActionMenuItem,
+                    pressed && !blockingMemberId ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconDanger]}>
+                    <Ionicons name="person-remove" size={18} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.chatConversationActionMenuText}>Blokér arrangør</Text>
+                  {blockingMemberId === String(calendarActionEvent.createdByMemberId) ? (
+                    <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                  ) : (
+                    <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                  )}
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deletingEventId) {
+            setCalendarDeleteEventId('');
+            setDeleteEventError('');
+          }
+        }}
+        transparent
+        visible={Boolean(calendarDeleteEvent)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk slet begivenhed"
+            disabled={Boolean(deletingEventId)}
+            onPress={() => {
+              if (!deletingEventId) {
+                setCalendarDeleteEventId('');
+                setDeleteEventError('');
+              }
+            }}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <View style={[styles.chatActionConfirmIcon, styles.chatActionConfirmIconDanger]}>
+              <Ionicons name="trash" size={24} color="#FFFFFF" />
+            </View>
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+              Slet begivenhed?
+            </Text>
+            <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+              {calendarDeleteEvent?.title
+                ? `Sletter "${calendarDeleteEvent.title}" for alle inviterede. Det kan ikke fortrydes.`
+                : 'Begivenheden slettes for alle inviterede. Det kan ikke fortrydes.'}
+            </Text>
+            {deleteEventError ? <Text style={styles.errorText}>{deleteEventError}</Text> : null}
+            <View style={styles.chatActionConfirmButtons}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={Boolean(deletingEventId)}
+                onPress={() => {
+                  setCalendarDeleteEventId('');
+                  setDeleteEventError('');
+                }}
+                style={({ pressed }) => [
+                  styles.chatActionCancelButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.chatActionCancelText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={Boolean(deletingEventId)}
+                onPress={deleteEvent}
+                style={({ pressed }) => [
+                  styles.chatActionConfirmButton,
+                  styles.chatActionConfirmButtonDanger,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                {deletingEventId ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.chatActionConfirmButtonText}>Slet</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Animated.View style={[
         styles.calendarFloatingHeader,
         calendarHeaderContainerStyle,
@@ -4595,18 +6992,41 @@ function CalendarScreen({
       ]}>
         <Animated.View style={[styles.overviewTopLine, calendarHeaderContentStyle]}>
           <CalendarTitle />
-          <Pressable
-            accessibilityLabel="Opret gilde"
-            accessibilityRole="button"
-            onPress={openCreatePage}
-            style={({ pressed }) => [
-              styles.calendarCreateButton,
-              pressed ? styles.footerItemPressed : null,
-            ]}
-          >
-            <Ionicons name="add" size={22} color="#FFFFFF" />
-            <Text style={styles.calendarCreateButtonText}>Opret</Text>
-          </Pressable>
+          <View style={styles.calendarHeaderActions}>
+            <Pressable
+              accessibilityLabel={`${pendingResponseCount} events afventer svar`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: pendingResponseCount === 0 }}
+              disabled={pendingResponseCount === 0}
+              onPress={openPendingResponsePage}
+              style={({ pressed }) => [
+                styles.calendarPendingResponseButton,
+                pendingResponseCount === 0 ? styles.calendarPendingResponseButtonDisabled : null,
+                pressed && pendingResponseCount > 0 ? styles.footerItemPressed : null,
+              ]}
+            >
+              {pendingResponseCount > 0 ? (
+                <View style={styles.calendarPendingResponseBadge}>
+                  <Text style={styles.calendarPendingResponseBadgeText}>
+                    {pendingResponseCount > 9 ? '9+' : pendingResponseCount}
+                  </Text>
+                </View>
+              ) : null}
+              <Ionicons name="hourglass-outline" size={15} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarPendingResponseText}>Svar</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Opret gilde"
+              accessibilityRole="button"
+              onPress={openCreatePage}
+              style={({ pressed }) => [
+                styles.calendarCreateButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="add" size={23} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
         </Animated.View>
       </Animated.View>
     </View>
@@ -4632,6 +7052,92 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, title }) {
         </View>
         <Text style={styles.sectionTitle}>{emptyTitle}</Text>
         <Text style={styles.feedText}>{emptyText}</Text>
+      </View>
+    </View>
+  );
+}
+
+function SettingsScreen({
+  notificationState,
+  schoolClass,
+  onEnableAndroidNotifications,
+  onSendAndroidNotificationTest,
+}) {
+  const tokenPreview = notificationState?.expoPushToken
+    ? notificationState.expoPushToken
+    : 'Ikke gemt endnu';
+
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.tabHeader}>
+        <View>
+          <Text style={styles.kicker}>{schoolClass.className}</Text>
+          <Text style={styles.title}>Indstillinger</Text>
+        </View>
+        <View style={styles.headerIcon}>
+          <Ionicons name="settings" size={28} color="#f6d36d" />
+        </View>
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="shield-checkmark" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Kontakt og moderation</Text>
+            <Text style={styles.feedText}>Kontakt Studos ved sikkerhed, rapporter eller spørgsmål.</Text>
+          </View>
+        </View>
+        <View style={styles.settingsNotificationTokenBox}>
+          <Text style={styles.settingsNotificationTokenLabel}>Support</Text>
+          <Text selectable style={styles.settingsNotificationTokenText}>{STUDOS_SUPPORT_EMAIL}</Text>
+        </View>
+        <Button
+          label="Skriv til support"
+          onPress={() => Linking.openURL(`mailto:${STUDOS_SUPPORT_EMAIL}?subject=${encodeURIComponent('Studos support')}`)}
+        />
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="notifications" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Android push</Text>
+            <Text style={styles.feedText}>Status: {notificationState?.permissionStatus ?? 'unknown'}</Text>
+          </View>
+        </View>
+
+        {notificationState?.error ? <Text style={styles.errorText}>{notificationState.error}</Text> : null}
+        {notificationState?.message ? <Text style={styles.successText}>{notificationState.message}</Text> : null}
+
+        {ANDROID_NOTIFICATIONS_ENABLED ? (
+          <>
+            <Button
+              label={notificationState?.expoPushToken ? 'Opdater Android token' : 'Aktivér Android push'}
+              loading={notificationState?.loading}
+              onPress={onEnableAndroidNotifications}
+            />
+            <Button
+              label="Send testnotifikation"
+              loading={notificationState?.testLoading}
+              onPress={onSendAndroidNotificationTest}
+            />
+            <View style={styles.settingsNotificationTokenBox}>
+              <Text style={styles.settingsNotificationTokenLabel}>Expo push token</Text>
+              <Text selectable style={styles.settingsNotificationTokenText}>{tokenPreview}</Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Android only</Text>
+            <Text style={styles.noticeText}>
+              iOS springes over, indtil Apple Developer-kontoen er klar.
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -5059,6 +7565,68 @@ function SidebarMenuIcon({ active = false, item }) {
   );
 }
 
+function AndroidNotificationPromptModal({ loading, visible, onDismiss, onEnable }) {
+  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+    return null;
+  }
+
+  return (
+    <Modal
+      animationType="fade"
+      onRequestClose={onDismiss}
+      transparent
+      visible={visible}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk notifikationer"
+          style={styles.chatModalBackdrop}
+          onPress={onDismiss}
+        />
+        <View style={[styles.chatModalPanel, styles.notificationPromptPanel]}>
+          <View style={styles.notificationPromptIcon}>
+            <Ionicons name="notifications" size={28} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.notificationPromptCopy}>
+            <Text style={styles.chatModalKicker}>Notifikationer</Text>
+            <Text style={styles.notificationPromptTitle}>Skal Studos prikke dig?</Text>
+            <Text style={styles.notificationPromptText}>
+              Få besked, når der lander nye chats og vigtige ting fra klassen.
+            </Text>
+          </View>
+          <View style={styles.notificationPromptActions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={loading}
+              onPress={onDismiss}
+              style={({ pressed }) => [
+                styles.notificationPromptSecondaryButton,
+                pressed && !loading ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.notificationPromptSecondaryText}>Ikke nu</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={loading}
+              onPress={onEnable}
+              style={({ pressed }) => [
+                styles.notificationPromptPrimaryButton,
+                pressed && !loading ? styles.footerItemPressed : null,
+                loading ? styles.primaryButtonDisabled : null,
+              ]}
+            >
+              <Text style={styles.notificationPromptPrimaryText}>
+                {loading ? 'Åbner...' : 'Slå til'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, visible }) {
   const [isRendered, setIsRendered] = useState(visible);
   const sidebarProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -5135,100 +7703,114 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
           { transform: [{ translateX: panelTranslateX }] },
         ]}
       >
-        <View style={styles.sidebarPrimaryNav}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => onSelect('profile')}
-            style={({ pressed }) => [
-              styles.sidebarMenuItem,
-              styles.sidebarProfileItem,
-              pressed ? styles.sidebarMenuItemPressed : null,
-            ]}
-          >
-            <Avatar profile={memberProfile} variant="smallCircle" />
-            <View style={styles.sidebarProfileCopy}>
-              <Text numberOfLines={1} style={styles.sidebarProfileTitle}>
-                {profileDisplayName}
-              </Text>
-              <Text style={styles.sidebarProfileSubtitle}>Min profil</Text>
-            </View>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => onSelect('classmates')}
-            style={({ pressed }) => [
-              styles.sidebarCrewFeature,
-              crewActive ? styles.sidebarCrewFeatureActive : null,
-              pressed ? styles.sidebarMenuItemPressed : null,
-            ]}
-          >
-            <View style={styles.sidebarCrewFeatureVisual}>
-              <SidebarMenuIcon
-                item={{
-                  id: 'classmates',
-                  icon: 'people-outline',
-                  activeIcon: 'people',
-                  accentColor: STUDOS_THEME.blue,
-                }}
-                active={crewActive}
-              />
-            </View>
-            <Text numberOfLines={1} style={styles.sidebarCrewFeatureTitle}>Mit crew</Text>
-            <View style={styles.sidebarCrewFeatureMetaWrap}>
-              <Text numberOfLines={1} style={styles.sidebarCrewFeatureMeta}>{crewMeta}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.red} />
-          </Pressable>
-
-          {APP_DRAWER_SECTIONS.map((section) => (
-            <View key={section.title} style={styles.sidebarNavSection}>
-              <View style={styles.sidebarNavSectionHeader}>
-                <Text style={styles.sidebarNavSectionTitle}>{section.title}</Text>
-                <View style={styles.sidebarNavSectionLine} />
+        <ScrollView
+          bounces={false}
+          contentContainerStyle={styles.sidebarPanelScrollContent}
+          showsVerticalScrollIndicator={false}
+          style={styles.sidebarPanelScroll}
+        >
+          <View style={styles.sidebarPrimaryNav}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onSelect('profile')}
+              style={({ pressed }) => [
+                styles.sidebarMenuItem,
+                styles.sidebarProfileItem,
+                pressed ? styles.sidebarMenuItemPressed : null,
+              ]}
+            >
+              <Avatar profile={memberProfile} variant="smallCircle" />
+              <View style={styles.sidebarProfileCopy}>
+                <Text numberOfLines={1} style={styles.sidebarProfileTitle}>
+                  {profileDisplayName}
+                </Text>
+                <Text style={styles.sidebarProfileSubtitle}>Min profil</Text>
               </View>
+            </Pressable>
 
-              {section.items.map((item) => {
-                const isActive = activeRoute === item.id;
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onSelect('classmates')}
+              style={({ pressed }) => [
+                styles.sidebarCrewFeature,
+                crewActive ? styles.sidebarCrewFeatureActive : null,
+                pressed ? styles.sidebarMenuItemPressed : null,
+              ]}
+            >
+              <View style={styles.sidebarCrewFeatureVisual}>
+                <SidebarMenuIcon
+                  item={{
+                    id: 'classmates',
+                    icon: 'people-outline',
+                    activeIcon: 'people',
+                    accentColor: STUDOS_THEME.blue,
+                  }}
+                  active={crewActive}
+                />
+              </View>
+              <Text numberOfLines={1} style={styles.sidebarCrewFeatureTitle}>Mit crew</Text>
+              <View style={styles.sidebarCrewFeatureMetaWrap}>
+                <Text numberOfLines={1} style={styles.sidebarCrewFeatureMeta}>{crewMeta}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.red} />
+            </Pressable>
 
-                return (
-                  <Pressable
-                    accessibilityRole="button"
-                    key={item.id}
-                    onPress={() => onSelect(item.id)}
-                    style={({ pressed }) => [
-                      styles.sidebarMenuItem,
-                      pressed ? styles.sidebarMenuItemPressed : null,
-                    ]}
-                  >
-                    <SidebarMenuIcon item={item} active={isActive} />
-                    <Text
-                      style={[
-                        styles.sidebarMenuText,
-                        isActive ? styles.sidebarMenuTextActive : null,
+            {APP_DRAWER_SECTIONS.map((section) => (
+              <View key={section.title} style={styles.sidebarNavSection}>
+                <View style={styles.sidebarNavSectionHeader}>
+                  <Text style={styles.sidebarNavSectionTitle}>{section.title}</Text>
+                  <View style={styles.sidebarNavSectionLine} />
+                </View>
+
+                {section.items.map((item) => {
+                  const isActive = activeRoute === item.id;
+
+                  return (
+                    <Pressable
+                      accessibilityRole="button"
+                      key={item.id}
+                      onPress={() => onSelect(item.id)}
+                      style={({ pressed }) => [
+                        styles.sidebarMenuItem,
+                        pressed ? styles.sidebarMenuItemPressed : null,
                       ]}
                     >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+                      <SidebarMenuIcon item={item} active={isActive} />
+                      <Text
+                        style={[
+                          styles.sidebarMenuText,
+                          isActive ? styles.sidebarMenuTextActive : null,
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ))}
+            <View style={styles.sidebarContent}>
+              <View style={styles.sidebarSectionDivider} />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => onSelect('settings')}
+                style={({ pressed }) => [
+                  styles.sidebarMenuItem,
+                  pressed ? styles.sidebarMenuItemPressed : null,
+                ]}
+              >
+                <SidebarMenuIcon item={{ id: 'settings', icon: 'settings-outline', activeIcon: 'settings', accentColor: STUDOS_THEME.blue }} />
+                <Text style={styles.sidebarMenuText}>Indstillinger</Text>
+              </Pressable>
             </View>
-          ))}
-        </View>
-        <View style={styles.sidebarContent}>
-          <View style={styles.sidebarSectionDivider} />
-          <Pressable style={styles.sidebarMenuItem}>
-            <SidebarMenuIcon item={{ id: 'settings', icon: 'settings-outline', activeIcon: 'settings', accentColor: STUDOS_THEME.blue }} />
-            <Text style={styles.sidebarMenuText}>Indstillinger</Text>
-          </Pressable>
-        </View>
+          </View>
+        </ScrollView>
       </Animated.View>
     </View>
   );
 }
 
-function FooterNav({ activeTab, onChangeTab }) {
+function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
   return (
     <View style={styles.footerNav}>
       {APP_TABS.map((tab, index) => {
@@ -5236,9 +7818,12 @@ function FooterNav({ activeTab, onChangeTab }) {
         const isCenterAction = tab.id === 'overview';
         const isFirstItem = index === 0;
         const isLastItem = index === APP_TABS.length - 1;
+        const tabUnreadCount = tab.id === 'chat' ? chatUnreadCount : 0;
+        const hasUnreadBadge = tabUnreadCount > 0;
 
         return (
           <Pressable
+            accessibilityLabel={hasUnreadBadge ? `${tab.label}, ${tabUnreadCount} ulæste` : tab.label}
             accessibilityRole="button"
             hitSlop={6}
             key={tab.id}
@@ -5265,11 +7850,20 @@ function FooterNav({ activeTab, onChangeTab }) {
                 </Text>
               </View>
             ) : (
-              <Ionicons
-                name={isActive ? tab.activeIcon : tab.icon}
-                size={25}
-                color={isActive ? '#FF6F73' : '#172143'}
-              />
+              <View style={styles.footerIconWrap}>
+                <Ionicons
+                  name={isActive ? tab.activeIcon : tab.icon}
+                  size={25}
+                  color={isActive ? '#FF6F73' : '#172143'}
+                />
+                {hasUnreadBadge ? (
+                  <View style={styles.footerUnreadBadge}>
+                    <Text numberOfLines={1} style={styles.footerUnreadText}>
+                      {formatUnreadBadgeCount(tabUnreadCount)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             )}
             {!isCenterAction ? (
               <Text style={[styles.footerLabel, isActive ? styles.footerLabelActive : null]}>
@@ -5573,17 +8167,22 @@ function AccountProfileScreen({
   );
 }
 
-function OverviewScreen({ activeMember, countdown }) {
+function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }) {
   const [selectedMood, setSelectedMood] = useState('klar');
   const [moodModalOpen, setMoodModalOpen] = useState(false);
-  const [moodUpdatedAt, setMoodUpdatedAt] = useState(() => new Date());
+  const [moodUpdatedAt, setMoodUpdatedAt] = useState(null);
+  const [currentMoodDayKey, setCurrentMoodDayKey] = useState(() => moodDayKeyFor());
+  const [completedClipIds, setCompletedClipIds] = useState([]);
+  const [selectedClipId, setSelectedClipId] = useState(null);
+  const [studosCodeModalOpen, setStudosCodeModalOpen] = useState(false);
   const profileName = activeMember?.displayName
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
+  const personalStudosCode = activeMember?.personalCode ?? 'Mangler';
   const overviewStats = [
-    { id: 'clips', icon: 'ribbon', label: 'Klip', value: '12', color: STUDOS_THEME.yellow },
     { id: 'challenges', icon: 'flash', label: 'Challenges', value: '4', color: STUDOS_THEME.red },
-    { id: 'vibes', icon: 'heart', label: 'Vibes', value: '21', color: STUDOS_THEME.blue },
+    { id: 'parties', icon: 'wine', label: 'Gilder', value: '3', color: STUDOS_THEME.yellow },
+    { id: 'memories', icon: 'images', label: 'Minder', value: '21', color: STUDOS_THEME.blue },
   ];
   const overviewMoods = [
     { id: 'klar', icon: 'sunny', label: 'Klar' },
@@ -5594,10 +8193,104 @@ function OverviewScreen({ activeMember, countdown }) {
     { id: 'chill', icon: 'leaf', label: 'Chill' },
   ];
   const activeMood = overviewMoods.find((mood) => mood.id === selectedMood) ?? overviewMoods[0];
+  const todayCalendarEvents = useMemo(() => {
+    const todayKey = formatInputDate(new Date());
+
+    return uniqueById(events ?? [])
+      .filter((event) => eventDayKeyFor(event) === todayKey)
+      .sort((left, right) => eventSortTime(left) - eventSortTime(right));
+  }, [events]);
+  const nextTodayCalendarEvent = todayCalendarEvents[0] ?? null;
+  const visibleAdditionalTodayCalendarEvents = todayCalendarEvents.slice(1, 4);
+  const hiddenTodayCalendarEventCount = Math.max(0, todayCalendarEvents.length - 4);
+  const hasCheckedInToday = Boolean(moodUpdatedAt) && moodDayKeyFor(moodUpdatedAt) === currentMoodDayKey;
+  const overviewMoodQuestion = hasCheckedInToday ? 'Din vibe er live 🥳' : 'Hvordan er din vibe i dag?';
+  const overviewMoodUpdatedText = hasCheckedInToday
+    ? `Sidst opdateret: ${formatMoodUpdatedAt(moodUpdatedAt)}`
+    : 'Ikke checket ind endnu';
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setCurrentMoodDayKey(moodDayKeyFor());
+    }, millisecondsUntilNextMidnight());
+
+    return () => clearTimeout(timeout);
+  }, [currentMoodDayKey]);
+
   const updateMood = (moodId) => {
     setSelectedMood(moodId);
     setMoodUpdatedAt(new Date());
     setMoodModalOpen(false);
+  };
+  const selectedClipIndex = CHAT_THREAD_HEADER_COUNTERS.findIndex((counter) => counter.id === selectedClipId);
+  const selectedClip = selectedClipIndex >= 0 ? CHAT_THREAD_HEADER_COUNTERS[selectedClipIndex] : null;
+  const selectedClipCompleted = selectedClip ? completedClipIds.includes(selectedClip.id) : false;
+  const updateClipCompleted = (completed) => {
+    if (!selectedClip) {
+      return;
+    }
+
+    setCompletedClipIds((current) => {
+      if (completed) {
+        return current.includes(selectedClip.id) ? current : [...current, selectedClip.id];
+      }
+
+      return current.filter((id) => id !== selectedClip.id);
+    });
+    setSelectedClipId(null);
+  };
+  const renderTodayCalendarEvent = (event, featured = false) => {
+    const eventTime = formatCalendarTime(event.startsAt);
+
+    return (
+      <Pressable
+        accessibilityHint="Åbner kalenderen indtil eventsiderne er klar"
+        accessibilityLabel={`Åbn event ${event.title || 'Aftale'}`}
+        accessibilityRole="button"
+        key={event.id}
+        onPress={onOpenCalendar}
+        style={({ pressed }) => [
+          styles.overviewTodayCalendarEventRow,
+          featured ? styles.overviewTodayCalendarEventRowFeatured : null,
+          pressed ? styles.footerItemPressed : null,
+        ]}
+      >
+        <View
+          style={[
+            styles.overviewTodayCalendarTimePill,
+            featured ? styles.overviewTodayCalendarTimePillFeatured : null,
+          ]}
+        >
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.overviewTodayCalendarTimeText,
+              featured ? styles.overviewTodayCalendarTimeTextFeatured : null,
+            ]}
+          >
+            {eventTime || 'I dag'}
+          </Text>
+        </View>
+        <View style={styles.overviewTodayCalendarEventCopy}>
+          <Text numberOfLines={1} style={styles.overviewTodayCalendarEventTitle}>
+            {event.title || 'Aftale'}
+          </Text>
+          {event.location ? (
+            <View style={styles.overviewTodayCalendarEventMetaRow}>
+              <Ionicons name="location" size={11} color={STUDOS_THEME.red} />
+              <Text numberOfLines={1} style={styles.overviewTodayCalendarEventMeta}>
+                {event.location}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={featured ? STUDOS_THEME.red : '#A9B3C2'}
+        />
+      </Pressable>
+    );
   };
 
   return (
@@ -5612,72 +8305,246 @@ function OverviewScreen({ activeMember, countdown }) {
         </View>
       </View>
       <View style={styles.overviewStudosCard}>
-        <View style={styles.overviewStudosIdentity}>
-          <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
-          <View style={styles.overviewStudosCopy}>
-            <Text numberOfLines={1} style={styles.overviewStudosKicker}>
-              Mit Studos
-            </Text>
-            <Text numberOfLines={1} style={styles.overviewStudosName}>
-              {profileName}
-            </Text>
-            <View style={styles.overviewStudosAwardRow}>
-              <View style={styles.overviewStudosAwardIcon}>
-                <View style={styles.overviewStudosAwardRibbonRow}>
-                  <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonBlue]} />
-                  <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonRed]} />
-                </View>
-                <View style={styles.overviewStudosAwardMedal}>
-                  <View style={styles.overviewStudosAwardMedalDot} />
-                </View>
+        <View pointerEvents="none" style={styles.overviewStudosAccentRail}>
+          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentRed]} />
+          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentYellow]} />
+          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentBlue]} />
+        </View>
+        <Pressable
+          accessibilityLabel="Vis QR-kode"
+          accessibilityRole="button"
+          disabled={!activeMember?.personalCode}
+          onPress={() => setStudosCodeModalOpen(true)}
+          style={({ pressed }) => [
+            styles.overviewStudosQrCornerButton,
+            !activeMember?.personalCode ? styles.overviewStudosQrButtonDisabled : null,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="qr-code" size={18} color={STUDOS_THEME.ink} />
+        </Pressable>
+        <View style={styles.overviewStudosTopRow}>
+          <View style={styles.overviewStudosIdentity}>
+            <View style={styles.overviewStudosCopy}>
+              <View style={styles.overviewStudosAvatarTop}>
+                <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
               </View>
-              <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
-                Klassens stræber
+              <Text numberOfLines={1} style={styles.overviewStudosName}>
+                {profileName}
               </Text>
+              <View style={styles.overviewStudosAwardRow}>
+                <View style={styles.overviewStudosAwardIcon}>
+                  <View style={styles.overviewStudosAwardRibbonRow}>
+                    <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonBlue]} />
+                    <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonRed]} />
+                  </View>
+                  <View style={styles.overviewStudosAwardMedal}>
+                    <View style={styles.overviewStudosAwardMedalDot} />
+                  </View>
+                </View>
+                <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
+                  Skal du have et hueklip?
+                </Text>
+              </View>
             </View>
           </View>
+          <View style={styles.overviewStudosStats}>
+            {overviewStats.map((stat) => (
+              <View key={stat.id} style={styles.overviewStudosStat}>
+                <Ionicons name={stat.icon} size={14} color={stat.color} />
+                <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
+                <Text numberOfLines={1} style={styles.overviewStudosStatLabel}>{stat.label}</Text>
+              </View>
+            ))}
+          </View>
         </View>
-        <View style={styles.overviewStudosStats}>
-          {overviewStats.map((stat) => (
-            <View key={stat.id} style={styles.overviewStudosStat}>
-              <Ionicons name={stat.icon} size={14} color={stat.color} />
-              <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
-              <Text numberOfLines={1} style={styles.overviewStudosStatLabel}>{stat.label}</Text>
-            </View>
-          ))}
+        <View style={styles.overviewClipIconRow}>
+          {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
+            const completed = completedClipIds.includes(counter.id);
+
+            return (
+              <Pressable
+                accessibilityLabel={`Klip ${index + 1}${completed ? ', gennemført' : ', ikke gennemført'}`}
+                accessibilityRole="button"
+                hitSlop={6}
+                key={counter.id}
+                onPress={() => setSelectedClipId(counter.id)}
+                style={({ pressed }) => [
+                  styles.overviewClipIconButton,
+                  completed ? styles.overviewClipIconButtonCompleted : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                {counter.id === 'wave' ? (
+                  <MaterialCommunityIcons
+                    name="waves"
+                    size={24}
+                    color={completed ? STUDOS_THEME.red : STUDOS_THEME.ink}
+                  />
+                ) : (
+                  <Ionicons
+                    name={counter.icon}
+                    size={23}
+                    color={completed ? STUDOS_THEME.red : STUDOS_THEME.ink}
+                  />
+                )}
+                {completed ? (
+                  <View style={styles.overviewClipCompletedMark}>
+                    <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                  </View>
+                ) : (
+                  <View style={styles.overviewClipAddMark}>
+                    <Ionicons name="add" size={14} color={STUDOS_THEME.ink} />
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
         </View>
-      </View>
-      <View style={styles.overviewMoodCard}>
-        <View style={styles.overviewMoodHeader}>
+        <View style={styles.overviewStudosMoodRow}>
           <View style={styles.overviewMoodHeaderCopy}>
             <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
-              Hvordan er stemningen i dag?
+              {overviewMoodQuestion}
             </Text>
             <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
-              Sidst opdateret: {formatMoodUpdatedAt(moodUpdatedAt)}
+              {overviewMoodUpdatedText}
             </Text>
           </View>
           <Pressable
+            accessibilityLabel="Vælg stemning"
             accessibilityRole="button"
             onPress={() => setMoodModalOpen(true)}
             style={({ pressed }) => [
-              styles.overviewMoodUpdateButton,
+              styles.overviewMoodCurrentBadge,
+              hasCheckedInToday
+                ? styles.overviewMoodCurrentBadgeCheckedIn
+                : styles.overviewMoodCurrentBadgeNeedsCheckIn,
               pressed ? styles.footerItemPressed : null,
             ]}
           >
-            <Ionicons name="sparkles" size={14} color="#FFFFFF" />
-            <Text style={styles.overviewMoodUpdateText}>Check ind</Text>
-          </Pressable>
-        </View>
-        <View style={styles.overviewMoodCurrentRow}>
-          <View style={styles.overviewMoodCurrentBadge}>
-            <Ionicons name={activeMood.icon} size={18} color={STUDOS_THEME.ink} />
-            <Text numberOfLines={1} style={styles.overviewMoodCurrentText}>
+            <Ionicons name={activeMood.icon} size={18} color="#FFFFFF" />
+            <Text numberOfLines={1} style={[styles.overviewMoodCurrentText, styles.overviewMoodCurrentTextOnAccent]}>
               {activeMood.label}
             </Text>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
+          </Pressable>
+        </View>
+        <View pointerEvents="none" style={styles.overviewStudosBottomWave}>
+          {OVERVIEW_STUDOS_BOTTOM_WAVE_CURVES.map((curve) => (
+            <View
+              key={curve}
+              style={[
+                styles.overviewStudosBottomWaveCurve,
+                curve % 2 ? styles.overviewStudosBottomWaveCurveDeep : styles.overviewStudosBottomWaveCurveSoft,
+              ]}
+            />
+          ))}
         </View>
       </View>
+      <View style={styles.overviewTodayCalendarCard}>
+        <View style={styles.overviewTodayCalendarHeader}>
+          <CalendarTitleGraphic iconSize={24} style={styles.overviewTodayCalendarGraphic} />
+          <View style={styles.overviewTodayCalendarCopy}>
+            <Text numberOfLines={1} style={styles.overviewTodayCalendarTitle}>
+              Min kalender i dag
+            </Text>
+            <Text numberOfLines={1} style={styles.overviewTodayCalendarMeta}>
+              {todayCalendarEvents.length
+                ? `${todayCalendarEvents.length} ${todayCalendarEvents.length === 1 ? 'aftale' : 'aftaler'} på planen`
+                : 'Ingen aftaler i dag'}
+            </Text>
+          </View>
+          <View style={styles.overviewTodayCalendarCountPill}>
+            <Text style={styles.overviewTodayCalendarCountText}>{todayCalendarEvents.length}</Text>
+          </View>
+        </View>
+        {nextTodayCalendarEvent ? (
+          <View style={styles.overviewTodayCalendarList}>
+            <View style={styles.overviewTodayCalendarSection}>
+              <Text style={styles.overviewTodayCalendarSectionTitle}>Næste event</Text>
+              {renderTodayCalendarEvent(nextTodayCalendarEvent, true)}
+            </View>
+            <View style={styles.overviewTodayCalendarSection}>
+              <Text style={styles.overviewTodayCalendarSectionTitle}>Flere events:</Text>
+              {visibleAdditionalTodayCalendarEvents.length ? (
+                visibleAdditionalTodayCalendarEvents.map((event) => renderTodayCalendarEvent(event))
+              ) : (
+                <Text style={styles.overviewTodayCalendarNoMoreText}>
+                  Du har ikke flere planlagte events i dag.
+                </Text>
+              )}
+            </View>
+            {hiddenTodayCalendarEventCount ? (
+              <Text style={styles.overviewTodayCalendarMoreText}>
+                +{hiddenTodayCalendarEventCount} skjult i kalenderen
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <View style={styles.overviewTodayCalendarEmpty}>
+            <Text style={styles.overviewTodayCalendarEmptyText}>
+              Dagen er fri. Perfekt til spontane planer.
+            </Text>
+          </View>
+        )}
+        <Pressable
+          accessibilityRole="button"
+          onPress={onOpenCalendar}
+          style={({ pressed }) => [
+            styles.overviewTodayCalendarAction,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Text style={styles.overviewTodayCalendarActionText}>Se hele kalenderen</Text>
+          <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.red} />
+        </Pressable>
+      </View>
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setStudosCodeModalOpen(false)}
+        transparent
+        visible={studosCodeModalOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk Studos-kode"
+            style={styles.chatModalBackdrop}
+            onPress={() => setStudosCodeModalOpen(false)}
+          />
+          <View style={[styles.chatModalPanel, styles.overviewStudosCodeModalPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View>
+                <Text style={styles.chatModalKicker}>Del mit Studos</Text>
+                <Text style={styles.chatModalTitle}>Scan og tilføj</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => setStudosCodeModalOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={22} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <View style={styles.overviewStudosShareCard}>
+              <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
+              <Text numberOfLines={1} style={styles.overviewStudosShareName}>
+                {profileName}
+              </Text>
+              <View style={styles.overviewStudosShareCodePill}>
+                <Text selectable style={styles.overviewStudosShareCodeText}>
+                  {personalStudosCode}
+                </Text>
+              </View>
+              <StudosCodeQr value={personalStudosCode} />
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal
         animationType="fade"
         onRequestClose={() => setMoodModalOpen(false)}
@@ -5753,38 +8620,150 @@ function OverviewScreen({ activeMember, countdown }) {
           </View>
         </View>
       </Modal>
-      <View style={styles.overviewClipCard}>
-        <View style={styles.overviewClipCopy}>
-          <Text numberOfLines={1} style={styles.overviewClipTitle}>
-            Skal du have et klip?
-          </Text>
-          <View style={styles.overviewClipIconRow}>
-          {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => (
-            <React.Fragment key={counter.id}>
-              <View style={styles.overviewClipIcon}>
-                {counter.id === 'wave' ? (
-                  <MaterialCommunityIcons name="waves" size={16} color={STUDOS_THEME.ink} />
-                ) : (
-                  <Ionicons name={counter.icon} size={15} color={STUDOS_THEME.ink} />
-                )}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setSelectedClipId(null)}
+        transparent
+        visible={Boolean(selectedClip)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk klipstatus"
+            style={styles.chatModalBackdrop}
+            onPress={() => setSelectedClipId(null)}
+          />
+          <View style={[styles.chatModalPanel, styles.overviewClipModalPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View>
+                <Text style={styles.chatModalKicker}>Klipstatus</Text>
+                <Text style={styles.chatModalTitle}>
+                  {selectedClip ? `Klip ${selectedClipIndex + 1}` : 'Klip'}
+                </Text>
               </View>
-              {index < CHAT_THREAD_HEADER_COUNTERS.length - 1 ? (
-                <View style={styles.overviewClipDot} />
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => setSelectedClipId(null)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={22} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <View style={styles.overviewClipModalIconWrap}>
+              {selectedClip?.id === 'wave' ? (
+                <MaterialCommunityIcons name="waves" size={28} color={STUDOS_THEME.ink} />
+              ) : selectedClip ? (
+                <Ionicons name={selectedClip.icon} size={28} color={STUDOS_THEME.ink} />
               ) : null}
-            </React.Fragment>
-          ))}
+            </View>
+            <View style={styles.overviewClipModalOptions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => updateClipCompleted(true)}
+                style={({ pressed }) => [
+                  styles.overviewClipModalOption,
+                  selectedClipCompleted ? styles.overviewClipModalOptionActive : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons
+                  name={selectedClipCompleted ? 'checkmark-circle' : 'checkmark-circle-outline'}
+                  size={22}
+                  color={selectedClipCompleted ? STUDOS_THEME.red : STUDOS_THEME.ink}
+                />
+                <Text style={[
+                  styles.overviewClipModalOptionText,
+                  selectedClipCompleted ? styles.overviewClipModalOptionTextActive : null,
+                ]}>
+                  Gennemført
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => updateClipCompleted(false)}
+                style={({ pressed }) => [
+                  styles.overviewClipModalOption,
+                  !selectedClipCompleted ? styles.overviewClipModalOptionActive : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons
+                  name={!selectedClipCompleted ? 'ellipse' : 'ellipse-outline'}
+                  size={22}
+                  color={!selectedClipCompleted ? STUDOS_THEME.red : STUDOS_THEME.ink}
+                />
+                <Text style={[
+                  styles.overviewClipModalOptionText,
+                  !selectedClipCompleted ? styles.overviewClipModalOptionTextActive : null,
+                ]}>
+                  Ikke gennemført
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </View>
-        <Pressable
-          accessibilityLabel="Tilføj klip"
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.overviewClipAddButton,
-            pressed ? styles.footerItemPressed : null,
-          ]}
-        >
-          <Text style={styles.overviewClipAddText}>+</Text>
-        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function StudosCodeQr({ value }) {
+  const qr = useMemo(() => {
+    try {
+      const cells = encodeQrCells(value || 'STUDOS');
+      const size = Math.sqrt(cells.length);
+
+      if (!Number.isInteger(size)) {
+        return { cells: [], size: 0, moduleSize: 0 };
+      }
+
+      return {
+        cells: Array.from(cells),
+        size,
+        moduleSize: Math.max(3, Math.floor(156 / size)),
+      };
+    } catch {
+      return { cells: [], size: 0, moduleSize: 0 };
+    }
+  }, [value]);
+
+  if (!qr.size) {
+    return (
+      <View style={styles.overviewStudosQrFallback}>
+        <Ionicons name="qr-code" size={56} color={STUDOS_THEME.ink} />
+      </View>
+    );
+  }
+
+  const qrSize = qr.size * qr.moduleSize;
+
+  return (
+    <View style={styles.overviewStudosQrShell}>
+      <View style={[styles.overviewStudosQrGrid, { width: qrSize, height: qrSize }]}>
+        {qr.cells.map((cell, index) => {
+          if (!cell) {
+            return null;
+          }
+
+          return (
+            <View
+              key={`${index}`}
+              style={[
+                styles.overviewStudosQrCell,
+                {
+                  left: (index % qr.size) * qr.moduleSize,
+                  top: Math.floor(index / qr.size) * qr.moduleSize,
+                  width: qr.moduleSize,
+                  height: qr.moduleSize,
+                },
+              ]}
+            />
+          );
+        })}
       </View>
     </View>
   );
@@ -5823,20 +8802,26 @@ function ChatTitle() {
   );
 }
 
+function CalendarTitleGraphic({ iconSize = 29, style }) {
+  return (
+    <View style={[styles.calendarTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.calendarTitleIconBack} />
+      <View style={styles.calendarTitleIconFace}>
+        <Ionicons name="calendar-clear" size={iconSize} color={STUDOS_THEME.ink} />
+        <View style={styles.calendarTitleIconDate}>
+          <Text style={styles.calendarTitleIconDateText}>19</Text>
+        </View>
+      </View>
+      <View style={styles.calendarTitleIconDot} />
+    </View>
+  );
+}
+
 function CalendarTitle() {
   return (
     <View accessible accessibilityLabel="Kalender" style={styles.overviewPageTitleWrap}>
       <Text style={styles.overviewPageTitleRest}>Kalender</Text>
-      <View style={styles.calendarTitleGraphic} pointerEvents="none">
-        <View style={styles.calendarTitleIconBack} />
-        <View style={styles.calendarTitleIconFace}>
-          <Ionicons name="calendar-clear" size={29} color={STUDOS_THEME.ink} />
-          <View style={styles.calendarTitleIconDate}>
-            <Text style={styles.calendarTitleIconDateText}>19</Text>
-          </View>
-        </View>
-        <View style={styles.calendarTitleIconDot} />
-      </View>
+      <CalendarTitleGraphic />
     </View>
   );
 }
@@ -5953,6 +8938,14 @@ function Avatar({ profile, variant }) {
       ? styles.avatarImageChatMessage
     : variant === 'chatCircle'
       ? styles.avatarImageChatCircle
+      : variant === 'calendarCreator'
+        ? styles.avatarImageCalendarCreator
+      : variant === 'calendarPendingResponseCreator'
+        ? styles.avatarImageCalendarPendingResponseCreator
+      : variant === 'calendarAttendanceTag'
+        ? styles.avatarImageCalendarAttendanceTag
+      : variant === 'calendarAttendeeCard'
+        ? styles.avatarImageCalendarAttendeeCard
       : variant === 'smallCircle'
         ? styles.avatarImageSmallCircle
         : styles.avatarImage;
@@ -5962,6 +8955,14 @@ function Avatar({ profile, variant }) {
       ? styles.avatarFallbackChatMessage
     : variant === 'chatCircle'
       ? styles.avatarFallbackChatCircle
+      : variant === 'calendarCreator'
+        ? styles.avatarFallbackCalendarCreator
+      : variant === 'calendarPendingResponseCreator'
+        ? styles.avatarFallbackCalendarPendingResponseCreator
+      : variant === 'calendarAttendanceTag'
+        ? styles.avatarFallbackCalendarAttendanceTag
+      : variant === 'calendarAttendeeCard'
+        ? styles.avatarFallbackCalendarAttendeeCard
       : variant === 'smallCircle'
         ? styles.avatarFallbackSmallCircle
         : styles.avatarFallback;
@@ -5971,6 +8972,14 @@ function Avatar({ profile, variant }) {
       ? styles.avatarTextChatMessage
     : variant === 'chatCircle'
       ? styles.avatarTextChatCircle
+      : variant === 'calendarCreator'
+        ? styles.avatarTextCalendarCreator
+      : variant === 'calendarPendingResponseCreator'
+        ? styles.avatarTextCalendarPendingResponseCreator
+      : variant === 'calendarAttendanceTag'
+        ? styles.avatarTextCalendarAttendanceTag
+      : variant === 'calendarAttendeeCard'
+        ? styles.avatarTextCalendarAttendeeCard
       : variant === 'smallCircle'
         ? styles.avatarTextSmallCircle
       : styles.avatarText;
@@ -6035,6 +9044,13 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 20,
     paddingTop: APP_SCREEN_TOP_PADDING,
+  },
+  appScreenDetached: {
+    flex: 1,
+  },
+  appScreenCalendarUnderFooter: {
+    marginBottom: -APP_FOOTER_HEIGHT,
+    paddingBottom: 0,
   },
   appScreenOverlayHost: {
     position: 'relative',
@@ -6167,8 +9183,8 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    elevation: 30,
-    zIndex: 30,
+    elevation: 70,
+    zIndex: 70,
   },
   sidebarDim: {
     ...StyleSheet.absoluteFillObject,
@@ -6183,11 +9199,18 @@ const styles = StyleSheet.create({
     height: '100%',
     overflow: 'hidden',
     backgroundColor: '#FFFFFF',
+    zIndex: 1,
+  },
+  sidebarPanelScroll: {
+    flex: 1,
+  },
+  sidebarPanelScrollContent: {
+    flexGrow: 1,
+    gap: 14,
     justifyContent: 'space-between',
     paddingHorizontal: 14,
     paddingTop: 12,
     paddingBottom: 10,
-    zIndex: 1,
   },
   sidebarPrimaryNav: {
     flexShrink: 1,
@@ -6645,6 +9668,35 @@ const styles = StyleSheet.create({
   calendarScreenScroll: {
     flex: 1,
   },
+  calendarSubpageModalHost: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  calendarSubpageModalContent: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  calendarSubpageDraggable: {
+    flex: 1,
+    width: '100%',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: -12, height: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 18,
+  },
+  calendarSubpageFullscreen: {
+    flex: 1,
+    flexGrow: 1,
+    minHeight: 0,
+    position: 'relative',
+    backgroundColor: '#F1FBF8',
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingTop: APP_SCREEN_TOP_PADDING,
+    paddingBottom: APP_FOOTER_PADDING_BOTTOM || 16,
+  },
   calendarScreenScrollContent: {
     flexGrow: 1,
     gap: 16,
@@ -6673,9 +9725,95 @@ const styles = StyleSheet.create({
   },
   calendarGridScrollContent: {
     flexGrow: 1,
-    gap: 16,
+    gap: 12,
     paddingTop: 72,
-    paddingBottom: 16,
+    paddingBottom: APP_FOOTER_HEIGHT + 16,
+  },
+  calendarDayRailBlock: {
+    gap: 5,
+    marginHorizontal: -APP_SCREEN_PADDING,
+  },
+  calendarMonthLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 1,
+    justifyContent: 'center',
+    minHeight: 22,
+    paddingHorizontal: APP_SCREEN_PADDING,
+  },
+  calendarMonthLineTitle: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 0,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+    maxWidth: '72%',
+    textAlign: 'center',
+  },
+  calendarMonthLineButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+  },
+  calendarDayRailContent: {
+    gap: CALENDAR_DAY_RAIL_GAP,
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingBottom: 0,
+  },
+  calendarDayRailItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: CALENDAR_DAY_RAIL_ITEM_WIDTH,
+    minHeight: 44,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+    paddingHorizontal: 3,
+    paddingVertical: 2,
+  },
+  calendarDayRailItemActive: {
+    backgroundColor: 'transparent',
+  },
+  calendarDayRailItemToday: {
+    backgroundColor: 'transparent',
+  },
+  calendarDayRailItemMuted: {
+    opacity: 0.44,
+  },
+  calendarDayRailWeekday: {
+    color: '#65748b',
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 10,
+    textTransform: 'uppercase',
+  },
+  calendarDayRailNumber: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 21,
+  },
+  calendarDayRailTextActive: {
+    color: STUDOS_THEME.ink,
+  },
+  calendarDayRailSignal: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(23, 33, 67, 0.22)',
+    marginTop: 3,
+  },
+  calendarDayRailSignalFilled: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: STUDOS_THEME.red,
   },
   calendarHeader: {
     alignItems: 'flex-start',
@@ -6711,107 +9849,366 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     maxWidth: 260,
   },
-  calendarCreateButton: {
+  calendarHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+  },
+  calendarPendingResponseButton: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 5,
-    minHeight: 40,
-    borderRadius: 20,
+    justifyContent: 'center',
+    minHeight: 36,
+    borderColor: '#DDE8E5',
+    borderRadius: 18,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    position: 'relative',
+  },
+  calendarPendingResponseButtonDisabled: {
+    opacity: 0.48,
+  },
+  calendarPendingResponseText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  calendarPendingResponseBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    minWidth: 20,
+    height: 20,
+    borderColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 2,
     backgroundColor: STUDOS_THEME.red,
-    paddingHorizontal: 13,
-    shadowColor: '#C74A52',
+    paddingHorizontal: 4,
+    zIndex: 2,
+  },
+  calendarPendingResponseBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 11,
+  },
+  calendarPendingResponsePage: {
+    gap: 12,
+  },
+  calendarPendingResponsePageSummary: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  calendarPendingResponseList: {
+    gap: 9,
+    paddingBottom: 2,
+  },
+  calendarPendingResponseRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 64,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  calendarPendingResponseDateStack: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    minHeight: 56,
+    position: 'relative',
+  },
+  calendarPendingResponseDate: {
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    width: 42,
+    minHeight: 46,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingLeft: 7,
+    paddingTop: 5,
+  },
+  calendarPendingResponseCreatorAvatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -8,
+    bottom: -3,
+    width: 26,
+    height: 26,
+    borderColor: '#F7FAFA',
+    borderRadius: 13,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  calendarPendingResponseDateDay: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+    textAlign: 'left',
+  },
+  calendarPendingResponseDateMonth: {
+    color: '#65748b',
+    fontSize: 7.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 9,
+    textAlign: 'left',
+    textTransform: 'uppercase',
+  },
+  calendarPendingResponseCopy: {
+    flex: 1,
+    gap: 2,
+    marginLeft: 6,
+    minWidth: 0,
+  },
+  calendarPendingResponseTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  calendarPendingResponseMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+    textTransform: 'capitalize',
+  },
+  calendarPendingResponseActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  calendarPendingResponseActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+  },
+  calendarPendingResponseActionAccept: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  calendarPendingResponseActionDecline: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  calendarPendingResponseEmpty: {
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 96,
+    justifyContent: 'center',
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 16,
+  },
+  calendarPendingResponseEmptyText: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  calendarCreateButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: STUDOS_THEME.yellow,
+    shadowColor: '#D9A83B',
     shadowOffset: { width: 0, height: 7 },
     shadowOpacity: 0.22,
     shadowRadius: 12,
     elevation: 5,
   },
-  calendarCreateButtonText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
   calendarEventList: {
     gap: 12,
   },
   calendarEventCard: {
-    gap: 12,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
-    padding: 13,
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.1,
     shadowRadius: 17,
     elevation: 5,
   },
+  calendarEventCoverWrap: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: 2.35,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    backgroundColor: '#F7FAFA',
+    overflow: 'visible',
+  },
   calendarEventCoverImage: {
     width: '100%',
-    aspectRatio: 16 / 9,
-    borderRadius: 8,
+    height: '100%',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
     backgroundColor: '#F7FAFA',
+  },
+  calendarEventCoverShade: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    backgroundColor: 'rgba(12, 18, 32, 0.22)',
+  },
+  calendarEventCoverTitleBlock: {
+    position: 'absolute',
+    right: 54,
+    bottom: 8,
+    left: 14,
+    maxWidth: '78%',
+  },
+  calendarEventCoverTitleBlockWithAvatar: {
+    left: 104,
+  },
+  calendarEventCoverTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 21,
+    textShadowColor: 'rgba(12, 18, 32, 0.55)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  calendarEventCoverActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderColor: 'rgba(255, 255, 255, 0.34)',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(12, 18, 32, 0.58)',
+  },
+  calendarEventCreatorAvatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 16,
+    bottom: -26,
+    width: 76,
+    height: 76,
+    borderColor: '#FFFFFF',
+    borderRadius: 38,
+    borderWidth: 3,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.18,
+    shadowRadius: 11,
+    elevation: 6,
+  },
+  calendarEventBody: {
+    gap: 10,
+    padding: 12,
+    paddingTop: 34,
   },
   calendarEventTopRow: {
     alignItems: 'flex-start',
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
+  },
+  calendarEventTopRowCentered: {
+    alignItems: 'center',
   },
   calendarDateBadge: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 58,
-    minHeight: 64,
+    marginTop: 5,
+    width: 49,
+    minHeight: 54,
     borderColor: '#FFE1B1',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFF8E8',
   },
+  calendarDateBadgeUnderAvatar: {
+    marginLeft: 14,
+    marginTop: 0,
+  },
   calendarDateDay: {
     color: STUDOS_THEME.red,
-    fontSize: 24,
+    fontSize: 19,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 27,
+    lineHeight: 22,
   },
   calendarDateMonth: {
     color: STUDOS_THEME.ink,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
   calendarEventCopy: {
     flex: 1,
-    gap: 5,
+    gap: 4,
     minWidth: 0,
+  },
+  calendarEventCopyBesideDate: {
+    justifyContent: 'center',
+    minHeight: 54,
   },
   calendarEventTitleRow: {
     alignItems: 'flex-start',
     flexDirection: 'row',
     gap: 8,
   },
+  calendarEventActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+  },
   calendarEventTitle: {
     color: STUDOS_THEME.ink,
     flex: 1,
-    fontSize: 18,
+    fontSize: 15.5,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 22,
-  },
-  calendarEventTypePill: {
-    borderRadius: 999,
-    backgroundColor: STUDOS_THEME.blue,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  calendarEventTypeText: {
-    color: STUDOS_THEME.ink,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
-    textTransform: 'uppercase',
+    lineHeight: 19,
   },
   calendarMetaLine: {
     alignItems: 'center',
@@ -6821,14 +10218,14 @@ const styles = StyleSheet.create({
   calendarMetaText: {
     color: '#46546B',
     flex: 1,
-    fontSize: 13,
+    fontSize: 11.5,
     fontWeight: '800',
     letterSpacing: 0,
     textTransform: 'capitalize',
   },
   calendarCreatorText: {
     color: '#8B94A6',
-    fontSize: 12,
+    fontSize: 10.5,
     fontWeight: '800',
     letterSpacing: 0,
   },
@@ -6839,36 +10236,49 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 19,
   },
-  calendarInviteMetaRow: {
+  calendarStatsRow: {
+    alignItems: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 7,
+    gap: 8,
+    minHeight: 38,
   },
-  calendarInviteMetaPill: {
-    borderColor: '#FFE1B1',
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: '#FFF8E8',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  calendarAttendeeStack: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minHeight: 38,
+    paddingRight: 2,
   },
-  calendarInviteMetaText: {
+  calendarAttendeeStackItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+  },
+  calendarAttendeeStackItemOverlap: {
+    marginLeft: -18,
+  },
+  calendarAttendeeOverflowCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: '#F7FAFA',
+  },
+  calendarAttendeeOverflowText: {
     color: STUDOS_THEME.ink,
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
   },
-  calendarStatsRow: {
+  calendarStatTextGroup: {
     alignItems: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 7,
-    minHeight: 26,
-  },
-  calendarAttendeePreview: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    minWidth: 0,
   },
   calendarStatText: {
     color: STUDOS_THEME.ink,
@@ -6881,6 +10291,76 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 4,
     backgroundColor: '#BAC4D1',
+  },
+  calendarAttendanceModalPanel: {
+    gap: 13,
+    maxWidth: 390,
+  },
+  calendarAttendanceModalTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  calendarAttendanceScroll: {
+    maxHeight: 360,
+  },
+  calendarAttendanceList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingBottom: 2,
+  },
+  calendarAttendanceTag: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    minHeight: 34,
+    borderColor: '#E5E8EF',
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+  },
+  calendarAttendanceTagAttending: {
+    borderColor: '#FFD5D7',
+    backgroundColor: '#FFF3F3',
+  },
+  calendarAttendanceTagDeclined: {
+    borderColor: '#BDEEE7',
+    backgroundColor: '#F0FCFA',
+  },
+  calendarAttendanceTagPending: {
+    borderColor: '#E5E8EF',
+    backgroundColor: '#FFFFFF',
+  },
+  calendarAttendanceName: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 1,
+    maxWidth: 156,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 15,
+  },
+  calendarAttendanceStatusIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+  calendarAttendanceStatusAttending: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  calendarAttendanceStatusDeclined: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  calendarAttendanceStatusPending: {
+    borderColor: '#DDE8E5',
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
   },
   calendarRsvpRow: {
     flexDirection: 'row',
@@ -6900,12 +10380,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   calendarRsvpButtonAttending: {
-    borderColor: STUDOS_THEME.red,
-    backgroundColor: STUDOS_THEME.red,
-  },
-  calendarRsvpButtonDeclined: {
     borderColor: STUDOS_THEME.blue,
     backgroundColor: STUDOS_THEME.blue,
+  },
+  calendarRsvpButtonDeclined: {
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: STUDOS_THEME.red,
   },
   calendarRsvpText: {
     color: STUDOS_THEME.ink,
@@ -6914,10 +10394,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   calendarRsvpTextActive: {
-    color: '#FFFFFF',
+    color: STUDOS_THEME.ink,
   },
   calendarRsvpTextDeclined: {
-    color: STUDOS_THEME.ink,
+    color: '#FFFFFF',
   },
   calendarEmptyState: {
     alignItems: 'center',
@@ -6932,7 +10412,7 @@ const styles = StyleSheet.create({
     height: 104,
     borderRadius: 52,
     backgroundColor: '#FFF0F0',
-    marginBottom: 14,
+    marginBottom: 18,
   },
   calendarEmptyTitle: {
     color: STUDOS_THEME.ink,
@@ -6947,6 +10427,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0,
     lineHeight: 20,
+    marginTop: 7,
+    maxWidth: 280,
+    textAlign: 'center',
+  },
+  calendarDayEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 245,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+  },
+  calendarDayEmptyIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    backgroundColor: '#FFF0F0',
+    marginBottom: 14,
+  },
+  calendarDayEmptyTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 21,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 25,
+    textAlign: 'center',
+  },
+  calendarDayEmptyText: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 19,
     marginTop: 7,
     maxWidth: 280,
     textAlign: 'center',
@@ -7038,6 +10555,152 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  eventCoverTemplateArt: {
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  eventCoverTemplateSoftBlock: {
+    position: 'absolute',
+    left: '-6%',
+    right: '-6%',
+    bottom: '-14%',
+    height: '48%',
+    borderTopLeftRadius: 999,
+    borderTopRightRadius: 999,
+    opacity: 0.95,
+  },
+  eventCoverTemplateAccentBlock: {
+    position: 'absolute',
+    left: '8%',
+    top: '18%',
+    width: '42%',
+    height: '34%',
+    borderRadius: 8,
+    transform: [{ rotate: '-4deg' }],
+  },
+  eventCoverTemplateDeepCircle: {
+    position: 'absolute',
+    right: '-9%',
+    top: '-22%',
+    width: '46%',
+    aspectRatio: 1,
+    borderRadius: 999,
+    opacity: 0.94,
+  },
+  eventCoverTemplateLine: {
+    position: 'absolute',
+    left: '13%',
+    right: '12%',
+    bottom: '24%',
+    height: 8,
+    borderRadius: 8,
+    opacity: 0.9,
+    transform: [{ rotate: '-2deg' }],
+  },
+  eventCoverTemplateSmallMark: {
+    position: 'absolute',
+    right: '15%',
+    bottom: '36%',
+    width: '12%',
+    aspectRatio: 1,
+    borderRadius: 999,
+    opacity: 0.86,
+  },
+  calendarCoverTemplatePanel: {
+    maxWidth: 430,
+  },
+  calendarCoverPickerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 60,
+    elevation: 60,
+    paddingHorizontal: 20,
+  },
+  calendarCoverPickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4, 8, 22, 0.34)',
+  },
+  calendarCoverUploadOption: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 58,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  calendarCoverUploadIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  calendarCoverUploadCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  calendarCoverUploadTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  calendarCoverUploadText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  calendarCoverTemplateGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+  calendarCoverTemplateCard: {
+    position: 'relative',
+    width: '48%',
+    minHeight: 96,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  calendarCoverTemplateCardSelected: {
+    borderColor: STUDOS_THEME.red,
+    borderWidth: 2,
+  },
+  calendarCoverTemplateImage: {
+    width: '100%',
+    height: 72,
+    backgroundColor: '#F7FAFA',
+  },
+  calendarCoverTemplateLabel: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  calendarCoverTemplateCheck: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: STUDOS_THEME.red,
   },
   calendarDateSelect: {
@@ -7510,7 +11173,7 @@ const styles = StyleSheet.create({
   overviewSurface: {
     margin: -20,
     padding: 20,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F1FBF8',
     gap: 18,
   },
   overviewTopLine: {
@@ -7520,7 +11183,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   overviewHeaderStack: {
-    gap: 0,
+    marginTop: -20,
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 13,
+    backgroundColor: '#F1FBF8',
+    zIndex: 3,
   },
   overviewHeaderTopRow: {
     alignItems: 'flex-end',
@@ -7535,33 +11204,112 @@ const styles = StyleSheet.create({
   },
   overviewStudosCard: {
     gap: 16,
+    position: 'relative',
+    marginBottom: 22,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
+    borderBottomWidth: 0,
     backgroundColor: '#FFFFFF',
-    padding: 15,
+    overflow: 'visible',
+    paddingHorizontal: 15,
+    paddingBottom: 14,
+    paddingTop: 22,
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.12,
     shadowRadius: 20,
     elevation: 7,
   },
-  overviewStudosIdentity: {
+  overviewStudosAccentRail: {
+    flexDirection: 'row',
+    position: 'absolute',
+    top: -1,
+    left: -1,
+    right: -1,
+    height: 5,
+    overflow: 'hidden',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    zIndex: 2,
+  },
+  overviewStudosAccentSegment: {
+    flex: 1,
+  },
+  overviewStudosAccentBlue: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  overviewStudosAccentYellow: {
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  overviewStudosAccentRed: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  overviewStudosBottomWave: {
+    flexDirection: 'row',
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: -17,
+    height: 36,
+    overflow: 'hidden',
+    zIndex: 2,
+  },
+  overviewStudosBottomWaveCurve: {
+    flex: 1,
+    height: 36,
+    marginHorizontal: -4,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+  },
+  overviewStudosBottomWaveCurveSoft: {
+    transform: [{ translateY: 0 }],
+  },
+  overviewStudosBottomWaveCurveDeep: {
+    transform: [{ translateY: -4 }],
+  },
+  overviewStudosQrCornerButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: 21,
+    left: 14,
+    width: 32,
+    height: 32,
+    borderColor: '#FFE1B1',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    shadowColor: STUDOS_THEME.yellow,
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.36,
+    shadowRadius: 13,
+    elevation: 9,
+    zIndex: 4,
+  },
+  overviewStudosTopRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
+    justifyContent: 'space-between',
+    position: 'relative',
+    zIndex: 3,
   },
-  overviewStudosCopy: {
+  overviewStudosIdentity: {
+    alignItems: 'center',
     flex: 1,
-    gap: 3,
+    flexDirection: 'row',
+    justifyContent: 'center',
     minWidth: 0,
   },
-  overviewStudosKicker: {
-    color: STUDOS_THEME.red,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-    textTransform: 'uppercase',
+  overviewStudosCopy: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 5,
+    minWidth: 0,
+  },
+  overviewStudosAvatarTop: {
+    marginBottom: 1,
   },
   overviewStudosName: {
     color: STUDOS_THEME.ink,
@@ -7569,12 +11317,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0,
     lineHeight: 22,
+    maxWidth: '100%',
+    textAlign: 'center',
   },
   overviewStudosAwardRow: {
     alignItems: 'center',
+    alignSelf: 'center',
     flexDirection: 'row',
     gap: 6,
+    justifyContent: 'center',
     marginTop: 2,
+    maxWidth: '100%',
   },
   overviewStudosAwardIcon: {
     alignItems: 'center',
@@ -7622,26 +11375,98 @@ const styles = StyleSheet.create({
   },
   overviewStudosAwardText: {
     color: '#65748b',
-    flex: 1,
+    flexShrink: 1,
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0,
   },
+  overviewStudosQrButtonDisabled: {
+    opacity: 0.48,
+  },
+  overviewStudosCodeModalPanel: {
+    alignItems: 'center',
+    gap: 14,
+    maxWidth: 360,
+  },
+  overviewStudosShareCard: {
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  overviewStudosShareName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 19,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 23,
+    maxWidth: '100%',
+    textAlign: 'center',
+  },
+  overviewStudosShareCodePill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 34,
+    borderColor: '#FFE1B1',
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 14,
+  },
+  overviewStudosShareCodeText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewStudosQrShell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 13,
+  },
+  overviewStudosQrGrid: {
+    position: 'relative',
+    backgroundColor: '#FFFFFF',
+  },
+  overviewStudosQrCell: {
+    position: 'absolute',
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  overviewStudosQrFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 184,
+    height: 184,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
   overviewStudosStats: {
-    flexDirection: 'row',
-    gap: 9,
+    flexShrink: 0,
+    gap: 6,
+    width: 112,
   },
   overviewStudosStat: {
     alignItems: 'center',
-    flex: 1,
     flexDirection: 'row',
     gap: 5,
-    minHeight: 38,
+    minHeight: 30,
     borderColor: '#EEF1F5',
     borderRadius: 999,
     borderWidth: 1,
     backgroundColor: '#F7FAFA',
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
+    width: '100%',
   },
   overviewStudosStatValue: {
     color: STUDOS_THEME.ink,
@@ -7656,18 +11481,203 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
-  overviewMoodCard: {
-    gap: 12,
+  overviewTodayCalendarCard: {
+    gap: 16,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
-    padding: 14,
+    padding: 15,
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 7,
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  overviewTodayCalendarHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  overviewTodayCalendarGraphic: {
+    flexShrink: 0,
+    width: 42,
+    height: 37,
+    marginLeft: 0,
+    marginBottom: 0,
+  },
+  overviewTodayCalendarCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewTodayCalendarTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  overviewTodayCalendarMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  overviewTodayCalendarCountPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 34,
+    height: 30,
+    borderColor: '#FFE1B1',
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 10,
+  },
+  overviewTodayCalendarCountText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewTodayCalendarList: {
+    gap: 14,
+  },
+  overviewTodayCalendarSection: {
+    gap: 8,
+  },
+  overviewTodayCalendarSectionTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewTodayCalendarEventRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 42,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 11,
+  },
+  overviewTodayCalendarEventRowFeatured: {
+    minHeight: 48,
+    borderColor: '#FFD0D2',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 6,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  overviewTodayCalendarTimePill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 52,
+    height: 26,
+    borderRadius: 999,
+    backgroundColor: STUDOS_THEME.blue,
+    paddingHorizontal: 9,
+  },
+  overviewTodayCalendarTimePillFeatured: {
+    minWidth: 60,
+    height: 30,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 11,
+  },
+  overviewTodayCalendarTimeText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewTodayCalendarTimeTextFeatured: {
+    color: '#FFFFFF',
+    fontSize: 12,
+  },
+  overviewTodayCalendarEventCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  overviewTodayCalendarEventTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  overviewTodayCalendarEventMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    minWidth: 0,
+  },
+  overviewTodayCalendarEventMeta: {
+    color: '#65748b',
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 13,
+  },
+  overviewTodayCalendarMoreText: {
+    color: '#65748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'right',
+  },
+  overviewTodayCalendarNoMoreText: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 15,
+  },
+  overviewTodayCalendarEmpty: {
+    minHeight: 42,
+    justifyContent: 'center',
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+  },
+  overviewTodayCalendarEmptyText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  overviewTodayCalendarAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    gap: 3,
+    minHeight: 28,
+    borderRadius: 999,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 10,
+  },
+  overviewTodayCalendarActionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewStudosMoodRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    position: 'relative',
+    zIndex: 3,
   },
   overviewMoodHeader: {
     alignItems: 'center',
@@ -7676,8 +11686,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   overviewMoodHeaderCopy: {
+    alignSelf: 'center',
     flex: 1,
     gap: 2,
+    justifyContent: 'center',
+    minHeight: 38,
     minWidth: 0,
   },
   overviewMoodKicker: {
@@ -7689,43 +11702,26 @@ const styles = StyleSheet.create({
   },
   overviewMoodQuestion: {
     color: STUDOS_THEME.ink,
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 16,
-  },
-  overviewMoodUpdateButton: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexShrink: 0,
-    gap: 4,
-    minHeight: 30,
-    borderRadius: 999,
-    backgroundColor: STUDOS_THEME.red,
-    paddingHorizontal: 8,
-    shadowColor: STUDOS_THEME.red,
-    shadowOffset: { width: 3, height: 5 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  overviewMoodUpdateText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
+    lineHeight: 14,
   },
   overviewMoodCurrentRow: {
+    alignSelf: 'stretch',
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
   },
   overviewMoodCurrentBadge: {
     alignItems: 'center',
-    flex: 1,
+    flexShrink: 0,
     flexDirection: 'row',
     gap: 7,
+    justifyContent: 'center',
+    maxWidth: 150,
+    minWidth: 0,
     minHeight: 38,
     borderColor: '#FFE1B1',
     borderRadius: 999,
@@ -7733,12 +11729,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8E8',
     paddingHorizontal: 12,
   },
+  overviewMoodCurrentBadgeNeedsCheckIn: {
+    borderColor: '#FF9DA0',
+    backgroundColor: STUDOS_THEME.red,
+  },
+  overviewMoodCurrentBadgeCheckedIn: {
+    borderColor: '#70DFA5',
+    backgroundColor: '#2EB872',
+  },
   overviewMoodCurrentText: {
     color: STUDOS_THEME.ink,
     flex: 1,
     fontSize: 15,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  overviewMoodCurrentTextOnAccent: {
+    color: '#FFFFFF',
   },
   overviewMoodSavedText: {
     color: '#65748b',
@@ -7757,10 +11764,10 @@ const styles = StyleSheet.create({
   },
   overviewMoodUpdatedText: {
     color: '#65748b',
-    flex: 1,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0,
+    lineHeight: 13,
   },
   overviewMoodOptions: {
     flexDirection: 'row',
@@ -7835,46 +11842,59 @@ const styles = StyleSheet.create({
   overviewMoodModalOptionTextActive: {
     fontWeight: '900',
   },
-  overviewClipCard: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'space-between',
-    minHeight: 70,
-    borderColor: '#E5E8EF',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#F7FAFA',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.14,
-    shadowRadius: 20,
-    elevation: 7,
-  },
-  overviewClipCopy: {
-    flex: 1,
-    gap: 7,
-    minWidth: 0,
-  },
-  overviewClipTitle: {
-    color: STUDOS_THEME.yellow,
-    fontSize: 15,
-    fontWeight: '900',
-    letterSpacing: 0,
-    lineHeight: 18,
-  },
   overviewClipIconRow: {
+    alignSelf: 'stretch',
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 6,
+    justifyContent: 'space-between',
+    paddingTop: 1,
+    position: 'relative',
+    width: '100%',
+    zIndex: 3,
   },
-  overviewClipIcon: {
+  overviewClipIconButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 18,
-    height: 18,
+    position: 'relative',
+    width: 39,
+    height: 39,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+  },
+  overviewClipIconButtonCompleted: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.18,
+    shadowRadius: 7,
+    elevation: 4,
+  },
+  overviewClipCompletedMark: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -4,
+    right: -3,
+    width: 19,
+    height: 19,
+    borderColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  overviewClipAddMark: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -4,
+    right: -3,
+    width: 19,
+    height: 19,
+    borderColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.yellow,
   },
   overviewClipDot: {
     width: 3,
@@ -7882,27 +11902,48 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: '#A9B3C2',
   },
-  overviewClipAddButton: {
+  overviewClipModalPanel: {
+    gap: 14,
+    maxWidth: 360,
+  },
+  overviewClipModalIconWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: STUDOS_THEME.yellow,
-    shadowColor: STUDOS_THEME.red,
-    shadowOffset: { width: 4, height: 7 },
-    shadowOpacity: 0.42,
-    shadowRadius: 10,
-    elevation: 8,
+    alignSelf: 'center',
+    width: 58,
+    height: 58,
+    borderColor: '#DDE8E5',
+    borderRadius: 29,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
   },
-  overviewClipAddText: {
+  overviewClipModalOptions: {
+    gap: 9,
+  },
+  overviewClipModalOption: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 52,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+  },
+  overviewClipModalOptionActive: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+  },
+  overviewClipModalOptionText: {
     color: STUDOS_THEME.ink,
-    fontSize: 34,
-    fontWeight: '500',
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
     letterSpacing: 0,
-    lineHeight: 36,
-    marginTop: -5,
+  },
+  overviewClipModalOptionTextActive: {
+    fontWeight: '900',
   },
   overviewPageTitleWrap: {
     alignItems: 'flex-end',
@@ -8254,6 +12295,120 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  settingsNotificationHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  settingsNotificationIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: '#FFF4EE',
+  },
+  settingsNotificationCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  settingsNotificationTokenBox: {
+    gap: 6,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 12,
+  },
+  settingsNotificationTokenLabel: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  settingsNotificationTokenText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  notificationPromptPanel: {
+    alignItems: 'center',
+    gap: 14,
+    maxWidth: 360,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+  },
+  notificationPromptIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 58,
+    height: 58,
+    borderColor: '#FFE1B1',
+    borderRadius: 29,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+  },
+  notificationPromptCopy: {
+    alignItems: 'center',
+    gap: 5,
+    width: '100%',
+  },
+  notificationPromptTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 23,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 27,
+    textAlign: 'center',
+  },
+  notificationPromptText: {
+    color: '#65748b',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  notificationPromptActions: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  notificationPromptSecondaryButton: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+  },
+  notificationPromptPrimaryButton: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 12,
+  },
+  notificationPromptSecondaryText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  notificationPromptPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   sectionTitle: {
     color: '#182446',
@@ -10103,6 +14258,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: '#d7dce7',
   },
+  avatarImageCalendarPendingResponseCreator: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#d7dce7',
+  },
+  avatarImageCalendarAttendanceTag: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#d7dce7',
+  },
+  avatarImageCalendarAttendeeCard: {
+    width: 38,
+    height: 38,
+    borderColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: '#d7dce7',
+  },
+  avatarImageCalendarCreator: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#d7dce7',
+  },
   avatarImageChatHeader: {
     width: 48,
     height: 48,
@@ -10145,6 +14326,40 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     backgroundColor: STUDOS_THEME.ink,
   },
+  avatarFallbackCalendarPendingResponseCreator: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  avatarFallbackCalendarAttendanceTag: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  avatarFallbackCalendarAttendeeCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  avatarFallbackCalendarCreator: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: STUDOS_THEME.ink,
+  },
   avatarFallbackChatHeader: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -10180,6 +14395,30 @@ const styles = StyleSheet.create({
   avatarTextChatCircle: {
     color: STUDOS_THEME.yellow,
     fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  avatarTextCalendarPendingResponseCreator: {
+    color: STUDOS_THEME.yellow,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  avatarTextCalendarAttendanceTag: {
+    color: STUDOS_THEME.yellow,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  avatarTextCalendarAttendeeCard: {
+    color: STUDOS_THEME.yellow,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  avatarTextCalendarCreator: {
+    color: STUDOS_THEME.yellow,
+    fontSize: 22,
     fontWeight: '900',
     letterSpacing: 0,
   },
@@ -10385,6 +14624,40 @@ const styles = StyleSheet.create({
   },
   footerItemPressed: {
     opacity: 0.72,
+  },
+  footerIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 32,
+    height: 28,
+  },
+  footerUnreadBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -8,
+    left: -7,
+    minWidth: 22,
+    height: 22,
+    borderColor: '#FFFFFF',
+    borderRadius: 11,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 5,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 7,
+    elevation: 7,
+    zIndex: 4,
+  },
+  footerUnreadText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
   },
   footerLabel: {
     color: '#172143',

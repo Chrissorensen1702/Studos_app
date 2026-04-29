@@ -8,8 +8,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Studos">
-    <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="apple-touch-icon" href="/assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png">
+    <link rel="manifest" href="../manifest.webmanifest">
+    <link rel="apple-touch-icon" href="../assets/assets/icon.d253a85615408ef1fa62dc4646a785ea.png">
     <title>Studos</title>
     <style id="expo-reset">
       html,
@@ -71,7 +71,7 @@
     <noscript>Du skal slaa JavaScript til for at bruge Studos.</noscript>
     <div id="root"></div>
     <script>
-      var STUDOS_PWA_VERSION = 'v9';
+      var STUDOS_PWA_VERSION = 'v15';
 
       (function () {
         function setStudosViewportHeight() {
@@ -97,10 +97,10 @@
 
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
-          navigator.serviceWorker.register('/sw.js?v=' + STUDOS_PWA_VERSION, { scope: '/' }).catch(function () {});
+          navigator.serviceWorker.register('../sw.js?v=' + STUDOS_PWA_VERSION, { scope: '../' }).catch(function () {});
         });
       }
     </script>
-    <script src="/_expo/static/js/web/index-5fc66f9ab3104871eb4b5ec12237cd19.js" defer></script>
+    <script src="../_expo/static/js/web/index-8a0cb6f74838a39dd74bc0e17b677f4f.js" defer></script>
   </body>
 </html>

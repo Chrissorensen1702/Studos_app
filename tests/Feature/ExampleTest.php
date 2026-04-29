@@ -354,6 +354,59 @@ class ExampleTest extends TestCase
             'event_id' => $eventId,
             'member_id' => 'calendar-maja',
         ]);
+        $this->assertDatabaseHas('events', [
+            'id' => $eventId,
+            'cover_image_url' => $coverPath,
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events/'.$eventId.'/update', [
+                'title' => 'Studentergilde hos Chris - opdateret',
+                'eventDate' => '2026-05-25',
+                'eventTime' => '20:30',
+                'location' => 'Chris terrasse',
+                'description' => 'Ny tid og ny gæsteliste.',
+                'coverImageMode' => 'template',
+                'coverImageTemplateId' => 'gold',
+                'inviteScope' => 'custom',
+                'invitedMemberIds' => ['calendar-tobias'],
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.events.0.coverImageUrl', null)
+            ->assertJsonPath('class.events.0.coverImageTemplateId', 'gold');
+
+        $this->assertDatabaseHas('events', [
+            'id' => $eventId,
+            'cover_image_url' => 'template:gold',
+        ]);
+
+        $coverUpdateResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events/'.$eventId.'/update', [
+                'title' => 'Studentergilde hos Chris - opdateret',
+                'eventDate' => '2026-05-25',
+                'eventTime' => '20:30',
+                'location' => 'Chris terrasse',
+                'description' => 'Ny tid og ny gæsteliste.',
+                'coverImageMode' => 'upload',
+                'coverImageData' => $coverImageData,
+                'inviteScope' => 'custom',
+                'invitedMemberIds' => ['calendar-tobias'],
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.events.0.coverImageTemplateId', null);
+
+        $updatedCoverImageUrl = $coverUpdateResponse->json('class.events.0.coverImageUrl');
+
+        $this->assertStringContainsString('/uploads/event-covers/'.$eventId.'-', $updatedCoverImageUrl);
+        $updatedCoverPath = Str::after(parse_url($updatedCoverImageUrl, PHP_URL_PATH), '/storage/');
+        $this->assertNotSame($coverPath, $updatedCoverPath);
+        $this->assertDatabaseHas('events', [
+            'id' => $eventId,
+            'cover_image_url' => $updatedCoverPath,
+        ]);
+        Storage::disk('public')->assertExists($updatedCoverPath);
 
         $this
             ->withHeader('Authorization', 'Bearer '.$tobiasToken)
@@ -363,6 +416,40 @@ class ExampleTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('class.events.0.attendingCount', 2)
             ->assertJsonPath('class.events.0.pendingCount', 0);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/events/'.$eventId.'/report', [
+                'reason' => 'Begivenhed rapporteret',
+                'details' => 'Coveret skal gennemgås.',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_reports', [
+            'reporter_member_id' => 'calendar-tobias',
+            'reported_member_id' => 'demo-owner',
+            'target_type' => 'calendar_event',
+            'target_id' => $eventId,
+            'status' => 'pending',
+        ]);
+
+        $blockResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/members/demo-owner/block', [
+                'reason' => 'Blokeret fra kalender',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_blocks', [
+            'blocker_member_id' => 'calendar-tobias',
+            'blocked_member_id' => 'demo-owner',
+            'reason' => 'Blokeret fra kalender',
+        ]);
+        $this->assertFalse(
+            collect($blockResponse->json('class.events'))->contains(fn (array $event): bool => $event['id'] === $eventId)
+        );
 
         $this
             ->withHeader('Authorization', 'Bearer '.$tobiasToken)

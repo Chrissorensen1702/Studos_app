@@ -11,25 +11,32 @@
     "ios:release": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH expo run:ios --device --configuration Release",
     "ios:pod:install": "PATH=/Applications/XAMPP/xamppfiles/htdocs/studenter-app/tools:/Users/chrise.sorensen/.gem/ruby/2.6.0/bin:$PATH pod install --project-directory=ios",
     "ios:prebuild": "expo prebuild --platform ios",
-    "android": "expo run:android",
+    "android": "STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1 expo run:android",
+    "push:check": "node scripts/check-android-push-config.js",
     "web": "expo start --web",
-    "build:android": "npx eas-cli build --platform android --profile preview",
-    "build:android:dev": "npx eas-cli build --platform android --profile development",
+    "build:android": "STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1 npx eas-cli build --platform android --profile preview",
+    "build:android:dev": "STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1 npx eas-cli build --platform android --profile development",
     "build:ios": "npx eas-cli build --platform ios --profile preview",
     "build:all": "npx eas-cli build --platform all --profile preview"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "@react-native-community/netinfo": "11.5.2",
-    "expo": "~55.0.0",
+    "expo": "~55.0.18",
+    "expo-asset": "~55.0.16",
+    "expo-constants": "~55.0.15",
     "expo-dev-client": "~55.0.28",
+    "expo-device": "~55.0.15",
+    "expo-file-system": "~55.0.17",
     "expo-image-picker": "~55.0.19",
+    "expo-notifications": "~55.0.21",
     "expo-secure-store": "~55.0.13",
     "laravel-echo": "^2.3.4",
     "pusher-js": "^8.5.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",
-    "react-native-web": "^0.21.0"
+    "react-native-web": "^0.21.0",
+    "toqr": "^0.1.1"
   }
 }
