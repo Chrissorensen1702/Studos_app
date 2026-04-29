@@ -987,6 +987,172 @@ class StudosController extends Controller
         return array_values(array_unique([...$validMemberIds, $member->id]));
     }
 
+    public function updateEvent(Request $request, string $event): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $schoolEvent = DB::table('events')
+            ->where('id', $event)
+            ->where('class_id', $member->class_id)
+            ->first();
+
+        abort_unless($schoolEvent, 404, 'Begivenheden findes ikke.');
+        abort_unless(
+            (string) ($schoolEvent->created_by_member_id ?? '') === (string) $member->id,
+            403,
+            'Du kan kun redigere dine egne begivenheder.'
+        );
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:190'],
+            'eventDate' => ['required', 'date'],
+            'eventTime' => ['nullable', 'date_format:H:i'],
+            'location' => ['nullable', 'string', 'max:190'],
+            'description' => ['nullable', 'string', 'max:1200'],
+            'coverImageData' => ['nullable', 'string', 'max:7000000'],
+            'inviteScope' => ['nullable', Rule::in(['class', 'crew', 'custom'])],
+            'invitedMemberIds' => ['nullable', 'array', 'max:250'],
+            'invitedMemberIds.*' => ['string', 'max:36'],
+        ]);
+
+        $now = now()->format('Y-m-d H:i:s');
+        $eventDate = Carbon::parse($data['eventDate'])->format('Y-m-d');
+        $eventTime = blank($data['eventTime'] ?? null) ? null : $data['eventTime'];
+        $startsAt = $eventTime
+            ? Carbon::createFromFormat('Y-m-d H:i', $eventDate.' '.$eventTime)->format('Y-m-d H:i:s')
+            : null;
+        $coverImagePath = blank($data['coverImageData'] ?? null)
+            ? ($schoolEvent->cover_image_url ?? null)
+            : UploadedImage::storeBase64($data['coverImageData'], 'event-covers', $event);
+        $inviteScope = $data['inviteScope'] ?? 'class';
+        $inviteMemberIds = $this->resolveEventInviteMemberIds(
+            $member,
+            $inviteScope,
+            $data['invitedMemberIds'] ?? [],
+        );
+        $moderationContext = [
+            'source' => 'event_update',
+            'member_id' => $member->id,
+            'class_id' => $member->class_id,
+            'event_id' => $event,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Titlen', $moderationContext);
+        $location = ContentModeration::cleanNullableText($data['location'] ?? null, 'location', 'Sted', $moderationContext);
+        $description = ContentModeration::cleanNullableText($data['description'] ?? null, 'description', 'Beskrivelsen', $moderationContext);
+
+        DB::transaction(function () use (
+            $event,
+            $inviteMemberIds,
+            $inviteScope,
+            $eventDate,
+            $startsAt,
+            $title,
+            $location,
+            $description,
+            $coverImagePath,
+            $member,
+            $now,
+        ): void {
+            DB::table('events')->where('id', $event)->update([
+                'title' => $title,
+                'event_date' => $eventDate,
+                'starts_at' => $startsAt,
+                'location' => $location,
+                'description' => $description,
+                'cover_image_url' => $coverImagePath,
+                'invite_scope' => $inviteScope,
+                'updated_at' => $now,
+            ]);
+
+            if (Schema::hasTable('event_invites')) {
+                $currentInviteMemberIds = DB::table('event_invites')
+                    ->where('event_id', $event)
+                    ->pluck('member_id')
+                    ->all();
+                $nextInviteMemberIds = array_values(array_unique($inviteMemberIds));
+                $removedMemberIds = array_values(array_diff($currentInviteMemberIds, $nextInviteMemberIds));
+                $addedMemberIds = array_values(array_diff($nextInviteMemberIds, $currentInviteMemberIds));
+
+                if (! empty($removedMemberIds)) {
+                    DB::table('event_invites')
+                        ->where('event_id', $event)
+                        ->whereIn('member_id', $removedMemberIds)
+                        ->delete();
+                }
+
+                if (! empty($addedMemberIds)) {
+                    DB::table('event_invites')->insert(array_map(
+                        fn (string $memberId): array => [
+                            'id' => (string) Str::uuid(),
+                            'event_id' => $event,
+                            'member_id' => $memberId,
+                            'invited_by_member_id' => $member->id,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ],
+                        $addedMemberIds,
+                    ));
+                }
+
+                if (Schema::hasTable('event_rsvps')) {
+                    DB::table('event_rsvps')
+                        ->where('event_id', $event)
+                        ->whereNotIn('member_id', $nextInviteMemberIds)
+                        ->delete();
+                }
+            }
+
+            $attendingCount = Schema::hasTable('event_rsvps')
+                ? DB::table('event_rsvps')
+                    ->where('event_id', $event)
+                    ->where('status', 'attending')
+                    ->count()
+                : 0;
+
+            DB::table('events')->where('id', $event)->update([
+                'rsvp_count' => $attendingCount,
+                'updated_at' => $now,
+            ]);
+        });
+
+        return response()->json([
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function destroyEvent(Request $request, string $event): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $schoolEvent = DB::table('events')
+            ->where('id', $event)
+            ->where('class_id', $member->class_id)
+            ->first();
+
+        abort_unless($schoolEvent, 404, 'Begivenheden findes ikke.');
+        abort_unless(
+            (string) ($schoolEvent->created_by_member_id ?? '') === (string) $member->id,
+            403,
+            'Du kan kun slette dine egne begivenheder.'
+        );
+
+        DB::transaction(function () use ($event): void {
+            if (Schema::hasTable('event_invites')) {
+                DB::table('event_invites')->where('event_id', $event)->delete();
+            }
+
+            if (Schema::hasTable('event_rsvps')) {
+                DB::table('event_rsvps')->where('event_id', $event)->delete();
+            }
+
+            DB::table('events')->where('id', $event)->delete();
+        });
+
+        return response()->json([
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
     public function respondToEvent(Request $request, string $event): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);

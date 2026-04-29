@@ -310,6 +310,73 @@ class ExampleTest extends TestCase
             'member_id' => 'calendar-maja',
             'status' => 'not_attending',
         ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/events/'.$eventId.'/update', [
+                'title' => 'Majas snyde-redigering',
+                'eventDate' => '2026-05-25',
+                'eventTime' => '20:30',
+            ])
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events/'.$eventId.'/update', [
+                'title' => 'Studentergilde hos Chris - opdateret',
+                'eventDate' => '2026-05-25',
+                'eventTime' => '20:30',
+                'location' => 'Chris terrasse',
+                'description' => 'Ny tid og ny gæsteliste.',
+                'inviteScope' => 'custom',
+                'invitedMemberIds' => ['calendar-tobias'],
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.events.0.title', 'Studentergilde hos Chris - opdateret')
+            ->assertJsonPath('class.events.0.startsAt', '2026-05-25T20:30:00.000Z')
+            ->assertJsonPath('class.events.0.location', 'Chris terrasse')
+            ->assertJsonPath('class.events.0.inviteScope', 'custom')
+            ->assertJsonPath('class.events.0.inviteCount', 2)
+            ->assertJsonPath('class.events.0.pendingCount', 1)
+            ->assertJsonPath('class.events.0.attendingCount', 1)
+            ->assertJsonPath('class.events.0.notAttendingCount', 0);
+
+        $this->assertDatabaseHas('event_invites', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-tobias',
+            'invited_by_member_id' => 'demo-owner',
+        ]);
+        $this->assertDatabaseMissing('event_invites', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-maja',
+        ]);
+        $this->assertDatabaseMissing('event_rsvps', [
+            'event_id' => $eventId,
+            'member_id' => 'calendar-maja',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/events/'.$eventId.'/rsvp', [
+                'status' => 'attending',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.events.0.attendingCount', 2)
+            ->assertJsonPath('class.events.0.pendingCount', 0);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/events/'.$eventId.'/delete')
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/events/'.$eventId.'/delete')
+            ->assertStatus(200);
+
+        $this->assertDatabaseMissing('events', ['id' => $eventId]);
+        $this->assertDatabaseMissing('event_invites', ['event_id' => $eventId]);
+        $this->assertDatabaseMissing('event_rsvps', ['event_id' => $eventId]);
     }
 
     public function test_authenticated_member_can_register_android_push_token(): void

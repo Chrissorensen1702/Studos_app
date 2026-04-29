@@ -25,6 +25,10 @@ Route::post('/notifications/test', [StudosController::class, 'sendTestNotificati
 Route::post('/profile/photo', [StudosController::class, 'updateProfilePhoto'])->middleware('throttle:12,1');
 Route::post('/classes/{class}/members/{member}/access', [StudosController::class, 'updateMemberAccess']);
 Route::post('/events', [StudosController::class, 'storeEvent'])->middleware('throttle:12,1');
+Route::patch('/events/{event}', [StudosController::class, 'updateEvent'])->middleware('throttle:20,1');
+Route::delete('/events/{event}', [StudosController::class, 'destroyEvent'])->middleware('throttle:20,1');
+Route::post('/events/{event}/update', [StudosController::class, 'updateEvent'])->middleware('throttle:20,1');
+Route::post('/events/{event}/delete', [StudosController::class, 'destroyEvent'])->middleware('throttle:20,1');
 Route::post('/events/{event}/rsvp', [StudosController::class, 'respondToEvent'])->middleware('throttle:40,1');
 
 Route::get('/chat/conversations', [ChatController::class, 'conversations']);
