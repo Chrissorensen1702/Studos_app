@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-04-29 efter oprydning, kalender-/overblikspolish,
-sidebar-aendringer og App Store/Google Play gennemgang.
+Status er opdateret 2026-04-30 efter public landing/index-polish med ny hero,
+feature-kort, app-mockup-karussel og lokale screenshots.
 
 Se ogsaa:
 
@@ -17,6 +17,8 @@ Se ogsaa:
 
 - Web/API koerer i Laravel og bruges som kilde til sandhed.
 - Lokal web ligger paa `http://localhost/studenter-app/public/`.
+- Public index/landing page bruger hero, store-badges, feature-kort og
+  app-mockups fra `public/assets`.
 - Cloud ligger paa `https://studos.laravel.cloud`.
 - Cloud API ligger paa `https://studos.laravel.cloud/api`.
 - Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.83.
@@ -158,6 +160,34 @@ DELETE /api/chat/messages/{message}
 POST /api/notifications/push-token
 POST /api/notifications/test
 ```
+
+## Public Landing Page
+
+Indexsiden (`resources/views/home.blade.php`) er den aktuelle offentlige
+landing page.
+
+Hero:
+
+- Bruger `public/assets/landing-hero.png` som fuld hero-baggrund.
+- Viser Studos-wordmark, download-badges og app-mockup
+  `public/assets/mockup-index.png`.
+- Har en bloed bund-fade i CSS, saa overgangen til feature-sektionen ikke bliver
+  haard.
+
+Feature-sektionen:
+
+- Overskriften er `Det der holder vognen i gang`.
+- Layoutet har app-mockup-karussel i venstre kolonne og 8 UI-kort i hoejre
+  kolonne.
+- Kortene er SEO-laesbar HTML med `h3` og tekst, mens screenshots kun er visuel
+  understoettelse.
+- Aktivt kort styrer titel, highlight og farvet shadow paa mockuppen via
+  `public/app.js`.
+- Footer/sidebar-ikoner genbruges hvor de findes:
+  `footer-calendar.png`, `footer-chat.png` og `footer-walls.png`.
+- Nye lokale screenshots ligger i `public/assets/index-mockups/`:
+  `Kalender.png`, `Chats.png`, `Dyst.png`, `Walls.png`, `Overblik.png`,
+  `Spil.png`, `Klasseawards.png` og `Klassedyst.png`.
 
 ## Mobilappen Lige Nu
 

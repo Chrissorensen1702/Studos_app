@@ -13,13 +13,6 @@
       <a class="brand" href="{{ route('home') }}" aria-label="Studos">
         <img class="brand-logo" src="{{ asset('assets/studos-mark.svg') }}" alt="">
         <span class="sr-only">Studos</span>
-        <span class="brand-wordmark" aria-hidden="true">
-          <span class="brand-wordmark-row">
-            <span class="brand-wordmark-light">Stu</span><span>dos</span>
-          </span>
-          <span class="brand-wordmark-underline"></span>
-          <span class="brand-wordmark-dot"></span>
-        </span>
       </a>
 
       <nav class="top-nav" aria-label="Hovednavigation">

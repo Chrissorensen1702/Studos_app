@@ -68,7 +68,13 @@ class ExampleTest extends TestCase
             ->assertSee('Login')
             ->assertSee('Google Play')
             ->assertSee('App Store')
-            ->assertSee('mockup-index.png');
+            ->assertSee('mockup-index.png')
+            ->assertSee('Kalender og events')
+            ->assertSee('Mini games')
+            ->assertSee('Klassewards')
+            ->assertSee('Klassedyst')
+            ->assertSee('assets/index-mockups/Kalender.png')
+            ->assertSee('assets/index-mockups/Klassedyst.png');
     }
 
     public function test_old_index_html_redirects_to_app_url(): void
