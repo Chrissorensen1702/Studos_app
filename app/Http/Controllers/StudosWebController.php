@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\MemberInvitationMail;
 use App\Models\User;
 use App\Support\ContentModeration;
 use Illuminate\Contracts\View\View;
@@ -9,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -24,7 +26,6 @@ class StudosWebController extends Controller
     private const STATUSES = [
         'pending' => 'Afventer',
         'active' => 'Aktiv',
-        'removed' => 'Fjernet',
     ];
 
     private const JOIN_POLICIES = [
@@ -86,6 +87,7 @@ class StudosWebController extends Controller
         }
 
         return view('admin.index', [
+            'activeMembership' => $this->activeClassMembership(),
             'joinPolicies' => self::JOIN_POLICIES,
             'schools' => $this->schoolOptions(),
         ]);
@@ -94,11 +96,18 @@ class StudosWebController extends Controller
     public function storeClass(Request $request): RedirectResponse
     {
         $schoolClass = $this->primaryManagedClass();
+        $activeMembership = $this->activeClassMembership();
 
         if ($schoolClass) {
             return redirect()
                 ->route('classes.show', $schoolClass->id)
                 ->withErrors(['class' => 'Du kan kun oprette én klasse pr. bruger.']);
+        }
+
+        if ($activeMembership) {
+            return redirect()
+                ->route('admin')
+                ->withErrors(['class' => 'Du er allerede aktiv i en klasse. Brug en separat ejerkonto, hvis du skal oprette en ny klasse.']);
         }
 
         $data = $request->validate([
@@ -243,7 +252,7 @@ class StudosWebController extends Controller
 
     public function show(string $class): View
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         return view('classes.show', [
             ...$this->classViewModel($class),
@@ -256,39 +265,19 @@ class StudosWebController extends Controller
 
     public function updateSettings(Request $request, string $class): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner']);
 
         $data = $request->validate([
-            'schoolName' => ['required', 'string', 'max:190'],
             'className' => ['required', 'string', 'max:100'],
             'graduationYear' => ['required', 'digits:4'],
             'graduationDate' => ['nullable', 'date'],
-            'inviteCode' => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9-]+$/'],
             'joinPolicy' => ['required', Rule::in(array_keys(self::JOIN_POLICIES))],
         ]);
 
-        $inviteCode = Str::upper(trim($data['inviteCode']));
-        $inviteTaken = DB::table('classes')
-            ->where('invite_code', $inviteCode)
-            ->where('id', '!=', $class)
-            ->exists();
-
-        if ($inviteTaken) {
-            return back()
-                ->withErrors(['inviteCode' => 'Invitekoden bruges allerede.'])
-                ->withInput();
-        }
-
-        $schoolName = trim($data['schoolName']);
-        $schoolId = $this->ensureSchool($schoolName);
-
         DB::table('classes')->where('id', $class)->update([
-            'school_id' => $schoolId,
-            'school_name' => $schoolName,
             'class_name' => trim($data['className']),
             'graduation_year' => trim($data['graduationYear']),
             'graduation_date' => blank($data['graduationDate'] ?? null) ? null : $data['graduationDate'],
-            'invite_code' => $inviteCode,
             'join_policy' => $data['joinPolicy'],
             'allow_member_posts' => $request->boolean('allowMemberPosts'),
             'require_approval_for_photos' => $request->boolean('requireApprovalForPhotos'),
@@ -300,16 +289,16 @@ class StudosWebController extends Controller
 
     public function storeMember(Request $request, string $class): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner']);
 
         $data = $request->validate([
             'displayName' => ['required', 'string', 'max:190'],
-            'email' => ['nullable', 'email', 'max:190'],
+            'email' => ['required', 'email', 'max:190'],
             'role' => ['required', Rule::in(array_keys(self::ROLES))],
-            'status' => ['required', Rule::in(array_keys(self::STATUSES))],
         ]);
 
         $displayName = trim($data['displayName']);
+        $email = Str::lower(trim($data['email']));
         $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
         $nameTaken = DB::table('members')
             ->where('class_id', $class)
@@ -322,42 +311,57 @@ class StudosWebController extends Controller
                 ->withInput();
         }
 
-        $schoolId = DB::table('classes')->where('id', $class)->value('school_id');
+        $schoolClass = DB::table('classes')->where('id', $class)->first();
 
         DB::table('members')->insert([
             'id' => (string) Str::uuid(),
             'personal_code' => $this->generatePersonalCode($nameParts[0] ?? $displayName),
             'class_id' => $class,
-            'school_id' => $schoolId,
+            'school_id' => $schoolClass->school_id,
             'display_name' => $displayName,
             'first_name' => $nameParts[0] ?? null,
             'last_name' => $nameParts[1] ?? null,
-            'email' => blank($data['email'] ?? null) ? null : Str::lower(trim($data['email'])),
+            'email' => $email,
             'role' => $data['role'],
-            'status' => $data['status'],
+            'status' => 'pending',
             'joined_at' => now(),
         ]);
 
-        return back()->with('status', 'Medlemmet er tilføjet.');
+        Mail::to($email)->send(new MemberInvitationMail(
+            displayName: $displayName,
+            className: $schoolClass->class_name,
+            schoolName: $schoolClass->school_name,
+            inviteCode: $schoolClass->invite_code,
+            inviteUrl: url('/').'?invite='.$schoolClass->invite_code,
+        ));
+
+        return back()->with('status', 'Medlemmet er tilføjet, og invitationen er sendt.');
     }
 
     public function updateMember(Request $request, string $class, string $member): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner']);
 
         $current = $this->memberForClass($class, $member);
         $data = $request->validate([
-            'role' => ['required', Rule::in(array_keys(self::ROLES))],
-            'status' => ['required', Rule::in(array_keys(self::STATUSES))],
+            'role' => ['nullable', Rule::in(array_keys(self::ROLES))],
+            'status' => ['nullable', Rule::in(array_keys(self::STATUSES))],
         ]);
 
-        if ($this->wouldRemoveLastOwner($current, $data['role'], $data['status'])) {
+        if (! array_key_exists('role', $data) && ! array_key_exists('status', $data)) {
+            return back()->withErrors(['member' => 'Der mangler en rolle eller status at opdatere.']);
+        }
+
+        $nextRole = $data['role'] ?? $current->role;
+        $nextStatus = $data['status'] ?? $current->status;
+
+        if ($this->wouldRemoveLastOwner($current, $nextRole, $nextStatus)) {
             return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv owner.']);
         }
 
         DB::table('members')->where('id', $member)->update([
-            'role' => $data['role'],
-            'status' => $data['status'],
+            'role' => $nextRole,
+            'status' => $nextStatus,
         ]);
 
         return back()->with('status', 'Medlemsadgangen er opdateret.');
@@ -365,7 +369,7 @@ class StudosWebController extends Controller
 
     public function destroyMember(string $class, string $member): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner']);
 
         $current = $this->memberForClass($class, $member);
 
@@ -378,9 +382,55 @@ class StudosWebController extends Controller
         return back()->with('status', 'Medlemmet er fjernet fra klassen.');
     }
 
+    public function destroyMembers(Request $request, string $class): RedirectResponse
+    {
+        $this->authorizeClassRole($class, ['owner']);
+
+        $data = $request->validate([
+            'memberIds' => ['required', 'array', 'min:1'],
+            'memberIds.*' => ['required', 'string', 'distinct'],
+        ]);
+
+        $memberIds = collect($data['memberIds'])->unique()->values();
+        $members = DB::table('members')
+            ->where('class_id', $class)
+            ->whereIn('id', $memberIds->all())
+            ->get();
+
+        if ($members->count() !== $memberIds->count()) {
+            return back()->withErrors(['member' => 'En eller flere valgte brugere findes ikke i klassen.']);
+        }
+
+        $activeOwnerCount = DB::table('members')
+            ->where('class_id', $class)
+            ->where('role', 'owner')
+            ->where('status', 'active')
+            ->count();
+        $selectedActiveOwnerCount = $members
+            ->where('role', 'owner')
+            ->where('status', 'active')
+            ->count();
+
+        if ($selectedActiveOwnerCount > 0 && $activeOwnerCount - $selectedActiveOwnerCount < 1) {
+            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv owner.']);
+        }
+
+        DB::table('members')
+            ->where('class_id', $class)
+            ->whereIn('id', $memberIds->all())
+            ->update(['status' => 'removed']);
+
+        $removedCount = $members->where('status', '!=', 'removed')->count();
+        $message = $removedCount === 1
+            ? '1 medlem er fjernet fra klassen.'
+            : $removedCount.' medlemmer er fjernet fra klassen.';
+
+        return back()->with('status', $message);
+    }
+
     public function storeContentBlock(Request $request, string $class): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $data = $request->validate([
             'type' => ['required', Rule::in(array_keys(self::CONTENT_TYPES))],
@@ -415,7 +465,7 @@ class StudosWebController extends Controller
 
     public function updateContentBlock(Request $request, string $class, string $block): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $this->contentBlockForClass($class, $block);
 
@@ -450,7 +500,7 @@ class StudosWebController extends Controller
 
     public function destroyContentBlock(string $class, string $block): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $this->contentBlockForClass($class, $block);
 
@@ -461,7 +511,7 @@ class StudosWebController extends Controller
 
     public function storeEvent(Request $request, string $class): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $data = $request->validate([
             'title' => ['required', 'string', 'max:190'],
@@ -498,7 +548,7 @@ class StudosWebController extends Controller
 
     public function updateEvent(Request $request, string $class, string $event): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $this->eventForClass($class, $event);
 
@@ -535,7 +585,7 @@ class StudosWebController extends Controller
 
     public function destroyEvent(string $class, string $event): RedirectResponse
     {
-        $this->authorizeClassRole($class, ['owner', 'moderator', 'student']);
+        $this->authorizeClassRole($class, ['owner', 'moderator']);
 
         $this->eventForClass($class, $event);
 
@@ -549,11 +599,13 @@ class StudosWebController extends Controller
         $schoolClass = $this->classQuery()->where('id', $class)->first();
         abort_unless($schoolClass, 404);
 
-        $members = DB::table('members')
+        $allMembers = DB::table('members')
             ->where('class_id', $class)
             ->orderByRaw("CASE role WHEN 'owner' THEN 1 WHEN 'moderator' THEN 2 WHEN 'student' THEN 3 ELSE 4 END")
             ->orderBy('display_name')
             ->get();
+        $members = $allMembers->reject(fn ($member) => $member->status === 'removed')->values();
+        $removedMembers = $allMembers->where('status', 'removed')->values();
         $events = DB::table('events')
             ->where('class_id', $class)
             ->orderBy('event_date')
@@ -568,15 +620,17 @@ class StudosWebController extends Controller
         return [
             'schoolClass' => $schoolClass,
             'members' => $members,
+            'removedMembers' => $removedMembers,
             'events' => $events,
             'contentBlocks' => $contentBlocks,
             'currentMember' => $this->currentMember($class),
-            'canManageClass' => $this->hasClassRole($class, array_keys(self::ROLES)),
-            'canManageContent' => $this->hasClassRole($class, array_keys(self::ROLES)),
+            'canManageClass' => $this->hasClassRole($class, ['owner']),
+            'canManageContent' => $this->hasClassRole($class, ['owner', 'moderator']),
+            'canManageEvents' => $this->hasClassRole($class, ['owner', 'moderator']),
             'stats' => [
-                'activeMembers' => $members->where('status', 'active')->count(),
-                'pendingMembers' => $members->where('status', 'pending')->count(),
-                'removedMembers' => $members->where('status', 'removed')->count(),
+                'activeMembers' => $allMembers->where('status', 'active')->count(),
+                'pendingMembers' => $allMembers->where('status', 'pending')->count(),
+                'removedMembers' => $removedMembers->count(),
                 'events' => $events->count(),
                 'contentBlocks' => $contentBlocks->count(),
             ],
@@ -592,7 +646,7 @@ class StudosWebController extends Controller
             ->join('members', 'members.class_id', '=', 'classes.id')
             ->whereRaw('LOWER(members.email) = ?', [$userEmail])
             ->where('members.status', 'active')
-            ->whereIn('members.role', ['owner', 'admin', 'moderator', 'student']);
+            ->whereIn('members.role', ['owner', 'admin', 'moderator']);
     }
 
     private function primaryManagedClass(): ?object
@@ -609,6 +663,31 @@ class StudosWebController extends Controller
                 'classes.class_name',
                 'classes.graduation_year',
                 'classes.created_at',
+                'members.role as current_role',
+            ])
+            ->orderByRaw("CASE members.role WHEN 'owner' THEN 1 WHEN 'moderator' THEN 2 WHEN 'student' THEN 3 ELSE 4 END")
+            ->orderByDesc('classes.created_at')
+            ->first();
+    }
+
+    private function activeClassMembership(): ?object
+    {
+        if (! Auth::check() || ! Schema::hasTable('classes') || ! Schema::hasTable('members')) {
+            return null;
+        }
+
+        $userEmail = Str::lower(Auth::user()->email);
+
+        return DB::table('classes')
+            ->join('members', 'members.class_id', '=', 'classes.id')
+            ->whereRaw('LOWER(members.email) = ?', [$userEmail])
+            ->where('members.status', 'active')
+            ->select([
+                'classes.id',
+                'classes.public_id',
+                'classes.school_name',
+                'classes.class_name',
+                'classes.graduation_year',
                 'members.role as current_role',
             ])
             ->orderByRaw("CASE members.role WHEN 'owner' THEN 1 WHEN 'moderator' THEN 2 WHEN 'student' THEN 3 ELSE 4 END")
@@ -659,7 +738,7 @@ class StudosWebController extends Controller
     {
         $member = $this->currentMember($class);
 
-        return $member && in_array($this->normalizeRole($member->role), array_keys(self::ROLES), true);
+        return $member && in_array($this->normalizeRole($member->role), $roles, true);
     }
 
     private function authorizeClassRole(string $class, array $roles): object
@@ -667,7 +746,7 @@ class StudosWebController extends Controller
         $this->ensureClassExists($class);
 
         $member = $this->currentMember($class);
-        abort_unless($member && in_array($this->normalizeRole($member->role), array_keys(self::ROLES), true), 403);
+        abort_unless($member && in_array($this->normalizeRole($member->role), $roles, true), 403);
 
         return $member;
     }
@@ -741,46 +820,6 @@ class StudosWebController extends Controller
         abort_unless($school, 422, 'Vaelg en skole fra listen.');
 
         return $school;
-    }
-
-    private function ensureSchool(string $name): string
-    {
-        $name = trim($name);
-        $key = $this->schoolKey($name);
-
-        if ($key === '') {
-            abort(422, 'Skole mangler.');
-        }
-
-        $existingSchool = DB::table('schools')->where('name_key', $key)->first();
-
-        if ($existingSchool) {
-            if ($existingSchool->name !== $name) {
-                DB::table('schools')->where('id', $existingSchool->id)->update([
-                    'name' => $name,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return $existingSchool->id;
-        }
-
-        $schoolId = (string) Str::uuid();
-
-        DB::table('schools')->insert([
-            'id' => $schoolId,
-            'name' => $name,
-            'name_key' => $key,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        return $schoolId;
-    }
-
-    private function schoolKey(string $name): string
-    {
-        return preg_replace('/[^a-z0-9]+/', '-', Str::lower(Str::ascii(trim($name)))) ?? '';
     }
 
     private function normalizeRole(?string $role): string

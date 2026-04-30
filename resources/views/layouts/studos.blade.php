@@ -4,13 +4,22 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>@yield('title', 'Studos')</title>
+    <link rel="icon" href="{{ asset('assets/studos-mark.svg') }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ url('/styles.css') }}?v={{ filemtime(public_path('styles.css')) }}">
   </head>
-  <body>
+  <body class="@yield('bodyClass')">
+    @unless (trim($__env->yieldContent('hideHeader')))
     <header class="app-header">
       <a class="brand" href="{{ route('home') }}" aria-label="Studos">
         <img class="brand-logo" src="{{ asset('assets/studos-mark.svg') }}" alt="">
-        <span>Studos</span>
+        <span class="sr-only">Studos</span>
+        <span class="brand-wordmark" aria-hidden="true">
+          <span class="brand-wordmark-row">
+            <span class="brand-wordmark-light">Stu</span><span>dos</span>
+          </span>
+          <span class="brand-wordmark-underline"></span>
+          <span class="brand-wordmark-dot"></span>
+        </span>
       </a>
 
       <nav class="top-nav" aria-label="Hovednavigation">
@@ -39,6 +48,7 @@
         @endif
       </div>
     </header>
+    @endunless
 
     @if (session('status') || $errors->any())
       <div class="notice-wrap">

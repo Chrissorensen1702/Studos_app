@@ -37,14 +37,14 @@ class StudosController extends Controller
         [
             'id' => 'moderator',
             'label' => 'Moderator',
-            'description' => 'Har fuld adgang i klassen, indtil adgangsniveauer bliver defineret.',
-            'permissions' => ['manage_class', 'manage_members', 'manage_events', 'moderate_content'],
+            'description' => 'Kan styre klasseindhold, events og moderation, men ikke ejerskab eller roller.',
+            'permissions' => ['manage_content', 'manage_events', 'moderate_content'],
         ],
         [
             'id' => 'student',
             'label' => 'Elev',
-            'description' => 'Har fuld adgang i klassen, indtil adgangsniveauer bliver defineret.',
-            'permissions' => ['manage_class', 'manage_members', 'manage_events', 'moderate_content'],
+            'description' => 'Kan bruge appen, chatte og svare på events.',
+            'permissions' => ['view_class', 'chat', 'respond_events'],
         ],
     ];
 
@@ -500,7 +500,10 @@ class StudosController extends Controller
                 ->first();
 
             if ($existingMember) {
-                if (($existingMember->status ?? 'active') !== 'removed') {
+                $isPendingPlaceholder = ($existingMember->status ?? 'active') !== 'removed'
+                    && blank($existingMember->password_hash ?? null);
+
+                if (($existingMember->status ?? 'active') !== 'removed' && ! $isPendingPlaceholder) {
                     abort(422, 'Emailen findes allerede i klassen. Log ind paa den eksisterende profil.');
                 }
 
@@ -523,8 +526,8 @@ class StudosController extends Controller
                     'privacy_version' => self::PRIVACY_VERSION,
                     'deletion_requested_at' => null,
                     'deleted_at' => null,
-                    'role' => 'student',
-                    'status' => $status,
+                    'role' => $isPendingPlaceholder ? $existingMember->role : 'student',
+                    'status' => $isPendingPlaceholder ? 'active' : $status,
                 ];
 
                 DB::table('members')->where('id', $existingMember->id)->update($updates);
@@ -1392,11 +1395,7 @@ class StudosController extends Controller
         $actor = $this->authenticatedMemberFromRequest($request);
 
         abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
-        abort_unless(
-            in_array($this->normalizeRole($actor->role), ['owner', 'moderator'], true),
-            403,
-            'Du har ikke rettigheder til at aendre adgang.',
-        );
+        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun ejere kan aendre adgang.');
 
         $data = $request->validate([
             'role' => ['nullable', 'string', Rule::in($this->roleIds())],

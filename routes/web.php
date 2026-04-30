@@ -22,6 +22,7 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/admin/classes/{class}', [StudosWebController::class, 'show'])->name('classes.show');
     Route::patch('/admin/classes/{class}/settings', [StudosWebController::class, 'updateSettings'])->name('classes.settings.update');
     Route::post('/admin/classes/{class}/members', [StudosWebController::class, 'storeMember'])->name('classes.members.store');
+    Route::delete('/admin/classes/{class}/members', [StudosWebController::class, 'destroyMembers'])->name('classes.members.destroy-many');
     Route::patch('/admin/classes/{class}/members/{member}', [StudosWebController::class, 'updateMember'])->name('classes.members.update');
     Route::delete('/admin/classes/{class}/members/{member}', [StudosWebController::class, 'destroyMember'])->name('classes.members.destroy');
     Route::post('/admin/classes/{class}/content', [StudosWebController::class, 'storeContentBlock'])->name('classes.content.store');

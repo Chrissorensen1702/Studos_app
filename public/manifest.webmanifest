@@ -2,7 +2,7 @@
   "name": "Studos",
   "short_name": "Studos",
   "description": "Studos til klassen",
-  "start_url": "/pwa/?v=9",
+  "start_url": "/pwa/?v=15",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",

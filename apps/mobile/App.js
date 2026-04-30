@@ -27,8 +27,14 @@ import * as SecureStore from 'expo-secure-store';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
 const ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.androidNotificationPrompt.v1';
+const OVERVIEW_MOOD_STORAGE_KEY = 'studos.overviewMood.v1';
+const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
 const CHAT_SEND_ROCKET = require('./assets/chat-send-rocket.png');
+const CAPS_COIN = require('./assets/caps-coin.png');
+const FOOTER_CALENDAR_ICON = require('./assets/footer-calendar.png');
+const FOOTER_CHAT_ICON = require('./assets/footer-chat.png');
+const FOOTER_WALLS_ICON = require('./assets/footer-walls.png');
 const APP_WINDOW_WIDTH = Dimensions.get('window').width;
 const IS_WEB = Platform.OS === 'web';
 const IS_MOBILE_WEB = IS_WEB && APP_WINDOW_WIDTH <= 768;
@@ -55,6 +61,7 @@ const CHAT_LIST_HEADER_CLAMP_DISTANCE = 14;
 const CHAT_LIST_SEARCH_COLLAPSE_DISTANCE = 58;
 const CHAT_LIST_HEADER_EXPANDED_HEIGHT = APP_SCREEN_TOP_PADDING + CHAT_LIST_HEADER_SCROLL_PADDING_TOP;
 const CHAT_LIST_HEADER_COLLAPSED_HEIGHT = CHAT_LIST_HEADER_EXPANDED_HEIGHT - CHAT_LIST_SEARCH_COLLAPSE_DISTANCE;
+const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
 const CHAT_THREAD_HEADER_COUNTERS = [
   { id: 'home', icon: 'home', value: '12' },
   { id: 'wave', icon: 'water', value: '8' },
@@ -328,19 +335,19 @@ const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'MacBook-Air-tilhrend
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
 const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'http';
 const REVERB_FORCE_TLS = REVERB_SCHEME === 'https' || REVERB_PORT === 443;
-const APP_TABS = [
-  { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar' },
-  { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses' },
-  { id: 'overview', label: 'Overblik', icon: 'home-outline', activeIcon: 'home' },
-  { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', activeIcon: 'wallet' },
-  { id: 'walls', label: 'Walls', icon: 'images-outline', activeIcon: 'images' },
-];
 const STUDOS_THEME = {
   blue: '#75DED0',
   yellow: '#FFD46D',
   red: '#FF6F73',
   ink: '#172143',
 };
+const APP_TABS = [
+  { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar', accentColor: STUDOS_THEME.blue },
+  { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', accentColor: STUDOS_THEME.red },
+  { id: 'overview', label: 'Overblik', icon: 'home-outline', activeIcon: 'home' },
+  { id: 'challenges', label: 'Duel', icon: 'flash-outline', activeIcon: 'flash', accentColor: STUDOS_THEME.red },
+  { id: 'walls', label: 'Walls', icon: 'images-outline', activeIcon: 'images', accentColor: STUDOS_THEME.yellow },
+];
 const CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE = 18;
 const CHAT_THREAD_BACK_SWIPE_DISTANCE = 72;
 const CHAT_THREAD_BACK_SWIPE_FAST_DISTANCE = 48;
@@ -352,17 +359,22 @@ const APP_DRAWER_SECTIONS = [
     items: [
       { id: 'leaderboard', label: 'Leaderboard', icon: 'stats-chart-outline', activeIcon: 'stats-chart', accentColor: STUDOS_THEME.red },
       { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
-      { id: 'challenges', label: 'Udfordringer', icon: 'flash-outline', activeIcon: 'flash', accentColor: STUDOS_THEME.red },
-      { id: 'badges', label: 'Badges / klip', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
-      { id: 'bluebook', label: 'Blå bog', icon: 'book-outline', activeIcon: 'book', accentColor: STUDOS_THEME.blue },
+      { id: 'badges', label: 'Klasseawards', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
       { id: 'randomizer', label: 'Randomizer', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
     ],
   },
   {
     title: 'Andre klasser',
     items: [
-      { id: 'connections', label: 'Connections', icon: 'person-add-outline', activeIcon: 'person-add', accentColor: STUDOS_THEME.blue },
+      { id: 'connections', label: 'Andre klasser', icon: 'person-add-outline', activeIcon: 'person-add', accentColor: STUDOS_THEME.blue },
       { id: 'classBattle', label: 'Klassedyst', icon: 'podium-outline', activeIcon: 'podium', accentColor: STUDOS_THEME.yellow },
+    ],
+  },
+  {
+    title: 'Kommer snart',
+    items: [
+      { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', activeIcon: 'wallet', accentColor: STUDOS_THEME.yellow, locked: true },
+      { id: 'bluebook', label: 'Blå bog', icon: 'book-outline', activeIcon: 'book', accentColor: STUDOS_THEME.blue, locked: true },
     ],
   },
 ];
@@ -639,6 +651,73 @@ const compareCalendarDayKeys = (first, second) => (
   Date.parse(`${first}T12:00:00`) - Date.parse(`${second}T12:00:00`)
 );
 
+const localCalendarTimestamp = (dayKey, time, endOfDay = false) => {
+  const dayMatch = String(dayKey ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = String(time ?? '').match(/^(\d{2}):(\d{2})$/);
+
+  if (!dayMatch || (!timeMatch && !endOfDay)) {
+    return Number.NaN;
+  }
+
+  const [, rawYear, rawMonth, rawDay] = dayMatch;
+  const hour = endOfDay ? 23 : Number(timeMatch[1]);
+  const minute = endOfDay ? 59 : Number(timeMatch[2]);
+  const second = endOfDay ? 59 : 0;
+  const millisecond = endOfDay ? 999 : 0;
+  const parsed = new Date(
+    Number(rawYear),
+    Number(rawMonth) - 1,
+    Number(rawDay),
+    hour,
+    minute,
+    second,
+    millisecond,
+  ).getTime();
+
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+const eventLocalStartsAtTime = (event) => {
+  const dayKey = eventDayKeyFor(event);
+  const eventTime = formatCalendarTime(event?.startsAt);
+  const localTime = localCalendarTimestamp(dayKey, eventTime);
+
+  if (Number.isFinite(localTime)) {
+    return localTime;
+  }
+
+  const startsAt = event?.startsAt;
+
+  if (startsAt) {
+    const parsed = Date.parse(startsAt);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Number.NaN;
+};
+
+const eventPastCutoffTime = (event) => {
+  const startsAtTime = eventLocalStartsAtTime(event);
+
+  if (Number.isFinite(startsAtTime)) {
+    return startsAtTime;
+  }
+
+  const dayKey = eventDayKeyFor(event);
+  const endOfDayTime = localCalendarTimestamp(dayKey, '', true);
+
+  return Number.isFinite(endOfDayTime) ? endOfDayTime : Number.POSITIVE_INFINITY;
+};
+
+const eventIsPast = (event, nowMs = Date.now()) => {
+  const cutoffTime = eventPastCutoffTime(event);
+
+  return Number.isFinite(cutoffTime) && cutoffTime <= nowMs;
+};
+
 const calendarDayKeysBetween = (startKey, endKey) => {
   const start = dateFromInput(startKey);
   const end = dateFromInput(endKey);
@@ -723,19 +802,16 @@ const calendarRailDayKeysFor = (eventDayKeys = [], selectedDayKey, todayKey) => 
 };
 
 const eventSortTime = (event) => {
-  const startsAt = event?.startsAt;
+  const startsAtTime = eventLocalStartsAtTime(event);
 
-  if (startsAt) {
-    const parsed = Date.parse(startsAt);
-
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+  if (Number.isFinite(startsAtTime)) {
+    return startsAtTime;
   }
 
   const day = eventDayKeyFor(event);
+  const dayStartTime = localCalendarTimestamp(day, '00:00');
 
-  return day ? Date.parse(`${day}T00:00:00`) : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(dayStartTime) ? dayStartTime : Number.MAX_SAFE_INTEGER;
 };
 
 const uniqueByKey = (items = [], keyFor) => {
@@ -1281,6 +1357,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [existingLogin, setExistingLogin] = useState({ inviteCode: '', email: '', password: '' });
   const [activeTab, setActiveTab] = useState('overview');
+  const [calendarFocusTarget, setCalendarFocusTarget] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -1311,12 +1388,27 @@ export default function App() {
     () => daysUntil(activeClass?.graduationDate),
     [activeClass?.graduationDate],
   );
-  const appContentDetached = activeTab === 'chat' || activeTab === 'calendar';
+  const appContentDetached = activeTab === 'chat' || activeTab === 'calendar' || activeTab === 'overview';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
       appScrollRef.current?.scrollTo({ y: 0, animated: false });
     });
+  }, []);
+
+  const openCalendar = useCallback((target = null) => {
+    const eventId = target?.eventId ? String(target.eventId) : '';
+    const dayKey = target?.dayKey || '';
+
+    if (eventId || dayKey) {
+      setCalendarFocusTarget({
+        eventId,
+        dayKey,
+        requestId: `${Date.now()}-${eventId || dayKey}`,
+      });
+    }
+
+    setActiveTab('calendar');
   }, []);
 
   useEffect(() => {
@@ -2065,6 +2157,7 @@ export default function App() {
             {appContentDetached ? (
               <View style={[
                 styles.appScreen,
+                activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
@@ -2073,6 +2166,7 @@ export default function App() {
                   activeMember={activeMember}
                   activeMembers={activeMembers}
                   activeTab={activeTab}
+                  calendarFocusTarget={calendarFocusTarget}
                   countdown={countdown}
                   error={error}
                   events={events}
@@ -2080,6 +2174,7 @@ export default function App() {
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
                   onChangeTab={setActiveTab}
+                  onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
                   onEnableAndroidNotifications={enableAndroidNotifications}
@@ -2108,6 +2203,7 @@ export default function App() {
                   activeMember={activeMember}
                   activeMembers={activeMembers}
                   activeTab={activeTab}
+                  calendarFocusTarget={calendarFocusTarget}
                   countdown={countdown}
                   error={error}
                   events={events}
@@ -2115,6 +2211,7 @@ export default function App() {
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
                   onChangeTab={setActiveTab}
+                  onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
                   onEnableAndroidNotifications={enableAndroidNotifications}
@@ -2271,6 +2368,7 @@ function AppTabScreen({
   activeMember,
   activeMembers,
   activeTab,
+  calendarFocusTarget,
   countdown,
   error,
   events,
@@ -2278,6 +2376,7 @@ function AppTabScreen({
   nextEvent,
   onChatUnreadCountChange,
   onChangeTab,
+  onOpenCalendar,
   onCreateEvent,
   onDeleteEvent,
   onEnableAndroidNotifications,
@@ -2294,6 +2393,15 @@ function AppTabScreen({
   sessionToken,
   notificationState,
 }) {
+  const openCalendarTab = (target) => {
+    if (onOpenCalendar) {
+      onOpenCalendar(target);
+      return;
+    }
+
+    onChangeTab?.('calendar');
+  };
+
   if (activeTab === 'chat') {
     return (
       <ChatScreen
@@ -2348,6 +2456,7 @@ function AppTabScreen({
       <CalendarScreen
         activeMember={activeMember}
         activeMembers={activeMembers}
+        focusTarget={calendarFocusTarget}
         events={events}
         onCreateEvent={onCreateEvent}
         onDeleteEvent={onDeleteEvent}
@@ -2364,10 +2473,11 @@ function AppTabScreen({
     return (
       <FeatureScreen
         icon="wallet"
+        locked
         kicker={schoolClass.className}
         title="Wallet"
-        emptyTitle="Ingen fordele endnu"
-        emptyText="Rabatkort, elevbevis og fordele bliver samlet her."
+        emptyTitle="Kommer snart"
+        emptyText="Wallet åbner senere med rabatkort, elevbevis og fordele."
       />
     );
   }
@@ -2376,10 +2486,11 @@ function AppTabScreen({
     return (
       <FeatureScreen
         icon="book"
+        locked
         kicker={schoolClass.className}
         title="Blå bog"
-        emptyTitle="Blå bog er tom endnu"
-        emptyText="Klasseprofiler, historier og de små legendariske detaljer bliver samlet her."
+        emptyTitle="Kommer snart"
+        emptyText="Blå bog åbner senere med klasseprofiler, historier og de små legendariske detaljer."
       />
     );
   }
@@ -2449,9 +2560,9 @@ function AppTabScreen({
       <FeatureScreen
         icon="flash"
         kicker={schoolClass.className}
-        title="Udfordringer"
-        emptyTitle="Ingen udfordringer endnu"
-        emptyText="Challenges fra andre elever bliver samlet her."
+        title="Pointduel"
+        emptyTitle="Ingen pointdueller endnu"
+        emptyText="Udfordr hinanden med Caps, og følg aktive dueller her."
       />
     );
   }
@@ -2489,6 +2600,18 @@ function AppTabScreen({
     );
   }
 
+  if (activeTab === 'emergencyContacts') {
+    return (
+      <FeatureScreen
+        icon="call"
+        kicker={schoolClass.className}
+        title="Nødkontakter"
+        emptyTitle="Kommer snart"
+        emptyText="Vigtige kontaktpersoner og hjælp samles her."
+      />
+    );
+  }
+
   return (
     <OverviewScreen
       activeMember={activeMember}
@@ -2496,7 +2619,9 @@ function AppTabScreen({
       countdown={countdown}
       events={events}
       nextEvent={nextEvent}
-      onOpenCalendar={() => onChangeTab?.('calendar')}
+      onOpenCalendar={openCalendarTab}
+      onOpenPointDuel={() => onChangeTab?.('challenges')}
+      onOpenWalls={() => onChangeTab?.('walls')}
       pinnedContent={pinnedContent}
       profile={profile}
       schoolClass={schoolClass}
@@ -4550,6 +4675,7 @@ function ChatScreen({
 function CalendarScreen({
   activeMember,
   activeMembers = [],
+  focusTarget,
   events,
   onCreateEvent,
   onDeleteEvent,
@@ -4578,12 +4704,16 @@ function CalendarScreen({
   const [blockingMemberId, setBlockingMemberId] = useState('');
   const [respondingEventId, setRespondingEventId] = useState('');
   const [pendingResponsePageOpen, setPendingResponsePageOpen] = useState(false);
+  const [pastEventsPageOpen, setPastEventsPageOpen] = useState(false);
   const [calendarAttendanceEventId, setCalendarAttendanceEventId] = useState('');
   const [calendarActionEventId, setCalendarActionEventId] = useState('');
   const [calendarDeleteEventId, setCalendarDeleteEventId] = useState('');
   const calendarHeaderScrolledRef = useRef(false);
   const calendarScrollY = useRef(new Animated.Value(0)).current;
+  const calendarGridScrollRef = useRef(null);
   const calendarDayRailRef = useRef(null);
+  const calendarEventLayoutsRef = useRef({});
+  const handledCalendarFocusRequestRef = useRef('');
   const hourWheelRef = useRef(null);
   const minuteWheelRef = useRef(null);
   const calendarSubpageDragX = useRef(new Animated.Value(0)).current;
@@ -4645,29 +4775,40 @@ function CalendarScreen({
   const customInviteMeta = selectedInviteCount
     ? `${inviteSelectorMeta}${selectedInviteNames ? ` · ${selectedInviteNames}` : ''}`
     : 'Ingen valgt endnu';
-  const todayKey = useMemo(() => formatInputDate(new Date()), []);
+  const [currentCalendarTime, setCurrentCalendarTime] = useState(() => Date.now());
+  const todayKey = useMemo(() => formatInputDate(new Date(currentCalendarTime)), [currentCalendarTime]);
   const sortedEvents = useMemo(
     () => uniqueById(events ?? []).sort((first, second) => {
-      const firstTime = Date.parse(first.startsAt ?? `${first.date}T12:00:00`);
-      const secondTime = Date.parse(second.startsAt ?? `${second.date}T12:00:00`);
+      const firstTime = eventSortTime(first);
+      const secondTime = eventSortTime(second);
 
       return (Number.isFinite(firstTime) ? firstTime : 0) - (Number.isFinite(secondTime) ? secondTime : 0);
     }),
     [events],
   );
+  const upcomingEvents = useMemo(
+    () => sortedEvents.filter((event) => !eventIsPast(event, currentCalendarTime)),
+    [currentCalendarTime, sortedEvents],
+  );
+  const pastEvents = useMemo(
+    () => sortedEvents
+      .filter((event) => eventIsPast(event, currentCalendarTime))
+      .sort((first, second) => eventSortTime(second) - eventSortTime(first)),
+    [currentCalendarTime, sortedEvents],
+  );
   const initialSelectedCalendarDay = useMemo(() => {
-    const upcomingEvent = sortedEvents.find((event) => {
+    const upcomingEvent = upcomingEvents.find((event) => {
       const dayKey = eventDayKeyFor(event);
 
       return dayKey && compareCalendarDayKeys(dayKey, todayKey) >= 0;
     });
 
     return eventDayKeyFor(upcomingEvent) || todayKey;
-  }, [sortedEvents, todayKey]);
+  }, [todayKey, upcomingEvents]);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(initialSelectedCalendarDay);
   const [calendarRailMonth, setCalendarRailMonth] = useState(() => dateFromInput(initialSelectedCalendarDay));
   const selectedCalendarDayTouchedRef = useRef(false);
-  const eventCountByDay = useMemo(() => sortedEvents.reduce((counts, event) => {
+  const eventCountByDay = useMemo(() => upcomingEvents.reduce((counts, event) => {
     const dayKey = eventDayKeyFor(event);
 
     if (!dayKey) {
@@ -4678,13 +4819,13 @@ function CalendarScreen({
       ...counts,
       [dayKey]: (counts[dayKey] ?? 0) + 1,
     };
-  }, {}), [sortedEvents]);
+  }, {}), [upcomingEvents]);
   const calendarEventDayKeys = useMemo(() => uniqueByKey(
-    sortedEvents
+    upcomingEvents
       .map((event) => eventDayKeyFor(event))
       .filter(Boolean),
     (dayKey) => dayKey,
-  ).sort(compareCalendarDayKeys), [sortedEvents]);
+  ).sort(compareCalendarDayKeys), [upcomingEvents]);
   const calendarRailMonthTitle = capitalizeCalendarLabel(monthTitle(calendarRailMonth));
   const calendarRailDays = useMemo(() => {
     return calendarRailDayKeysFor(calendarEventDayKeys, selectedCalendarDay, todayKey)
@@ -4715,8 +4856,8 @@ function CalendarScreen({
     }, []);
   }, [calendarDayRailWidth, calendarRailDays]);
   const selectedCalendarDayEvents = useMemo(
-    () => sortedEvents.filter((event) => eventDayKeyFor(event) === selectedCalendarDay),
-    [selectedCalendarDay, sortedEvents],
+    () => upcomingEvents.filter((event) => eventDayKeyFor(event) === selectedCalendarDay),
+    [selectedCalendarDay, upcomingEvents],
   );
   const memberOwnsEvent = useCallback((event) => (
     Boolean(event?.createdByMemberId && activeMember?.id)
@@ -4788,8 +4929,8 @@ function CalendarScreen({
       });
   }, [activeMembers, calendarAttendanceEvent]);
   const pendingResponseEvents = useMemo(
-    () => sortedEvents.filter((event) => event.myInviteStatus === 'invited' && !event.myRsvp),
-    [sortedEvents],
+    () => upcomingEvents.filter((event) => event.myInviteStatus === 'invited' && !event.myRsvp),
+    [upcomingEvents],
   );
   const pendingResponseCount = pendingResponseEvents.length;
   const pendingResponseSummary = pendingResponseCount
@@ -4797,6 +4938,8 @@ function CalendarScreen({
     : 'Ingen afventer';
   const calendarSubpageMode = pendingResponsePageOpen
     ? 'pendingResponses'
+    : pastEventsPageOpen
+      ? 'pastEvents'
     : creatingEvent && selectingInvitees
       ? 'invitees'
       : creatingEvent
@@ -4830,6 +4973,14 @@ function CalendarScreen({
 
   const handleCalendarSubpageLayout = useCallback((event) => {
     calendarSubpageWidthRef.current = Math.max(event.nativeEvent.layout.width, 1);
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentCalendarTime(Date.now());
+    }, 15_000);
+
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -4907,8 +5058,8 @@ function CalendarScreen({
 
     selectedCalendarDayTouchedRef.current = true;
     setCalendarRailMonth(nextMonth);
-    setSelectedCalendarDay(defaultCalendarDayForMonth(nextMonth, sortedEvents, todayKey));
-  }, [calendarRailMonth, sortedEvents, todayKey]);
+    setSelectedCalendarDay(defaultCalendarDayForMonth(nextMonth, upcomingEvents, todayKey));
+  }, [calendarRailMonth, todayKey, upcomingEvents]);
 
   const jumpCalendarRailToEventDay = useCallback((dayKey) => {
     if (!dayKey || dayKey === selectedCalendarDay) {
@@ -4929,8 +5080,18 @@ function CalendarScreen({
     setCalendarStatus('');
     setCreatingEvent(false);
     setSelectingInvitees(false);
+    setPastEventsPageOpen(false);
     setPendingResponsePageOpen(true);
   }, [pendingResponseEvents]);
+
+  const openPastEventsPage = useCallback(() => {
+    setCalendarError('');
+    setCalendarStatus('');
+    setCreatingEvent(false);
+    setSelectingInvitees(false);
+    setPendingResponsePageOpen(false);
+    setPastEventsPageOpen(true);
+  }, []);
 
   const handleCalendarDayRailScrollBeginDrag = useCallback((event) => {
     calendarRailProgrammaticScrollRef.current = false;
@@ -5018,6 +5179,72 @@ function CalendarScreen({
     updateCalendarHeaderScrolled(false);
   }, [calendarScrollY, updateCalendarHeaderScrolled]);
 
+  const scrollCalendarToY = useCallback((y, animated = true) => {
+    const scrollTarget = { y: Math.max(0, y), animated };
+    const scrollRef = calendarGridScrollRef.current;
+
+    if (typeof scrollRef?.scrollTo === 'function') {
+      scrollRef.scrollTo(scrollTarget);
+    } else if (typeof scrollRef?.getNode === 'function') {
+      scrollRef.getNode()?.scrollTo?.(scrollTarget);
+    }
+
+    updateCalendarHeaderScrolled(scrollTarget.y > 6);
+  }, [updateCalendarHeaderScrolled]);
+
+  const scrollCalendarToEventCard = useCallback((eventId, attempt = 0) => {
+    const eventKey = String(eventId || '');
+    const layout = calendarEventLayoutsRef.current[eventKey];
+
+    if (layout) {
+      scrollCalendarToY(layout.y - 90, true);
+      return;
+    }
+
+    if (attempt >= 8) {
+      return;
+    }
+
+    setTimeout(() => {
+      scrollCalendarToEventCard(eventKey, attempt + 1);
+    }, 80);
+  }, [scrollCalendarToY]);
+
+  useEffect(() => {
+    const requestId = focusTarget?.requestId;
+
+    if (!requestId || handledCalendarFocusRequestRef.current === requestId) {
+      return;
+    }
+
+    const eventId = focusTarget?.eventId ? String(focusTarget.eventId) : '';
+    const targetEvent = eventId
+      ? upcomingEvents.find((event) => String(event.id) === eventId)
+      : null;
+    const dayKey = focusTarget?.dayKey || eventDayKeyFor(targetEvent);
+
+    if (!dayKey) {
+      return;
+    }
+
+    handledCalendarFocusRequestRef.current = requestId;
+    calendarEventLayoutsRef.current = {};
+    setCalendarError('');
+    setCalendarStatus('');
+    setCreatingEvent(false);
+    setSelectingInvitees(false);
+    setPendingResponsePageOpen(false);
+    setPastEventsPageOpen(false);
+    selectCalendarDay(dayKey);
+    scrollCalendarToY(0, false);
+
+    if (eventId) {
+      requestAnimationFrame(() => {
+        scrollCalendarToEventCard(eventId);
+      });
+    }
+  }, [focusTarget, scrollCalendarToEventCard, scrollCalendarToY, selectCalendarDay, upcomingEvents]);
+
   const scrollTimeWheelsTo = (time, animated = false) => {
     const nextTime = splitCalendarTime(time);
     const hourIndex = Math.max(0, CALENDAR_HOUR_OPTIONS.indexOf(nextTime.hour));
@@ -5050,6 +5277,7 @@ function CalendarScreen({
     setFormError('');
     setDeleteEventError('');
     setPendingResponsePageOpen(false);
+    setPastEventsPageOpen(false);
     resetCalendarHeaderScroll();
     setCreatingEvent(true);
     scrollTimeWheelsTo(nextDraft.eventTime);
@@ -5075,6 +5303,7 @@ function CalendarScreen({
     setFormError('');
     setDeleteEventError('');
     setPendingResponsePageOpen(false);
+    setPastEventsPageOpen(false);
     resetCalendarHeaderScroll();
     setCreatingEvent(true);
     scrollTimeWheelsTo(nextDraft.eventTime);
@@ -5454,11 +5683,11 @@ function CalendarScreen({
       setCalendarAttendanceEventId((current) => (current === deletedEventId ? '' : current));
 
       if (deletedEventDay === selectedCalendarDay) {
-        const nextEvent = sortedEvents.find((event) => (
+        const nextEvent = upcomingEvents.find((event) => (
           event.id !== deletedEventId
           && eventDayKeyFor(event)
           && compareCalendarDayKeys(eventDayKeyFor(event), selectedCalendarDay) >= 0
-        )) ?? sortedEvents.find((event) => event.id !== deletedEventId && eventDayKeyFor(event));
+        )) ?? upcomingEvents.find((event) => event.id !== deletedEventId && eventDayKeyFor(event));
 
         if (nextEvent) {
           selectCalendarDay(eventDayKeyFor(nextEvent));
@@ -5530,6 +5759,445 @@ function CalendarScreen({
       setRespondingEventId('');
     }
   };
+
+  const renderCalendarEventCard = (event, { past = false } = {}) => {
+    const dateParts = formatCalendarDateParts(event.date);
+    const eventTime = formatCalendarTime(event.startsAt);
+    const attendingCount = event.attendingCount ?? event.rsvpCount ?? 0;
+    const notAttendingCount = event.notAttendingCount ?? 0;
+    const attendeePreview = uniqueByKey(event.attendees ?? [], (person) => person?.memberId).slice(0, CALENDAR_ATTENDEE_STACK_LIMIT);
+    const attendeeOverflowCount = Math.max(0, attendingCount - attendeePreview.length);
+    const attendingLoading = respondingEventId === `${event.id}:attending`;
+    const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
+    const responseLocked = Boolean(respondingEventId) || past;
+    const eventCoverTemplate = eventCoverTemplateFor(event.coverImageTemplateId);
+    const hasEventCover = Boolean(event.coverImageUrl || eventCoverTemplate);
+
+    return (
+      <View key={event.id} style={[styles.calendarEventCard, past ? styles.calendarEventCardPast : null]}>
+        {hasEventCover ? (
+          <View style={styles.calendarEventCoverWrap}>
+            {eventCoverTemplate ? (
+              <EventCoverTemplateArt
+                templateId={eventCoverTemplate.id}
+                style={styles.calendarEventCoverImage}
+              />
+            ) : (
+              <Image
+                resizeMode="cover"
+                source={{ uri: event.coverImageUrl }}
+                style={styles.calendarEventCoverImage}
+              />
+            )}
+            <View style={styles.calendarEventCoverShade} pointerEvents="none" />
+            <View style={[
+              styles.calendarEventCoverTitleBlock,
+              event.creator ? styles.calendarEventCoverTitleBlockWithAvatar : null,
+            ]}>
+              <Text numberOfLines={2} style={styles.calendarEventCoverTitle}>
+                {event.title}
+              </Text>
+            </View>
+            {!past ? (
+              <Pressable
+                accessibilityLabel={`Handlinger for ${event.title}`}
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => setCalendarActionEventId(event.id)}
+                style={({ pressed }) => [
+                  styles.calendarEventCoverActionButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="ellipsis-horizontal" size={18} color="#FFFFFF" />
+              </Pressable>
+            ) : null}
+            {event.creator ? (
+              <View style={styles.calendarEventCreatorAvatar}>
+                <Avatar profile={event.creator} variant="calendarCreator" />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        <View style={styles.calendarEventBody}>
+          <View style={[
+            styles.calendarEventTopRow,
+            hasEventCover ? styles.calendarEventTopRowCentered : null,
+          ]}>
+            <View style={[
+              styles.calendarDateBadge,
+              past ? styles.calendarDateBadgePast : null,
+              hasEventCover && event.creator ? styles.calendarDateBadgeUnderAvatar : null,
+            ]}>
+              <Text style={[styles.calendarDateDay, past ? styles.calendarDateDayPast : null]}>{dateParts.day}</Text>
+              <Text style={styles.calendarDateMonth}>{dateParts.month}</Text>
+            </View>
+            <View style={[
+              styles.calendarEventCopy,
+              hasEventCover ? styles.calendarEventCopyBesideDate : null,
+            ]}>
+              {!hasEventCover ? (
+                <View style={styles.calendarEventTitleRow}>
+                  <Text numberOfLines={2} style={styles.calendarEventTitle}>
+                    {event.title}
+                  </Text>
+                  {!past ? (
+                    <Pressable
+                      accessibilityLabel={`Handlinger for ${event.title}`}
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => setCalendarActionEventId(event.id)}
+                      style={({ pressed }) => [
+                        styles.calendarEventActionButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
+              {event.creator?.displayName ? (
+                <Text numberOfLines={1} style={styles.calendarCreatorText}>
+                  Oprettet af {event.creator.displayName}
+                </Text>
+              ) : null}
+              {past ? (
+                <View style={styles.calendarPastEventBadge}>
+                  <Ionicons name="checkmark-done" size={12} color={STUDOS_THEME.ink} />
+                  <Text numberOfLines={1} style={styles.calendarPastEventBadgeText}>Afholdt</Text>
+                </View>
+              ) : null}
+              <View style={styles.calendarMetaLine}>
+                <Ionicons name="calendar" size={14} color={past ? '#8B94A6' : STUDOS_THEME.red} />
+                <Text numberOfLines={1} style={styles.calendarMetaText}>
+                  {dateParts.weekday}{eventTime ? ` kl. ${eventTime}` : ''}
+                </Text>
+              </View>
+              {event.location ? (
+                <View style={styles.calendarMetaLine}>
+                  <Ionicons name="location" size={14} color={STUDOS_THEME.ink} />
+                  <Text numberOfLines={1} style={styles.calendarMetaText}>
+                    {event.location}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+
+          {event.description ? (
+            <Text style={styles.calendarDescription}>{event.description}</Text>
+          ) : null}
+
+          <Pressable
+            accessibilityLabel={`Vis svar for ${event.title}`}
+            accessibilityRole="button"
+            onPress={() => setCalendarAttendanceEventId(event.id)}
+            style={({ pressed }) => [
+              styles.calendarStatsRow,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <View style={styles.calendarAttendeeStack}>
+              {attendeePreview.map((person, index) => (
+                <View
+                  key={person.memberId ? `${person.memberId}-${index}` : `attendee-${index}`}
+                  style={[
+                    styles.calendarAttendeeStackItem,
+                    index ? styles.calendarAttendeeStackItemOverlap : null,
+                    { zIndex: index + 1 },
+                  ]}
+                >
+                  <Avatar
+                    profile={{
+                      displayName: person.displayName ?? 'Ukendt',
+                      profilePhotoUrl: person.profilePhotoUrl,
+                    }}
+                    variant="calendarAttendeeCard"
+                  />
+                </View>
+              ))}
+              {attendeeOverflowCount > 0 ? (
+                <View
+                  style={[
+                    styles.calendarAttendeeOverflowCard,
+                    attendeePreview.length ? styles.calendarAttendeeStackItemOverlap : null,
+                    { zIndex: attendeePreview.length + 1 },
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.calendarAttendeeOverflowText}>
+                    +{attendeeOverflowCount}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.calendarStatTextGroup}>
+              <Text style={styles.calendarStatText}>
+                {attendingCount} {past ? 'deltog' : 'deltager'}
+              </Text>
+              <View style={styles.calendarStatDot} />
+              <Text style={styles.calendarStatText}>
+                {notAttendingCount} {past ? 'deltog ikke' : 'kan ikke'}
+              </Text>
+            </View>
+          </Pressable>
+
+          {!past ? (
+            <View style={styles.calendarRsvpRow}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={responseLocked}
+                onPress={() => respondToEvent(event.id, 'attending')}
+                style={({ pressed }) => [
+                  styles.calendarRsvpButton,
+                  event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
+                  pressed && !responseLocked ? styles.footerItemPressed : null,
+                ]}
+              >
+                {attendingLoading ? (
+                  <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                ) : (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={17}
+                    color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.calendarRsvpText,
+                    event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                  ]}
+                >
+                  Deltager
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={responseLocked}
+                onPress={() => respondToEvent(event.id, 'not_attending')}
+                style={({ pressed }) => [
+                  styles.calendarRsvpButton,
+                  event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
+                  pressed && !responseLocked ? styles.footerItemPressed : null,
+                ]}
+              >
+                {notAttendingLoading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Ionicons
+                    name="close-circle"
+                    size={17}
+                    color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.calendarRsvpText,
+                    event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
+                  ]}
+                >
+                  Deltager ikke
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
+  const calendarAttendanceModal = (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setCalendarAttendanceEventId('')}
+      transparent
+      visible={Boolean(calendarAttendanceEvent)}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk deltagere"
+          onPress={() => setCalendarAttendanceEventId('')}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.calendarAttendanceModalPanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.calendarAttendanceModalTitleWrap}>
+              <Text style={styles.chatModalKicker}>Svar</Text>
+              <Text numberOfLines={1} style={styles.chatModalTitle}>
+                {calendarAttendanceEvent?.title ?? 'Deltagere'}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk"
+              accessibilityRole="button"
+              onPress={() => setCalendarAttendanceEventId('')}
+              style={({ pressed }) => [
+                styles.chatModalCloseButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.calendarAttendanceList}
+            showsVerticalScrollIndicator={false}
+            style={styles.calendarAttendanceScroll}
+          >
+            {calendarAttendancePeople.length ? calendarAttendancePeople.map((person) => {
+              const statusConfig = {
+                attending: {
+                  icon: 'checkmark',
+                  label: 'Deltager',
+                  tagStyle: styles.calendarAttendanceTagAttending,
+                  style: styles.calendarAttendanceStatusAttending,
+                  color: '#FFFFFF',
+                },
+                not_attending: {
+                  icon: 'close',
+                  label: 'Deltager ikke',
+                  tagStyle: styles.calendarAttendanceTagDeclined,
+                  style: styles.calendarAttendanceStatusDeclined,
+                  color: STUDOS_THEME.ink,
+                },
+                pending: {
+                  icon: 'remove',
+                  label: 'Mangler svar',
+                  tagStyle: styles.calendarAttendanceTagPending,
+                  style: styles.calendarAttendanceStatusPending,
+                  color: '#65748b',
+                },
+              }[person.status] ?? {
+                icon: 'remove',
+                label: 'Mangler svar',
+                tagStyle: styles.calendarAttendanceTagPending,
+                style: styles.calendarAttendanceStatusPending,
+                color: '#65748b',
+              };
+              const displayName = person.displayName ?? 'Ukendt';
+
+              return (
+                <View
+                  accessible
+                  accessibilityLabel={`${displayName}, ${statusConfig.label}`}
+                  key={person.memberId || displayName}
+                  style={[styles.calendarAttendanceTag, statusConfig.tagStyle]}
+                >
+                  <Avatar
+                    profile={{
+                      displayName,
+                      profilePhotoUrl: person.profilePhotoUrl,
+                    }}
+                    variant="calendarAttendanceTag"
+                  />
+                  <Text numberOfLines={1} style={styles.calendarAttendanceName}>
+                    {displayName}
+                  </Text>
+                  <View style={[styles.calendarAttendanceStatusIcon, statusConfig.style]}>
+                    <Ionicons name={statusConfig.icon} size={12} color={statusConfig.color} />
+                  </View>
+                </View>
+              );
+            }) : (
+              <View style={styles.calendarPendingResponseEmpty}>
+                <Ionicons name="people" size={28} color={STUDOS_THEME.blue} />
+                <Text style={styles.calendarPendingResponseEmptyText}>
+                  Ingen deltagere er fundet endnu.
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  if (pastEventsPageOpen) {
+    const closePastEventsPage = () => {
+      setPastEventsPageOpen(false);
+      return true;
+    };
+    const calendarSubpageTouchHandlers = createCalendarSubpageTouchHandlers(closePastEventsPage);
+
+    return (
+      <Modal
+        animationType="none"
+        onRequestClose={() => returnFromCalendarSubpage(closePastEventsPage)}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={pastEventsPageOpen}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.calendarSubpageModalHost}
+        >
+          <View
+            onLayout={handleCalendarSubpageLayout}
+            style={styles.calendarSubpageModalContent}
+          >
+      <Animated.View
+        {...calendarSubpageTouchHandlers}
+        style={[
+          styles.calendarSubpageFullscreen,
+          styles.calendarSubpageDraggable,
+          calendarSubpageDragStyle,
+        ]}
+      >
+        <ScrollView
+          {...calendarSubpageTouchHandlers}
+          contentContainerStyle={styles.calendarScreenScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.calendarScreenScroll}
+        >
+          <View style={styles.calendarCreatePageHeader} {...calendarSubpageTouchHandlers}>
+            <Pressable
+              accessibilityLabel="Tilbage til kalender"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => returnFromCalendarSubpage(closePastEventsPage)}
+              style={({ pressed }) => [
+                styles.calendarCreateBackButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarCreateBackText}>Kalender</Text>
+            </Pressable>
+            <Text style={styles.calendarCreatePageTitle}>Tidligere events</Text>
+          </View>
+
+          <View style={styles.calendarPastEventsPage}>
+            <Text style={styles.calendarPastEventsPageSummary}>
+              {pastEvents.length
+                ? `${pastEvents.length} ${pastEvents.length === 1 ? 'afholdt event' : 'afholdte events'}`
+                : 'Ingen afholdte events endnu'}
+            </Text>
+            {pastEvents.length ? (
+              <View style={styles.calendarEventList}>
+                {pastEvents.map((event) => renderCalendarEventCard(event, { past: true }))}
+              </View>
+            ) : (
+              <View style={styles.calendarPendingResponseEmpty}>
+                <Ionicons name="archive" size={28} color={STUDOS_THEME.blue} />
+                <Text style={styles.calendarPendingResponseEmptyText}>
+                  Afholdte events lander her, når deres tidspunkt er passeret.
+                </Text>
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </Animated.View>
+      {calendarAttendanceModal}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 
   if (pendingResponsePageOpen) {
     const closePendingResponsePage = () => {
@@ -6338,6 +7006,7 @@ function CalendarScreen({
         contentContainerStyle={styles.calendarGridScrollContent}
         keyboardShouldPersistTaps="handled"
         onScroll={handleCalendarGridScroll}
+        ref={calendarGridScrollRef}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.calendarGridScroll}
@@ -6430,7 +7099,7 @@ function CalendarScreen({
       {calendarError ? <Text style={styles.errorText}>{calendarError}</Text> : null}
       {calendarStatus ? <Text style={styles.successText}>{calendarStatus}</Text> : null}
 
-      {sortedEvents.length ? (
+      {upcomingEvents.length ? (
         selectedCalendarDayEvents.length ? (
         <View style={styles.calendarEventList}>
           {selectedCalendarDayEvents.map((event) => {
@@ -6448,7 +7117,13 @@ function CalendarScreen({
             const hasEventCover = Boolean(event.coverImageUrl || eventCoverTemplate);
 
             return (
-              <View key={event.id} style={styles.calendarEventCard}>
+              <View
+                key={event.id}
+                onLayout={(layoutEvent) => {
+                  calendarEventLayoutsRef.current[String(event.id)] = layoutEvent.nativeEvent.layout;
+                }}
+                style={styles.calendarEventCard}
+              >
                 {hasEventCover ? (
                   <View style={styles.calendarEventCoverWrap}>
                     {eventCoverTemplate ? (
@@ -6675,6 +7350,16 @@ function CalendarScreen({
             </Text>
           </View>
         )
+      ) : sortedEvents.length ? (
+        <View style={styles.calendarDayEmptyState}>
+          <View style={styles.calendarDayEmptyIcon}>
+            <Ionicons name="checkmark-done" size={26} color={STUDOS_THEME.red} />
+          </View>
+          <Text style={styles.calendarDayEmptyTitle}>Ingen kommende events</Text>
+          <Text style={styles.calendarDayEmptyText}>
+            Alle oprettede events er afholdt. Du kan stadig finde dem under tidligere events.
+          </Text>
+        </View>
       ) : (
         <View style={styles.calendarEmptyState}>
           <View style={styles.calendarEmptyIcon}>
@@ -6686,112 +7371,31 @@ function CalendarScreen({
           </Text>
         </View>
       )}
+      <Pressable
+        accessibilityLabel={`Åbn tidligere events, ${pastEvents.length} afholdte events`}
+        accessibilityRole="button"
+        onPress={openPastEventsPage}
+        style={({ pressed }) => [
+          styles.calendarPastEventsButton,
+          pressed ? styles.footerItemPressed : null,
+        ]}
+      >
+        <View style={styles.calendarPastEventsButtonIcon}>
+          <Ionicons name="archive" size={19} color={STUDOS_THEME.ink} />
+        </View>
+        <View style={styles.calendarPastEventsButtonCopy}>
+          <Text numberOfLines={1} style={styles.calendarPastEventsButtonTitle}>
+            Tidligere events
+          </Text>
+          <Text numberOfLines={1} style={styles.calendarPastEventsButtonMeta}>
+            {pastEvents.length} {pastEvents.length === 1 ? 'afholdt event' : 'afholdte events'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={19} color={STUDOS_THEME.red} />
+      </Pressable>
       </Animated.ScrollView>
 
-      <Modal
-        animationType="fade"
-        onRequestClose={() => setCalendarAttendanceEventId('')}
-        transparent
-        visible={Boolean(calendarAttendanceEvent)}
-      >
-        <View style={styles.chatModalRoot}>
-          <Pressable
-            accessibilityLabel="Luk deltagere"
-            onPress={() => setCalendarAttendanceEventId('')}
-            style={styles.chatModalBackdrop}
-          />
-          <View style={[styles.chatModalPanel, styles.calendarAttendanceModalPanel]}>
-            <View style={styles.chatModalHeader}>
-              <View style={styles.calendarAttendanceModalTitleWrap}>
-                <Text style={styles.chatModalKicker}>Svar</Text>
-                <Text numberOfLines={1} style={styles.chatModalTitle}>
-                  {calendarAttendanceEvent?.title ?? 'Deltagere'}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityLabel="Luk"
-                accessibilityRole="button"
-                onPress={() => setCalendarAttendanceEventId('')}
-                style={({ pressed }) => [
-                  styles.chatModalCloseButton,
-                  pressed ? styles.footerItemPressed : null,
-                ]}
-              >
-                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              contentContainerStyle={styles.calendarAttendanceList}
-              showsVerticalScrollIndicator={false}
-              style={styles.calendarAttendanceScroll}
-            >
-              {calendarAttendancePeople.length ? calendarAttendancePeople.map((person) => {
-                const statusConfig = {
-                  attending: {
-                    icon: 'checkmark',
-                    label: 'Deltager',
-                    tagStyle: styles.calendarAttendanceTagAttending,
-                    style: styles.calendarAttendanceStatusAttending,
-                    color: '#FFFFFF',
-                  },
-                  not_attending: {
-                    icon: 'close',
-                    label: 'Deltager ikke',
-                    tagStyle: styles.calendarAttendanceTagDeclined,
-                    style: styles.calendarAttendanceStatusDeclined,
-                    color: STUDOS_THEME.ink,
-                  },
-                  pending: {
-                    icon: 'remove',
-                    label: 'Mangler svar',
-                    tagStyle: styles.calendarAttendanceTagPending,
-                    style: styles.calendarAttendanceStatusPending,
-                    color: '#65748b',
-                  },
-                }[person.status] ?? {
-                  icon: 'remove',
-                  label: 'Mangler svar',
-                  tagStyle: styles.calendarAttendanceTagPending,
-                  style: styles.calendarAttendanceStatusPending,
-                  color: '#65748b',
-                };
-                const displayName = person.displayName ?? 'Ukendt';
-
-                return (
-                  <View
-                    accessible
-                    accessibilityLabel={`${displayName}, ${statusConfig.label}`}
-                    key={person.memberId || displayName}
-                    style={[styles.calendarAttendanceTag, statusConfig.tagStyle]}
-                  >
-                    <Avatar
-                      profile={{
-                        displayName,
-                        profilePhotoUrl: person.profilePhotoUrl,
-                      }}
-                      variant="calendarAttendanceTag"
-                    />
-                    <Text numberOfLines={1} style={styles.calendarAttendanceName}>
-                      {displayName}
-                    </Text>
-                    <View style={[styles.calendarAttendanceStatusIcon, statusConfig.style]}>
-                      <Ionicons name={statusConfig.icon} size={12} color={statusConfig.color} />
-                    </View>
-                  </View>
-                );
-              }) : (
-                <View style={styles.calendarPendingResponseEmpty}>
-                  <Ionicons name="people" size={28} color={STUDOS_THEME.blue} />
-                  <Text style={styles.calendarPendingResponseEmptyText}>
-                    Ingen deltagere er fundet endnu.
-                  </Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      {calendarAttendanceModal}
 
       <Modal
         animationType="fade"
@@ -7033,7 +7637,7 @@ function CalendarScreen({
   );
 }
 
-function FeatureScreen({ emptyText, emptyTitle, icon, kicker, title }) {
+function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, title }) {
   return (
     <View style={styles.flowStack}>
       <View style={styles.tabHeader}>
@@ -7047,8 +7651,15 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, title }) {
       </View>
 
       <View style={styles.panel}>
-        <View style={styles.emptyFeatureIcon}>
-          <Ionicons name={icon} size={30} color="#ef5b3f" />
+        <View style={[
+          styles.emptyFeatureIcon,
+          locked ? styles.emptyFeatureIconLocked : null,
+        ]}>
+          <Ionicons
+            name={locked ? 'lock-closed' : icon}
+            size={locked ? 28 : 30}
+            color={locked ? STUDOS_THEME.ink : '#ef5b3f'}
+          />
         </View>
         <Text style={styles.sectionTitle}>{emptyTitle}</Text>
         <Text style={styles.feedText}>{emptyText}</Text>
@@ -7509,6 +8120,7 @@ function SidebarMenuIcon({ active = false, item }) {
           <View style={styles.sidebarBookBookmark} />
           <View style={styles.sidebarBookLine} />
         </View>
+        {item.locked ? <LockBadge style={styles.sidebarLockBadge} /> : null}
       </View>
     );
   }
@@ -7561,6 +8173,15 @@ function SidebarMenuIcon({ active = false, item }) {
   return (
     <View style={styles.sidebarMenuIconWrap}>
       <Ionicons name={active ? item.activeIcon : item.icon} size={23} color={item.accentColor} />
+      {item.locked ? <LockBadge style={styles.sidebarLockBadge} /> : null}
+    </View>
+  );
+}
+
+function LockBadge({ style }) {
+  return (
+    <View style={[styles.lockBadge, style]}>
+      <Ionicons name="lock-closed" size={8} color={STUDOS_THEME.ink} />
     </View>
   );
 }
@@ -7773,12 +8394,13 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
                       style={({ pressed }) => [
                         styles.sidebarMenuItem,
                         pressed ? styles.sidebarMenuItemPressed : null,
-                      ]}
-                    >
+                    ]}
+                  >
                       <SidebarMenuIcon item={item} active={isActive} />
                       <Text
                         style={[
                           styles.sidebarMenuText,
+                          item.locked ? styles.lockedNavigationText : null,
                           isActive ? styles.sidebarMenuTextActive : null,
                         ]}
                       >
@@ -7789,20 +8411,32 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
                 })}
               </View>
             ))}
-            <View style={styles.sidebarContent}>
-              <View style={styles.sidebarSectionDivider} />
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => onSelect('settings')}
-                style={({ pressed }) => [
-                  styles.sidebarMenuItem,
-                  pressed ? styles.sidebarMenuItemPressed : null,
-                ]}
-              >
-                <SidebarMenuIcon item={{ id: 'settings', icon: 'settings-outline', activeIcon: 'settings', accentColor: STUDOS_THEME.blue }} />
-                <Text style={styles.sidebarMenuText}>Indstillinger</Text>
-              </Pressable>
-            </View>
+          </View>
+          <View style={styles.sidebarBottomNav}>
+            <View style={styles.sidebarSectionDivider} />
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onSelect('emergencyContacts')}
+              style={({ pressed }) => [
+                styles.sidebarMenuItem,
+                styles.sidebarEmergencyItem,
+                pressed ? styles.sidebarMenuItemPressed : null,
+              ]}
+            >
+              <SidebarMenuIcon item={{ id: 'emergencyContacts', icon: 'call-outline', activeIcon: 'call', accentColor: STUDOS_THEME.red }} />
+              <Text style={styles.sidebarMenuText}>Nødkontakter</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onSelect('settings')}
+              style={({ pressed }) => [
+                styles.sidebarMenuItem,
+                pressed ? styles.sidebarMenuItemPressed : null,
+              ]}
+            >
+              <SidebarMenuIcon item={{ id: 'settings', icon: 'settings-outline', activeIcon: 'settings', accentColor: STUDOS_THEME.blue }} />
+              <Text style={styles.sidebarMenuText}>Indstillinger</Text>
+            </Pressable>
           </View>
         </ScrollView>
       </Animated.View>
@@ -7820,6 +8454,7 @@ function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
         const isLastItem = index === APP_TABS.length - 1;
         const tabUnreadCount = tab.id === 'chat' ? chatUnreadCount : 0;
         const hasUnreadBadge = tabUnreadCount > 0;
+        const tabAccentColor = tab.accentColor ?? '#FF6F73';
 
         return (
           <Pressable
@@ -7851,11 +8486,8 @@ function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
               </View>
             ) : (
               <View style={styles.footerIconWrap}>
-                <Ionicons
-                  name={isActive ? tab.activeIcon : tab.icon}
-                  size={25}
-                  color={isActive ? '#FF6F73' : '#172143'}
-                />
+                <FooterTabIcon tab={tab} active={isActive} />
+                {tab.locked ? <LockBadge style={styles.footerLockBadge} /> : null}
                 {hasUnreadBadge ? (
                   <View style={styles.footerUnreadBadge}>
                     <Text numberOfLines={1} style={styles.footerUnreadText}>
@@ -7866,7 +8498,11 @@ function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
               </View>
             )}
             {!isCenterAction ? (
-              <Text style={[styles.footerLabel, isActive ? styles.footerLabelActive : null]}>
+              <Text style={[
+                styles.footerLabel,
+                tab.locked ? styles.lockedNavigationText : null,
+                isActive ? { color: tabAccentColor } : null,
+              ]}>
                 {tab.label}
               </Text>
             ) : null}
@@ -7886,6 +8522,100 @@ function FooterOverviewIcon({ active }) {
         <View style={styles.footerOverviewDoor} />
       </View>
     </View>
+  );
+}
+
+function FooterTabIcon({ active, tab }) {
+  if (tab.id === 'calendar') {
+    return <FooterCalendarIcon active={active} />;
+  }
+
+  if (tab.id === 'chat') {
+    return <FooterChatIcon active={active} />;
+  }
+
+  if (tab.id === 'challenges') {
+    return <FooterPointDuelIcon active={active} />;
+  }
+
+  if (tab.id === 'walls') {
+    return <FooterWallsIcon active={active} />;
+  }
+
+  return (
+    <Ionicons
+      name={active ? tab.activeIcon : tab.icon}
+      size={25}
+      color={tab.accentColor ?? STUDOS_THEME.ink}
+    />
+  );
+}
+
+function FooterCalendarIcon({ active }) {
+  return (
+    <Image
+      source={FOOTER_CALENDAR_ICON}
+      resizeMode="contain"
+      style={[
+        styles.footerRasterIcon,
+        active ? styles.footerRasterIconActive : null,
+      ]}
+    />
+  );
+}
+
+function FooterChatIcon({ active }) {
+  return (
+    <Image
+      source={FOOTER_CHAT_ICON}
+      resizeMode="contain"
+      style={[
+        styles.footerRasterIcon,
+        active ? styles.footerRasterIconActive : null,
+      ]}
+    />
+  );
+}
+
+function FooterPointDuelIcon({ active }) {
+  return (
+    <View style={[
+      styles.overviewCapsDuelMark,
+      styles.footerPointDuelIcon,
+      active ? styles.footerPointDuelIconActive : null,
+    ]}>
+      <Ionicons
+        name="shield"
+        size={24}
+        color={STUDOS_THEME.ink}
+        style={styles.footerPointDuelShieldOutline}
+      />
+      <Ionicons
+        name="shield"
+        size={20}
+        color="#FFFFFF"
+        style={styles.footerPointDuelShieldFill}
+      />
+      <MaterialCommunityIcons
+        name="sword-cross"
+        size={18}
+        color={STUDOS_THEME.red}
+        style={[styles.overviewCapsDuelSwords, styles.footerPointDuelSwords]}
+      />
+    </View>
+  );
+}
+
+function FooterWallsIcon({ active }) {
+  return (
+    <Image
+      source={FOOTER_WALLS_ICON}
+      resizeMode="contain"
+      style={[
+        styles.footerRasterIcon,
+        active ? styles.footerRasterIconActive : null,
+      ]}
+    />
   );
 }
 
@@ -8167,7 +8897,7 @@ function AccountProfileScreen({
   );
 }
 
-function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }) {
+function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar, onOpenPointDuel, onOpenWalls }) {
   const [selectedMood, setSelectedMood] = useState('klar');
   const [moodModalOpen, setMoodModalOpen] = useState(false);
   const [moodUpdatedAt, setMoodUpdatedAt] = useState(null);
@@ -8175,12 +8905,20 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
   const [completedClipIds, setCompletedClipIds] = useState([]);
   const [selectedClipId, setSelectedClipId] = useState(null);
   const [studosCodeModalOpen, setStudosCodeModalOpen] = useState(false);
+  const [overviewHeaderScrolled, setOverviewHeaderScrolled] = useState(false);
+  const [overviewCardLayouts, setOverviewCardLayouts] = useState({});
+  const [currentOverviewTime, setCurrentOverviewTime] = useState(() => Date.now());
+  const overviewScrollY = useRef(new Animated.Value(0)).current;
   const profileName = activeMember?.displayName
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
   const personalStudosCode = activeMember?.personalCode ?? 'Mangler';
+  const capsBalance = Number.isFinite(Number(activeMember?.capsBalance ?? activeMember?.points))
+    ? Number(activeMember?.capsBalance ?? activeMember?.points)
+    : 1000;
+  const formattedCapsBalance = new Intl.NumberFormat('da-DK').format(capsBalance);
   const overviewStats = [
-    { id: 'challenges', icon: 'flash', label: 'Challenges', value: '4', color: STUDOS_THEME.red },
+    { id: 'challenges', icon: 'flash', label: 'Dueller', value: '4', color: STUDOS_THEME.red },
     { id: 'parties', icon: 'wine', label: 'Gilder', value: '3', color: STUDOS_THEME.yellow },
     { id: 'memories', icon: 'images', label: 'Minder', value: '21', color: STUDOS_THEME.blue },
   ];
@@ -8192,17 +8930,36 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
     { id: 'presset', icon: 'alarm', label: 'Presset' },
     { id: 'chill', icon: 'leaf', label: 'Chill' },
   ];
+  const validMoodIds = useMemo(() => new Set(overviewMoods.map((mood) => mood.id)), []);
+  const moodStorageKey = useMemo(
+    () => `${OVERVIEW_MOOD_STORAGE_KEY}.${activeMember?.id ?? 'guest'}`,
+    [activeMember?.id],
+  );
+  const validClipIds = useMemo(() => new Set(CHAT_THREAD_HEADER_COUNTERS.map((counter) => counter.id)), []);
+  const clipsStorageKey = useMemo(
+    () => `${OVERVIEW_CLIPS_STORAGE_KEY}.${activeMember?.id ?? 'guest'}`,
+    [activeMember?.id],
+  );
   const activeMood = overviewMoods.find((mood) => mood.id === selectedMood) ?? overviewMoods[0];
-  const todayCalendarEvents = useMemo(() => {
-    const todayKey = formatInputDate(new Date());
-
+  const overviewTodayKey = useMemo(() => formatInputDate(new Date(currentOverviewTime)), [currentOverviewTime]);
+  const upcomingCalendarEvents = useMemo(() => {
     return uniqueById(events ?? [])
-      .filter((event) => eventDayKeyFor(event) === todayKey)
+      .filter((event) => !eventIsPast(event, currentOverviewTime))
       .sort((left, right) => eventSortTime(left) - eventSortTime(right));
-  }, [events]);
-  const nextTodayCalendarEvent = todayCalendarEvents[0] ?? null;
-  const visibleAdditionalTodayCalendarEvents = todayCalendarEvents.slice(1, 4);
-  const hiddenTodayCalendarEventCount = Math.max(0, todayCalendarEvents.length - 4);
+  }, [currentOverviewTime, events]);
+  const todayUpcomingCalendarEvents = useMemo(
+    () => upcomingCalendarEvents.filter((event) => eventDayKeyFor(event) === overviewTodayKey),
+    [overviewTodayKey, upcomingCalendarEvents],
+  );
+  const futureUpcomingCalendarEvents = useMemo(
+    () => upcomingCalendarEvents.filter((event) => {
+      const dayKey = eventDayKeyFor(event);
+
+      return dayKey && compareCalendarDayKeys(dayKey, overviewTodayKey) > 0;
+    }),
+    [overviewTodayKey, upcomingCalendarEvents],
+  );
+  const visibleFutureUpcomingCalendarEvents = futureUpcomingCalendarEvents.slice(0, 3);
   const hasCheckedInToday = Boolean(moodUpdatedAt) && moodDayKeyFor(moodUpdatedAt) === currentMoodDayKey;
   const overviewMoodQuestion = hasCheckedInToday ? 'Din vibe er live 🥳' : 'Hvordan er din vibe i dag?';
   const overviewMoodUpdatedText = hasCheckedInToday
@@ -8211,16 +8968,139 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      setCurrentMoodDayKey(moodDayKeyFor());
+      const nextDayKey = moodDayKeyFor();
+
+      setCurrentMoodDayKey(nextDayKey);
+      setSelectedMood('klar');
+      setMoodUpdatedAt(null);
+      SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
     }, millisecondsUntilNextMidnight());
 
     return () => clearTimeout(timeout);
-  }, [currentMoodDayKey]);
+  }, [currentMoodDayKey, moodStorageKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    SessionStore.getItemAsync(moodStorageKey)
+      .then((storedMood) => {
+        if (cancelled || !storedMood) {
+          if (!cancelled) {
+            setSelectedMood('klar');
+            setMoodUpdatedAt(null);
+          }
+
+          return;
+        }
+
+        let parsedMood = null;
+
+        try {
+          parsedMood = JSON.parse(storedMood);
+        } catch {
+          parsedMood = null;
+        }
+
+        const updatedAt = parsedMood?.updatedAt ? new Date(parsedMood.updatedAt) : null;
+        const storedDayKey = parsedMood?.dayKey || moodDayKeyFor(updatedAt);
+        const validStoredMood = parsedMood?.moodId && validMoodIds.has(parsedMood.moodId);
+
+        if (validStoredMood && storedDayKey === moodDayKeyFor()) {
+          setSelectedMood(parsedMood.moodId);
+          setMoodUpdatedAt(updatedAt && !Number.isNaN(updatedAt.getTime()) ? updatedAt : new Date());
+          setCurrentMoodDayKey(storedDayKey);
+          return;
+        }
+
+        setSelectedMood('klar');
+        setMoodUpdatedAt(null);
+        SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moodStorageKey, validMoodIds]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentOverviewTime(Date.now());
+    }, 15_000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const liveDayKey = moodDayKeyFor(new Date(currentOverviewTime));
+
+    if (!liveDayKey || liveDayKey === currentMoodDayKey) {
+      return;
+    }
+
+    setCurrentMoodDayKey(liveDayKey);
+    setSelectedMood('klar');
+    setMoodUpdatedAt(null);
+    SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
+  }, [currentMoodDayKey, currentOverviewTime, moodStorageKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    SessionStore.getItemAsync(clipsStorageKey)
+      .then((storedClips) => {
+        if (cancelled || !storedClips) {
+          if (!cancelled) {
+            setCompletedClipIds([]);
+          }
+
+          return;
+        }
+
+        let parsedClips = null;
+
+        try {
+          parsedClips = JSON.parse(storedClips);
+        } catch {
+          parsedClips = null;
+        }
+
+        const completedIds = Array.isArray(parsedClips?.completedClipIds)
+          ? parsedClips.completedClipIds
+          : Array.isArray(parsedClips)
+            ? parsedClips
+            : [];
+        const validCompletedIds = uniqueByKey(
+          completedIds.map((clipId) => String(clipId)).filter((clipId) => validClipIds.has(clipId)),
+          (clipId) => clipId,
+        );
+
+        setCompletedClipIds(validCompletedIds);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clipsStorageKey, validClipIds]);
 
   const updateMood = (moodId) => {
+    if (!validMoodIds.has(moodId)) {
+      return;
+    }
+
+    const updatedAt = new Date();
+    const dayKey = moodDayKeyFor(updatedAt);
+
     setSelectedMood(moodId);
-    setMoodUpdatedAt(new Date());
+    setMoodUpdatedAt(updatedAt);
+    setCurrentMoodDayKey(dayKey);
     setMoodModalOpen(false);
+    SessionStore.setItemAsync(moodStorageKey, JSON.stringify({
+      moodId,
+      dayKey,
+      updatedAt: updatedAt.toISOString(),
+    })).catch(() => {});
   };
   const selectedClipIndex = CHAT_THREAD_HEADER_COUNTERS.findIndex((counter) => counter.id === selectedClipId);
   const selectedClip = selectedClipIndex >= 0 ? CHAT_THREAD_HEADER_COUNTERS[selectedClipIndex] : null;
@@ -8231,16 +9111,99 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
     }
 
     setCompletedClipIds((current) => {
+      let nextCompletedClipIds;
+
       if (completed) {
-        return current.includes(selectedClip.id) ? current : [...current, selectedClip.id];
+        nextCompletedClipIds = current.includes(selectedClip.id) ? current : [...current, selectedClip.id];
+      } else {
+        nextCompletedClipIds = current.filter((id) => id !== selectedClip.id);
       }
 
-      return current.filter((id) => id !== selectedClip.id);
+      SessionStore.setItemAsync(clipsStorageKey, JSON.stringify({
+        completedClipIds: nextCompletedClipIds,
+        updatedAt: new Date().toISOString(),
+      })).catch(() => {});
+
+      return nextCompletedClipIds;
     });
     setSelectedClipId(null);
   };
-  const renderTodayCalendarEvent = (event, featured = false) => {
+  const handleOverviewScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { y: overviewScrollY } } }],
+    {
+      listener: (event) => {
+        const scrolled = event.nativeEvent.contentOffset.y > 6;
+        setOverviewHeaderScrolled((current) => (current === scrolled ? current : scrolled));
+      },
+      useNativeDriver: false,
+    },
+  ), [overviewScrollY]);
+  const overviewHeaderContainerStyle = useMemo(() => ({
+    transform: [
+      {
+        translateY: overviewScrollY.interpolate({
+          inputRange: [0, 44],
+          outputRange: [0, -7],
+          extrapolate: 'clamp',
+        }),
+      },
+    ],
+  }), [overviewScrollY]);
+  const overviewHeaderContentStyle = useMemo(() => ({
+    transform: [
+      {
+        translateY: overviewScrollY.interpolate({
+          inputRange: [0, 44],
+          outputRange: [0, -7],
+          extrapolate: 'clamp',
+        }),
+      },
+    ],
+  }), [overviewScrollY]);
+  const setOverviewCardLayout = useCallback((cardId) => (event) => {
+    const { height, y } = event.nativeEvent.layout;
+
+    setOverviewCardLayouts((current) => {
+      const previous = current[cardId];
+
+      if (previous && Math.abs(previous.y - y) < 1 && Math.abs(previous.height - height) < 1) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [cardId]: { height, y },
+      };
+    });
+  }, []);
+  const overviewCardScrollStyle = useCallback((cardId) => {
+    const layout = overviewCardLayouts[cardId];
+
+    if (!layout) {
+      return null;
+    }
+
+    const effectStart = Math.max(0, layout.y - OVERVIEW_HEADER_HEIGHT + 4);
+    const effectEnd = effectStart + Math.min(260, Math.max(170, layout.height * 0.64));
+
+    return {
+      transform: [
+        {
+          scale: overviewScrollY.interpolate({
+            inputRange: [effectStart, effectEnd],
+            outputRange: [1, 0.84],
+            extrapolate: 'clamp',
+          }),
+        },
+      ],
+    };
+  }, [overviewCardLayouts, overviewScrollY]);
+  const renderUpcomingCalendarEvent = (event, featured = false) => {
     const eventTime = formatCalendarTime(event.startsAt);
+    const eventDayKey = eventDayKeyFor(event);
+    const dateParts = formatCalendarDateParts(eventDayKey);
+    const isToday = eventDayKey === overviewTodayKey;
+    const eventMetaText = event.location || '';
 
     return (
       <Pressable
@@ -8248,38 +9211,59 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
         accessibilityLabel={`Åbn event ${event.title || 'Aftale'}`}
         accessibilityRole="button"
         key={event.id}
-        onPress={onOpenCalendar}
+        onPress={() => onOpenCalendar?.({ eventId: event.id, dayKey: eventDayKey })}
         style={({ pressed }) => [
           styles.overviewTodayCalendarEventRow,
           featured ? styles.overviewTodayCalendarEventRowFeatured : null,
           pressed ? styles.footerItemPressed : null,
         ]}
       >
-        <View
-          style={[
-            styles.overviewTodayCalendarTimePill,
-            featured ? styles.overviewTodayCalendarTimePillFeatured : null,
-          ]}
-        >
-          <Text
-            numberOfLines={1}
+        <View style={styles.overviewTodayCalendarPillGroup}>
+          <View
             style={[
-              styles.overviewTodayCalendarTimeText,
-              featured ? styles.overviewTodayCalendarTimeTextFeatured : null,
+              styles.overviewTodayCalendarTimePill,
+              !isToday ? styles.overviewTodayCalendarDatePill : null,
+              featured ? styles.overviewTodayCalendarTimePillFeatured : null,
             ]}
           >
-            {eventTime || 'I dag'}
-          </Text>
+            {isToday ? (
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.overviewTodayCalendarTimeText,
+                  featured ? styles.overviewTodayCalendarTimeTextFeatured : null,
+                ]}
+              >
+                {eventTime || 'I dag'}
+              </Text>
+            ) : (
+              <>
+                <Text numberOfLines={1} style={styles.overviewTodayCalendarDateDayText}>
+                  {dateParts.day}
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewTodayCalendarDateMonthText}>
+                  {dateParts.month}
+                </Text>
+              </>
+            )}
+          </View>
+          {!isToday && eventTime ? (
+            <View style={styles.overviewTodayCalendarClockPill}>
+              <Text numberOfLines={1} style={styles.overviewTodayCalendarClockText}>
+                {eventTime}
+              </Text>
+            </View>
+          ) : null}
         </View>
         <View style={styles.overviewTodayCalendarEventCopy}>
           <Text numberOfLines={1} style={styles.overviewTodayCalendarEventTitle}>
             {event.title || 'Aftale'}
           </Text>
-          {event.location ? (
+          {eventMetaText ? (
             <View style={styles.overviewTodayCalendarEventMetaRow}>
-              <Ionicons name="location" size={11} color={STUDOS_THEME.red} />
+              <Ionicons name={isToday ? 'location' : 'calendar'} size={11} color={STUDOS_THEME.red} />
               <Text numberOfLines={1} style={styles.overviewTodayCalendarEventMeta}>
-                {event.location}
+                {eventMetaText}
               </Text>
             </View>
           ) : null}
@@ -8294,211 +9278,454 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar }
   };
 
   return (
-    <View style={[styles.overviewBlank, styles.overviewSurface]}>
-      <View style={styles.overviewHeaderStack}>
-        <View style={styles.overviewHeaderTopRow}>
+    <View style={styles.overviewScreenRoot}>
+      <Animated.View style={[
+        styles.overviewHeaderStack,
+        overviewHeaderContainerStyle,
+        overviewHeaderScrolled ? styles.overviewHeaderStackScrolled : null,
+      ]}>
+        <Animated.View style={[styles.overviewHeaderTopRow, overviewHeaderContentStyle]}>
           <OverviewTitle />
           <View style={styles.overviewCountdownInline}>
             <Text style={styles.overviewCountdownNumber}>{countdown}</Text>
             <Text style={styles.overviewCountdownLabel}>dage til{'\n'}studenterugen</Text>
           </View>
-        </View>
-      </View>
-      <View style={styles.overviewStudosCard}>
-        <View pointerEvents="none" style={styles.overviewStudosAccentRail}>
-          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentRed]} />
-          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentYellow]} />
-          <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentBlue]} />
-        </View>
-        <Pressable
-          accessibilityLabel="Vis QR-kode"
-          accessibilityRole="button"
-          disabled={!activeMember?.personalCode}
-          onPress={() => setStudosCodeModalOpen(true)}
-          style={({ pressed }) => [
-            styles.overviewStudosQrCornerButton,
-            !activeMember?.personalCode ? styles.overviewStudosQrButtonDisabled : null,
-            pressed ? styles.footerItemPressed : null,
-          ]}
+        </Animated.View>
+      </Animated.View>
+      <Animated.ScrollView
+        contentContainerStyle={styles.overviewScrollContent}
+        keyboardShouldPersistTaps="handled"
+        onScroll={handleOverviewScroll}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        style={styles.overviewScroll}
+      >
+        <View pointerEvents="none" style={styles.overviewHeaderSpacer} />
+        <Animated.View
+          onLayout={setOverviewCardLayout('studos')}
+          style={overviewCardScrollStyle('studos')}
         >
-          <Ionicons name="qr-code" size={18} color={STUDOS_THEME.ink} />
-        </Pressable>
-        <View style={styles.overviewStudosTopRow}>
-          <View style={styles.overviewStudosIdentity}>
-            <View style={styles.overviewStudosCopy}>
-              <View style={styles.overviewStudosAvatarTop}>
-                <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
-              </View>
-              <Text numberOfLines={1} style={styles.overviewStudosName}>
-                {profileName}
-              </Text>
-              <View style={styles.overviewStudosAwardRow}>
-                <View style={styles.overviewStudosAwardIcon}>
-                  <View style={styles.overviewStudosAwardRibbonRow}>
-                    <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonBlue]} />
-                    <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonRed]} />
+          <View style={styles.overviewStudosCard}>
+            <View pointerEvents="none" style={styles.overviewStudosAccentRail}>
+              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentRed]} />
+              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentYellow]} />
+              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentBlue]} />
+            </View>
+            <Pressable
+              accessibilityLabel="Vis QR-kode"
+              accessibilityRole="button"
+              disabled={!activeMember?.personalCode}
+              onPress={() => setStudosCodeModalOpen(true)}
+              style={({ pressed }) => [
+                styles.overviewStudosQrCornerButton,
+                !activeMember?.personalCode ? styles.overviewStudosQrButtonDisabled : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="qr-code" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+            <View style={styles.overviewStudosTopRow}>
+              <View style={styles.overviewStudosIdentity}>
+                <View style={styles.overviewStudosCopy}>
+                  <View style={styles.overviewStudosAvatarTop}>
+                    <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
                   </View>
-                  <View style={styles.overviewStudosAwardMedal}>
-                    <View style={styles.overviewStudosAwardMedalDot} />
+                  <Text numberOfLines={1} style={styles.overviewStudosName}>
+                    {profileName}
+                  </Text>
+                  <View style={styles.overviewStudosAwardRow}>
+                    <View style={styles.overviewStudosAwardIcon}>
+                      <View style={styles.overviewStudosAwardRibbonRow}>
+                        <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonBlue]} />
+                        <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonRed]} />
+                      </View>
+                      <View style={styles.overviewStudosAwardMedal}>
+                        <View style={styles.overviewStudosAwardMedalDot} />
+                      </View>
+                    </View>
+                    <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
+                      Skal du have et hueklip?
+                    </Text>
                   </View>
                 </View>
-                <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
-                  Skal du have et hueklip?
-                </Text>
+              </View>
+              <View style={styles.overviewStudosStats}>
+                {overviewStats.map((stat) => (
+                  <View key={stat.id} style={styles.overviewStudosStat}>
+                    <Ionicons name={stat.icon} size={14} color={stat.color} />
+                    <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
+                    <Text numberOfLines={1} style={styles.overviewStudosStatLabel}>{stat.label}</Text>
+                  </View>
+                ))}
               </View>
             </View>
-          </View>
-          <View style={styles.overviewStudosStats}>
-            {overviewStats.map((stat) => (
-              <View key={stat.id} style={styles.overviewStudosStat}>
-                <Ionicons name={stat.icon} size={14} color={stat.color} />
-                <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
-                <Text numberOfLines={1} style={styles.overviewStudosStatLabel}>{stat.label}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-        <View style={styles.overviewClipIconRow}>
-          {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
-            const completed = completedClipIds.includes(counter.id);
+            <View style={styles.overviewClipIconRow}>
+              {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
+                const completed = completedClipIds.includes(counter.id);
 
-            return (
+                return (
+                  <Pressable
+                    accessibilityLabel={`Klip ${index + 1}${completed ? ', gennemført' : ', ikke gennemført'}`}
+                    accessibilityRole="button"
+                    hitSlop={6}
+                    key={counter.id}
+                    onPress={() => setSelectedClipId(counter.id)}
+                    style={({ pressed }) => [
+                      styles.overviewClipIconButton,
+                      completed ? styles.overviewClipIconButtonCompleted : null,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    {counter.id === 'wave' ? (
+                      <MaterialCommunityIcons
+                        name="waves"
+                        size={24}
+                        color={completed ? '#1F9D55' : STUDOS_THEME.ink}
+                      />
+                    ) : (
+                      <Ionicons
+                        name={counter.icon}
+                        size={23}
+                        color={completed ? '#1F9D55' : STUDOS_THEME.ink}
+                      />
+                    )}
+                    {completed ? (
+                      <View style={styles.overviewClipCompletedMark}>
+                        <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                      </View>
+                    ) : (
+                      <View style={styles.overviewClipAddMark}>
+                        <Ionicons name="add" size={14} color={STUDOS_THEME.ink} />
+                      </View>
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.overviewStudosMoodRow}>
+              <View style={styles.overviewMoodHeaderCopy}>
+                <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
+                  {overviewMoodQuestion}
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
+                  {overviewMoodUpdatedText}
+                </Text>
+              </View>
               <Pressable
-                accessibilityLabel={`Klip ${index + 1}${completed ? ', gennemført' : ', ikke gennemført'}`}
+                accessibilityLabel="Vælg stemning"
                 accessibilityRole="button"
-                hitSlop={6}
-                key={counter.id}
-                onPress={() => setSelectedClipId(counter.id)}
+                onPress={() => setMoodModalOpen(true)}
                 style={({ pressed }) => [
-                  styles.overviewClipIconButton,
-                  completed ? styles.overviewClipIconButtonCompleted : null,
+                  styles.overviewMoodCurrentBadge,
+                  hasCheckedInToday
+                    ? styles.overviewMoodCurrentBadgeCheckedIn
+                    : styles.overviewMoodCurrentBadgeNeedsCheckIn,
                   pressed ? styles.footerItemPressed : null,
                 ]}
               >
-                {counter.id === 'wave' ? (
-                  <MaterialCommunityIcons
-                    name="waves"
-                    size={24}
-                    color={completed ? STUDOS_THEME.red : STUDOS_THEME.ink}
-                  />
-                ) : (
-                  <Ionicons
-                    name={counter.icon}
-                    size={23}
-                    color={completed ? STUDOS_THEME.red : STUDOS_THEME.ink}
-                  />
-                )}
-                {completed ? (
-                  <View style={styles.overviewClipCompletedMark}>
-                    <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-                  </View>
-                ) : (
-                  <View style={styles.overviewClipAddMark}>
-                    <Ionicons name="add" size={14} color={STUDOS_THEME.ink} />
-                  </View>
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
-        <View style={styles.overviewStudosMoodRow}>
-          <View style={styles.overviewMoodHeaderCopy}>
-            <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
-              {overviewMoodQuestion}
-            </Text>
-            <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
-              {overviewMoodUpdatedText}
-            </Text>
-          </View>
-          <Pressable
-            accessibilityLabel="Vælg stemning"
-            accessibilityRole="button"
-            onPress={() => setMoodModalOpen(true)}
-            style={({ pressed }) => [
-              styles.overviewMoodCurrentBadge,
-              hasCheckedInToday
-                ? styles.overviewMoodCurrentBadgeCheckedIn
-                : styles.overviewMoodCurrentBadgeNeedsCheckIn,
-              pressed ? styles.footerItemPressed : null,
-            ]}
-          >
-            <Ionicons name={activeMood.icon} size={18} color="#FFFFFF" />
-            <Text numberOfLines={1} style={[styles.overviewMoodCurrentText, styles.overviewMoodCurrentTextOnAccent]}>
-              {activeMood.label}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
-          </Pressable>
-        </View>
-        <View pointerEvents="none" style={styles.overviewStudosBottomWave}>
-          {OVERVIEW_STUDOS_BOTTOM_WAVE_CURVES.map((curve) => (
-            <View
-              key={curve}
-              style={[
-                styles.overviewStudosBottomWaveCurve,
-                curve % 2 ? styles.overviewStudosBottomWaveCurveDeep : styles.overviewStudosBottomWaveCurveSoft,
-              ]}
-            />
-          ))}
-        </View>
-      </View>
-      <View style={styles.overviewTodayCalendarCard}>
-        <View style={styles.overviewTodayCalendarHeader}>
-          <CalendarTitleGraphic iconSize={24} style={styles.overviewTodayCalendarGraphic} />
-          <View style={styles.overviewTodayCalendarCopy}>
-            <Text numberOfLines={1} style={styles.overviewTodayCalendarTitle}>
-              Min kalender i dag
-            </Text>
-            <Text numberOfLines={1} style={styles.overviewTodayCalendarMeta}>
-              {todayCalendarEvents.length
-                ? `${todayCalendarEvents.length} ${todayCalendarEvents.length === 1 ? 'aftale' : 'aftaler'} på planen`
-                : 'Ingen aftaler i dag'}
-            </Text>
-          </View>
-          <View style={styles.overviewTodayCalendarCountPill}>
-            <Text style={styles.overviewTodayCalendarCountText}>{todayCalendarEvents.length}</Text>
-          </View>
-        </View>
-        {nextTodayCalendarEvent ? (
-          <View style={styles.overviewTodayCalendarList}>
-            <View style={styles.overviewTodayCalendarSection}>
-              <Text style={styles.overviewTodayCalendarSectionTitle}>Næste event</Text>
-              {renderTodayCalendarEvent(nextTodayCalendarEvent, true)}
-            </View>
-            <View style={styles.overviewTodayCalendarSection}>
-              <Text style={styles.overviewTodayCalendarSectionTitle}>Flere events:</Text>
-              {visibleAdditionalTodayCalendarEvents.length ? (
-                visibleAdditionalTodayCalendarEvents.map((event) => renderTodayCalendarEvent(event))
-              ) : (
-                <Text style={styles.overviewTodayCalendarNoMoreText}>
-                  Du har ikke flere planlagte events i dag.
+                <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.overviewMoodCurrentText,
+                    hasCheckedInToday
+                      ? styles.overviewMoodCurrentTextOnBlue
+                      : styles.overviewMoodCurrentTextOnAccent,
+                  ]}
+                >
+                  {activeMood.label}
                 </Text>
-              )}
+                <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
+              </Pressable>
             </View>
-            {hiddenTodayCalendarEventCount ? (
-              <Text style={styles.overviewTodayCalendarMoreText}>
-                +{hiddenTodayCalendarEventCount} skjult i kalenderen
-              </Text>
-            ) : null}
+            <View pointerEvents="none" style={styles.overviewStudosBottomWave}>
+              {OVERVIEW_STUDOS_BOTTOM_WAVE_CURVES.map((curve) => (
+                <View
+                  key={curve}
+                  style={[
+                    styles.overviewStudosBottomWaveCurve,
+                    curve % 2 ? styles.overviewStudosBottomWaveCurveDeep : styles.overviewStudosBottomWaveCurveSoft,
+                  ]}
+                />
+              ))}
+            </View>
           </View>
-        ) : (
-          <View style={styles.overviewTodayCalendarEmpty}>
-            <Text style={styles.overviewTodayCalendarEmptyText}>
-              Dagen er fri. Perfekt til spontane planer.
-            </Text>
-          </View>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          onPress={onOpenCalendar}
-          style={({ pressed }) => [
-            styles.overviewTodayCalendarAction,
-            pressed ? styles.footerItemPressed : null,
-          ]}
+        </Animated.View>
+        <Animated.View
+          onLayout={setOverviewCardLayout('caps')}
+          style={overviewCardScrollStyle('caps')}
         >
-          <Text style={styles.overviewTodayCalendarActionText}>Se hele kalenderen</Text>
-          <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.red} />
-        </Pressable>
-      </View>
+          <View style={styles.overviewCapsCard}>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.overviewCapsCoinImage} />
+            <View style={styles.overviewCapsCopy}>
+              <Text style={styles.overviewCapsKicker}>Dine Caps</Text>
+              <Text numberOfLines={1} style={styles.overviewCapsBalance}>
+                {formattedCapsBalance}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Udfordr en anden til Pointduel"
+              accessibilityRole="button"
+              onPress={onOpenPointDuel}
+              style={({ pressed }) => [
+                styles.overviewCapsAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.overviewCapsDuelMark}>
+                <Ionicons name="shield" size={19} color={STUDOS_THEME.yellow} />
+                <MaterialCommunityIcons
+                  name="sword-cross"
+                  size={16}
+                  color={STUDOS_THEME.red}
+                  style={styles.overviewCapsDuelSwords}
+                />
+                <View style={styles.overviewCapsDuelPlus}>
+                  <Ionicons name="add" size={9} color={STUDOS_THEME.ink} />
+                </View>
+              </View>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={styles.overviewCapsActionText}>
+                Udfordr
+              </Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+        <Animated.View
+          onLayout={setOverviewCardLayout('todayCalendar')}
+          style={overviewCardScrollStyle('todayCalendar')}
+        >
+          <View style={styles.overviewTodayCalendarCard}>
+            <View style={styles.overviewTodayCalendarHeader}>
+              <CalendarTitleGraphic iconSize={24} style={styles.overviewTodayCalendarGraphic} />
+              <View style={styles.overviewTodayCalendarCopy}>
+                <Text numberOfLines={1} style={styles.overviewTodayCalendarTitle}>
+                  Min kommende kalender
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewTodayCalendarMeta}>
+                  {upcomingCalendarEvents.length
+                    ? `${upcomingCalendarEvents.length} ${upcomingCalendarEvents.length === 1 ? 'kommende event' : 'kommende events'}`
+                    : 'Ingen kommende events'}
+                </Text>
+              </View>
+              <View style={styles.overviewTodayCalendarCountPill}>
+                <Text style={styles.overviewTodayCalendarCountText}>{upcomingCalendarEvents.length}</Text>
+              </View>
+            </View>
+            {upcomingCalendarEvents.length ? (
+              <View style={styles.overviewTodayCalendarList}>
+                <View style={styles.overviewTodayCalendarSection}>
+                  <Text style={styles.overviewTodayCalendarSectionTitle}>Dagens events</Text>
+                  {todayUpcomingCalendarEvents.length ? (
+                    todayUpcomingCalendarEvents.map((event, index) => renderUpcomingCalendarEvent(event, index === 0))
+                  ) : (
+                    <Text style={styles.overviewTodayCalendarNoMoreText}>
+                      Ingen flere events i dag.
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.overviewTodayCalendarSection}>
+                  <Text style={styles.overviewTodayCalendarSectionTitle}>Kommende events</Text>
+                  {futureUpcomingCalendarEvents.length ? (
+                    visibleFutureUpcomingCalendarEvents.map((event) => renderUpcomingCalendarEvent(event))
+                  ) : (
+                    <Text style={styles.overviewTodayCalendarNoMoreText}>
+                      Der er ikke flere kommende events efter i dag.
+                    </Text>
+                  )}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.overviewTodayCalendarEmpty}>
+                <Text style={styles.overviewTodayCalendarEmptyText}>
+                  Der er ingen kommende events i kalenderen lige nu.
+                </Text>
+              </View>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onOpenCalendar?.()}
+              style={({ pressed }) => [
+                styles.overviewTodayCalendarAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.overviewTodayCalendarActionText}>Se hele kalenderen</Text>
+              <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.red} />
+            </Pressable>
+          </View>
+        </Animated.View>
+        <Animated.View
+          onLayout={setOverviewCardLayout('wallsActivity')}
+          style={overviewCardScrollStyle('wallsActivity')}
+        >
+          <View style={styles.overviewWallsActivityCard}>
+            <View style={styles.overviewWallsActivityHeader}>
+              <View style={styles.overviewWallsActivityIconWrap}>
+                <Image
+                  source={FOOTER_WALLS_ICON}
+                  resizeMode="contain"
+                  style={styles.overviewWallsActivityIcon}
+                />
+              </View>
+              <View style={styles.overviewWallsActivityCopy}>
+                <Text numberOfLines={1} style={styles.overviewWallsActivityTitle}>
+                  Seneste Walls-aktivitet
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewWallsActivityMeta}>
+                  Billeder, opslag og reaktioner fra klassen
+                </Text>
+              </View>
+            </View>
+            <View style={styles.overviewWallsActivityEmpty}>
+              <View style={styles.overviewWallsActivityEmptyIcon}>
+                <Ionicons name="sparkles" size={18} color={STUDOS_THEME.red} />
+              </View>
+              <View style={styles.overviewWallsActivityEmptyCopy}>
+                <Text numberOfLines={1} style={styles.overviewWallsActivityEmptyTitle}>
+                  Ingen ny aktivitet endnu
+                </Text>
+                <Text style={styles.overviewWallsActivityEmptyText}>
+                  Når der kommer nye minder på Walls, vises de her.
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onOpenWalls}
+              style={({ pressed }) => [
+                styles.overviewWallsActivityAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.overviewWallsActivityActionText}>Åbn Walls</Text>
+              <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.red} />
+            </Pressable>
+          </View>
+        </Animated.View>
+        <Animated.View
+          onLayout={setOverviewCardLayout('classDuels')}
+          style={overviewCardScrollStyle('classDuels')}
+        >
+          <View style={styles.overviewClassDuelsCard}>
+            <View style={styles.overviewClassDuelsHeader}>
+              <View style={styles.overviewClassDuelsIconWrap}>
+                <View style={styles.overviewClassDuelsIcon}>
+                  <Ionicons
+                    name="shield"
+                    size={25}
+                    color={STUDOS_THEME.ink}
+                    style={styles.overviewClassDuelsShieldOutline}
+                  />
+                  <Ionicons
+                    name="shield"
+                    size={21}
+                    color="#FFFFFF"
+                    style={styles.overviewClassDuelsShieldFill}
+                  />
+                  <MaterialCommunityIcons
+                    name="sword-cross"
+                    size={18}
+                    color={STUDOS_THEME.red}
+                    style={styles.overviewClassDuelsSwords}
+                  />
+                </View>
+              </View>
+              <View style={styles.overviewClassDuelsCopy}>
+                <Text numberOfLines={1} style={styles.overviewClassDuelsTitle}>
+                  Klassedueller
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewClassDuelsMeta}>
+                  Udfordringer, Caps og rivaliseringer i klassen
+                </Text>
+              </View>
+            </View>
+            <View style={styles.overviewClassDuelsStatsRow}>
+              <View style={styles.overviewClassDuelsStat}>
+                <Text style={styles.overviewClassDuelsStatValue}>0</Text>
+                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Aktive</Text>
+              </View>
+              <View style={styles.overviewClassDuelsDivider} />
+              <View style={styles.overviewClassDuelsStat}>
+                <Text style={styles.overviewClassDuelsStatValue}>0</Text>
+                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Afventer</Text>
+              </View>
+              <View style={styles.overviewClassDuelsDivider} />
+              <View style={styles.overviewClassDuelsStat}>
+                <Text style={styles.overviewClassDuelsStatValue}>1.000</Text>
+                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Caps</Text>
+              </View>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onOpenPointDuel}
+              style={({ pressed }) => [
+                styles.overviewClassDuelsAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.overviewClassDuelsActionText}>Åbn Duel</Text>
+              <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        </Animated.View>
+        <Animated.View
+          onLayout={setOverviewCardLayout('dailyMood')}
+          style={overviewCardScrollStyle('dailyMood')}
+        >
+          <View style={styles.overviewDailyMoodCard}>
+            <View style={styles.overviewDailyMoodHeader}>
+              <View style={styles.overviewDailyMoodIconWrap}>
+                <Ionicons name="happy" size={23} color={STUDOS_THEME.ink} />
+              </View>
+              <View style={styles.overviewDailyMoodCopy}>
+                <Text numberOfLines={1} style={styles.overviewDailyMoodTitle}>
+                  Dagens stemning
+                </Text>
+                <Text numberOfLines={1} style={styles.overviewDailyMoodMeta}>
+                  {overviewMoodUpdatedText}
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              accessibilityLabel="Vælg dagens stemning"
+              accessibilityRole="button"
+              onPress={() => setMoodModalOpen(true)}
+              style={({ pressed }) => [
+                styles.overviewDailyMoodCurrent,
+                hasCheckedInToday
+                  ? styles.overviewDailyMoodCurrentCheckedIn
+                  : styles.overviewDailyMoodCurrentNeedsCheckIn,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.overviewDailyMoodCurrentIcon}>
+                <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
+              </View>
+              <View style={styles.overviewDailyMoodCurrentCopy}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.overviewDailyMoodCurrentLabel,
+                    hasCheckedInToday ? styles.overviewDailyMoodCurrentLabelCheckedIn : null,
+                  ]}
+                >
+                  {activeMood.label}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.overviewDailyMoodCurrentText,
+                    hasCheckedInToday ? styles.overviewDailyMoodCurrentTextCheckedIn : null,
+                  ]}
+                >
+                  {hasCheckedInToday ? 'Stemningen er gemt for i dag' : 'Tryk og vælg din vibe'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
+            </Pressable>
+          </View>
+        </Animated.View>
+      </Animated.ScrollView>
       <Modal
         animationType="fade"
         onRequestClose={() => setStudosCodeModalOpen(false)}
@@ -9216,6 +10443,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     gap: 10,
   },
+  sidebarBottomNav: {
+    gap: 6,
+  },
   sidebarNavSection: {
     gap: 1,
   },
@@ -9254,6 +10484,13 @@ const styles = StyleSheet.create({
   },
   sidebarMenuItemPressed: {
     opacity: 0.68,
+  },
+  sidebarEmergencyItem: {
+    borderColor: 'rgba(255, 111, 115, 0.28)',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255, 111, 115, 0.1)',
+    paddingHorizontal: 8,
   },
   sidebarProfileItem: {
     minHeight: 44,
@@ -9564,6 +10801,9 @@ const styles = StyleSheet.create({
   sidebarMenuTextActive: {
     color: '#FF6F73',
     fontWeight: '700',
+  },
+  lockedNavigationText: {
+    opacity: 0.68,
   },
   sidebarProfileCopy: {
     flex: 1,
@@ -10048,6 +11288,62 @@ const styles = StyleSheet.create({
   calendarEventList: {
     gap: 12,
   },
+  calendarPastEventsButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 64,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+  calendarPastEventsButtonIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+  },
+  calendarPastEventsButtonCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  calendarPastEventsButtonTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  calendarPastEventsButtonMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  calendarPastEventsPage: {
+    gap: 12,
+  },
+  calendarPastEventsPageSummary: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
   calendarEventCard: {
     borderColor: '#E5E8EF',
     borderRadius: 8,
@@ -10058,6 +11354,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 17,
     elevation: 5,
+  },
+  calendarEventCardPast: {
+    borderColor: '#DDE8E5',
+    backgroundColor: '#FBFCFC',
   },
   calendarEventCoverWrap: {
     position: 'relative',
@@ -10160,6 +11460,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: '#FFF8E8',
   },
+  calendarDateBadgePast: {
+    borderColor: '#DDE8E5',
+    backgroundColor: '#F7FAFA',
+  },
   calendarDateBadgeUnderAvatar: {
     marginLeft: 14,
     marginTop: 0,
@@ -10170,6 +11474,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
     lineHeight: 22,
+  },
+  calendarDateDayPast: {
+    color: '#65748b',
   },
   calendarDateMonth: {
     color: STUDOS_THEME.ink,
@@ -10227,6 +11534,24 @@ const styles = StyleSheet.create({
     color: '#8B94A6',
     fontSize: 10.5,
     fontWeight: '800',
+    letterSpacing: 0,
+  },
+  calendarPastEventBadge: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 22,
+    borderColor: '#DDE8E5',
+    borderRadius: 11,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+  },
+  calendarPastEventBadgeText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '900',
     letterSpacing: 0,
   },
   calendarDescription: {
@@ -10509,8 +11834,8 @@ const styles = StyleSheet.create({
   calendarCoverPicker: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
-    minHeight: 76,
+    gap: 9,
+    minHeight: 66,
     borderColor: '#DDE8E5',
     borderRadius: 8,
     borderWidth: 1,
@@ -11176,6 +12501,26 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1FBF8',
     gap: 18,
   },
+  overviewScreenRoot: {
+    flex: 1,
+    marginHorizontal: -APP_SCREEN_PADDING,
+    marginTop: -APP_SCREEN_TOP_PADDING,
+    marginBottom: -20,
+    position: 'relative',
+    backgroundColor: '#F1FBF8',
+  },
+  overviewScroll: {
+    flex: 1,
+  },
+  overviewScrollContent: {
+    flexGrow: 1,
+    gap: 18,
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingBottom: 20,
+  },
+  overviewHeaderSpacer: {
+    height: OVERVIEW_HEADER_HEIGHT,
+  },
   overviewTopLine: {
     alignItems: 'flex-end',
     flexDirection: 'row',
@@ -11183,13 +12528,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   overviewHeaderStack: {
-    marginTop: -20,
-    marginHorizontal: -20,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: APP_SCREEN_TOP_PADDING,
     paddingBottom: 13,
     backgroundColor: '#F1FBF8',
-    zIndex: 3,
+    zIndex: 8,
+  },
+  overviewHeaderStackScrolled: {
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 9,
   },
   overviewHeaderTopRow: {
     alignItems: 'flex-end',
@@ -11481,6 +12835,96 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  overviewCapsCard: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 76,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 24 },
+    shadowOpacity: 0.28,
+    shadowRadius: 34,
+    elevation: 18,
+  },
+  overviewCapsCoinImage: {
+    width: 54,
+    height: 54,
+    marginLeft: -4,
+  },
+  overviewCapsCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewCapsKicker: {
+    color: '#65748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  overviewCapsBalance: {
+    color: STUDOS_THEME.ink,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 25,
+  },
+  overviewCapsAction: {
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 4,
+    justifyContent: 'center',
+    width: 74,
+    minHeight: 56,
+    borderColor: STUDOS_THEME.yellow,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  overviewCapsDuelMark: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 22,
+    height: 20,
+  },
+  overviewCapsDuelSwords: {
+    position: 'absolute',
+    top: 2,
+  },
+  overviewCapsDuelPlus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -4,
+    right: -5,
+    width: 13,
+    height: 13,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 7,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  overviewCapsActionText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
   overviewTodayCalendarCard: {
     gap: 16,
     borderColor: '#E5E8EF',
@@ -11576,20 +13020,46 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 5,
   },
+  overviewTodayCalendarPillGroup: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 5,
+  },
   overviewTodayCalendarTimePill: {
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 52,
-    height: 26,
-    borderRadius: 999,
+    minWidth: 44,
+    minHeight: 30,
+    borderRadius: 8,
     backgroundColor: STUDOS_THEME.blue,
-    paddingHorizontal: 9,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  overviewTodayCalendarDatePill: {
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  overviewTodayCalendarClockPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 42,
+    minHeight: 30,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.blue,
+    paddingHorizontal: 7,
+  },
+  overviewTodayCalendarClockText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 12,
   },
   overviewTodayCalendarTimePillFeatured: {
-    minWidth: 60,
-    height: 30,
+    minWidth: 52,
+    minHeight: 30,
     backgroundColor: STUDOS_THEME.red,
-    paddingHorizontal: 11,
+    paddingHorizontal: 9,
   },
   overviewTodayCalendarTimeText: {
     color: STUDOS_THEME.ink,
@@ -11600,6 +13070,21 @@ const styles = StyleSheet.create({
   overviewTodayCalendarTimeTextFeatured: {
     color: '#FFFFFF',
     fontSize: 12,
+  },
+  overviewTodayCalendarDateDayText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  overviewTodayCalendarDateMonthText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 9,
+    textTransform: 'lowercase',
   },
   overviewTodayCalendarEventCopy: {
     flex: 1,
@@ -11672,6 +13157,332 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  overviewWallsActivityCard: {
+    gap: 14,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  overviewWallsActivityHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  overviewWallsActivityIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+  },
+  overviewWallsActivityIcon: {
+    width: 31,
+    height: 31,
+  },
+  overviewWallsActivityCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewWallsActivityTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  overviewWallsActivityMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  overviewWallsActivityEmpty: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 62,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  overviewWallsActivityEmptyIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFE4E5',
+  },
+  overviewWallsActivityEmptyCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewWallsActivityEmptyTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  overviewWallsActivityEmptyText: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 15,
+  },
+  overviewWallsActivityAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 34,
+    borderColor: '#FFD0D2',
+    borderRadius: 17,
+    borderWidth: 1,
+    backgroundColor: '#FFF6F6',
+    paddingHorizontal: 13,
+  },
+  overviewWallsActivityActionText: {
+    color: STUDOS_THEME.red,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewClassDuelsCard: {
+    gap: 14,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  overviewClassDuelsHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  overviewClassDuelsIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#FFD0D2',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF6F6',
+  },
+  overviewClassDuelsIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 27,
+    height: 25,
+  },
+  overviewClassDuelsShieldOutline: {
+    position: 'absolute',
+    top: -2,
+    zIndex: 1,
+  },
+  overviewClassDuelsShieldFill: {
+    position: 'absolute',
+    top: 0,
+    zIndex: 2,
+  },
+  overviewClassDuelsSwords: {
+    position: 'absolute',
+    top: 3,
+    zIndex: 3,
+  },
+  overviewClassDuelsCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewClassDuelsTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  overviewClassDuelsMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  overviewClassDuelsStatsRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minHeight: 62,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+  },
+  overviewClassDuelsStat: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 2,
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  overviewClassDuelsStatValue: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 19,
+  },
+  overviewClassDuelsStatLabel: {
+    color: '#65748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  overviewClassDuelsDivider: {
+    width: 1,
+    height: 34,
+    backgroundColor: '#E5E8EF',
+  },
+  overviewClassDuelsAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 34,
+    borderRadius: 17,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 13,
+  },
+  overviewClassDuelsActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewDailyMoodCard: {
+    gap: 14,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  overviewDailyMoodHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  overviewDailyMoodIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+  },
+  overviewDailyMoodCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewDailyMoodTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  overviewDailyMoodMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  overviewDailyMoodCurrent: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 64,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  overviewDailyMoodCurrentNeedsCheckIn: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  overviewDailyMoodCurrentCheckedIn: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  overviewDailyMoodCurrentIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: 17,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  overviewDailyMoodCurrentCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewDailyMoodCurrentLabel: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  overviewDailyMoodCurrentLabelCheckedIn: {
+    color: STUDOS_THEME.ink,
+  },
+  overviewDailyMoodCurrentText: {
+    color: 'rgba(255,255,255,0.84)',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  overviewDailyMoodCurrentTextCheckedIn: {
+    color: STUDOS_THEME.ink,
+  },
   overviewStudosMoodRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -11734,8 +13545,8 @@ const styles = StyleSheet.create({
     backgroundColor: STUDOS_THEME.red,
   },
   overviewMoodCurrentBadgeCheckedIn: {
-    borderColor: '#70DFA5',
-    backgroundColor: '#2EB872',
+    borderColor: '#9DF0E7',
+    backgroundColor: STUDOS_THEME.blue,
   },
   overviewMoodCurrentText: {
     color: STUDOS_THEME.ink,
@@ -11746,6 +13557,9 @@ const styles = StyleSheet.create({
   },
   overviewMoodCurrentTextOnAccent: {
     color: '#FFFFFF',
+  },
+  overviewMoodCurrentTextOnBlue: {
+    color: STUDOS_THEME.ink,
   },
   overviewMoodSavedText: {
     color: '#65748b',
@@ -11862,13 +13676,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   overviewClipIconButtonCompleted: {
-    borderColor: STUDOS_THEME.yellow,
-    backgroundColor: '#FFF8E8',
-    shadowColor: STUDOS_THEME.red,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.18,
-    shadowRadius: 7,
-    elevation: 4,
+    borderColor: '#91E6B6',
+    borderWidth: 1,
+    backgroundColor: '#F1FFF7',
+    shadowColor: '#22C55E',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.34,
+    shadowRadius: 11,
+    elevation: 7,
   },
   overviewClipCompletedMark: {
     alignItems: 'center',
@@ -11881,7 +13696,7 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
     borderRadius: 10,
     borderWidth: 2,
-    backgroundColor: STUDOS_THEME.red,
+    backgroundColor: '#22C55E',
   },
   overviewClipAddMark: {
     alignItems: 'center',
@@ -12652,6 +14467,11 @@ const styles = StyleSheet.create({
     height: 58,
     borderRadius: 8,
     backgroundColor: '#fff4ee',
+  },
+  emptyFeatureIconLocked: {
+    borderColor: '#FFE1B1',
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
   },
   detailList: {
     gap: 10,
@@ -14515,7 +16335,7 @@ const styles = StyleSheet.create({
   footerItem: {
     alignItems: 'center',
     flex: 1,
-    gap: 2,
+    gap: 0,
     justifyContent: 'center',
     minHeight: 52,
     borderRadius: 8,
@@ -14611,6 +16431,34 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 3,
     backgroundColor: STUDOS_THEME.ink,
   },
+  footerRasterIcon: {
+    width: 34,
+    height: 34,
+  },
+  footerRasterIconActive: {
+    transform: [{ translateY: -1 }, { scale: 1.04 }],
+  },
+  footerPointDuelIcon: {
+    width: 26,
+    height: 24,
+    transform: [{ scale: 1.14 }],
+  },
+  footerPointDuelIconActive: {
+    transform: [{ scale: 1.2 }],
+  },
+  footerPointDuelShieldOutline: {
+    position: 'absolute',
+    top: -2,
+    zIndex: 1,
+  },
+  footerPointDuelShieldFill: {
+    position: 'absolute',
+    top: 0,
+    zIndex: 2,
+  },
+  footerPointDuelSwords: {
+    zIndex: 3,
+  },
   footerCenterCircleLabel: {
     color: '#FFF4D8',
     fontSize: 10.5,
@@ -14629,8 +16477,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    width: 32,
-    height: 28,
+    width: 36,
+    height: 34,
+  },
+  lockBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 15,
+    height: 15,
+    borderColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1.5,
+    backgroundColor: STUDOS_THEME.yellow,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  sidebarLockBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+  },
+  footerLockBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -5,
   },
   footerUnreadBadge: {
     alignItems: 'center',
@@ -14664,6 +16537,8 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '600',
     letterSpacing: 0,
+    lineHeight: 12,
+    marginTop: -2,
   },
   footerLabelActive: {
     color: '#FF6F73',

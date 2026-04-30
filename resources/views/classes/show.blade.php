@@ -3,9 +3,15 @@
 @section('title', $schoolClass->class_name.' · Studos')
 
 @section('nav')
-  <a href="#medlemmer">Medlemmer</a>
-  <a href="#cms">CMS</a>
-  <a href="#events">Events</a>
+  @if ($canManageClass)
+    <a href="#medlemmer">Medlemmer</a>
+  @endif
+  @if ($canManageContent)
+    <a href="#cms">CMS</a>
+  @endif
+  @if ($canManageEvents)
+    <a href="#events">Events</a>
+  @endif
 @endsection
 
 @section('headerActions')
@@ -13,70 +19,59 @@
 @endsection
 
 @section('content')
-  <section class="page">
-    <div class="class-hero">
+  <section class="page class-page">
+    <div class="class-hero full-bleed">
       <div>
         <a class="back-link" href="{{ route('admin') }}">Til admin</a>
         <p class="eyebrow">{{ $schoolClass->school_name }}</p>
         <h1>{{ $schoolClass->class_name }} · {{ $schoolClass->graduation_year }}</h1>
-        <div class="hero-meta">
-          <span>KlasseID <code>{{ $schoolClass->public_id }}</code></span>
-          <span>Invite <code>{{ $schoolClass->invite_code }}</code></span>
-          <span>{{ $joinPolicies[$schoolClass->join_policy] ?? $schoolClass->join_policy }}</span>
-          <span>Owner {{ $schoolClass->owner_name }}</span>
-          <span>Din rolle {{ ucfirst($currentMember->role) }}</span>
-        </div>
       </div>
       <div class="class-hero-actions">
-        <div class="invite-box">
-          <span>KlasseID</span>
-          <strong>{{ $schoolClass->public_id }}</strong>
-          <button class="button primary" type="button" data-copy="{{ $schoolClass->public_id }}">Kopier</button>
-        </div>
         <div class="invite-box">
           <span>Invitekode</span>
           <strong>{{ $schoolClass->invite_code }}</strong>
           <button class="button subtle" type="button" data-copy="{{ $schoolClass->invite_code }}">Kopier</button>
         </div>
-      </div>
-    </div>
-
-    <div class="metric-grid">
-      <div class="metric">
-        <span>Aktive</span>
-        <strong>{{ $stats['activeMembers'] }}</strong>
-      </div>
-      <div class="metric">
-        <span>Afventer</span>
-        <strong>{{ $stats['pendingMembers'] }}</strong>
-      </div>
-      <div class="metric">
-        <span>Events</span>
-        <strong>{{ $stats['events'] }}</strong>
-      </div>
-      <div class="metric">
-        <span>CMS</span>
-        <strong>{{ $stats['contentBlocks'] }}</strong>
-      </div>
-    </div>
-
-    @if ($canManageClass)
-      <section class="panel" id="indstillinger">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">Klasse</p>
-          <h2>Indstillinger</h2>
+        <div class="invite-box">
+          <span>KlasseID</span>
+          <strong>{{ $schoolClass->public_id }}</strong>
+          <button class="button primary" type="button" data-copy="{{ $schoolClass->public_id }}">Kopier</button>
         </div>
       </div>
+    </div>
 
-      <form class="form-grid" action="{{ route('classes.settings.update', $schoolClass->id) }}" method="post">
-        @csrf
-        @method('PATCH')
+    <div class="class-panel-grid">
+      @if ($canManageClass)
+        <section class="panel" id="indstillinger">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Klasse</p>
+            <h2>Overblik</h2>
+          </div>
+        </div>
 
-        <label>
-          Skole
-          <input name="schoolName" value="{{ old('schoolName', $schoolClass->school_name) }}" required>
-        </label>
+        <div class="metric-grid panel-metrics">
+          <div class="metric">
+            <span>Aktive</span>
+            <strong>{{ $stats['activeMembers'] }}</strong>
+          </div>
+          <div class="metric">
+            <span>Afventer</span>
+            <strong>{{ $stats['pendingMembers'] }}</strong>
+          </div>
+          <div class="metric">
+            <span>Events</span>
+            <strong>{{ $stats['events'] }}</strong>
+          </div>
+          <div class="metric">
+            <span>CMS</span>
+            <strong>{{ $stats['contentBlocks'] }}</strong>
+          </div>
+        </div>
+
+        <form class="form-grid" action="{{ route('classes.settings.update', $schoolClass->id) }}" method="post">
+          @csrf
+          @method('PATCH')
 
         <label>
           Klasse
@@ -91,16 +86,6 @@
         <label>
           Dimission
           <input name="graduationDate" value="{{ old('graduationDate', $schoolClass->graduation_date) }}" type="date">
-        </label>
-
-        <label>
-          KlasseID
-          <input value="{{ $schoolClass->public_id }}" readonly>
-        </label>
-
-        <label>
-          Invitekode
-          <input name="inviteCode" value="{{ old('inviteCode', $schoolClass->invite_code) }}" required>
         </label>
 
         <label>
@@ -125,83 +110,185 @@
         <div class="form-actions wide">
           <button class="button primary" type="submit">Gem indstillinger</button>
         </div>
-      </form>
-    </section>
+        </form>
+      </section>
 
-    <section class="panel" id="medlemmer">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">Adgang</p>
-          <h2>Medlemmer</h2>
+      <section class="panel" id="medlemmer">
+        <div class="panel-heading">
+          <div class="member-heading-title">
+            <p class="eyebrow">Adgang</p>
+            <div class="member-title-row">
+              <h2>Administrer medlemmer</h2>
+              <div class="member-title-actions">
+                <button class="button primary" type="button" data-dialog-open="add-member-dialog" data-focus-target="member-display-name">
+                  Tilføj medlem
+                </button>
+                @if ($removedMembers->isNotEmpty())
+                  <button class="button subtle" type="button" data-dialog-open="removed-members-dialog">
+                    Se fjernede medlemmer ({{ $removedMembers->count() }})
+                  </button>
+                @endif
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <form class="inline-create" action="{{ route('classes.members.store', $schoolClass->id) }}" method="post">
-        @csrf
-        <input name="displayName" value="{{ old('displayName') }}" placeholder="Navn" required>
-        <input name="email" value="{{ old('email') }}" type="email" placeholder="Email">
-        <select name="role" required>
-          @foreach ($roles as $value => $label)
-            <option value="{{ $value }}" @selected(old('role', 'student') === $value)>{{ $label }}</option>
-          @endforeach
-        </select>
-        <select name="status" required>
-          @foreach ($statuses as $value => $label)
-            <option value="{{ $value }}" @selected(old('status', 'active') === $value)>{{ $label }}</option>
-          @endforeach
-        </select>
-        <button class="button primary" type="submit">Tilføj</button>
-      </form>
 
       <div class="data-list">
-        @foreach ($members as $member)
+        @forelse ($members as $member)
+          @php($hasAccount = filled($member->password_hash ?? null))
           <div class="member-row">
+            <label class="member-select">
+              <input
+                form="bulk-remove-members-form"
+                name="memberIds[]"
+                type="checkbox"
+                value="{{ $member->id }}"
+                aria-label="Vælg {{ $member->display_name }}"
+              >
+            </label>
+
             <div class="person">
               <strong>{{ $member->display_name }}</strong>
               <span>{{ $member->email ?: 'Ingen email' }}</span>
             </div>
 
-            <form class="row-controls" action="{{ route('classes.members.update', [$schoolClass->id, $member->id]) }}" method="post">
-              @csrf
-              @method('PATCH')
-              <select name="role" aria-label="Rolle for {{ $member->display_name }}">
-                @foreach ($roles as $value => $label)
-                  <option value="{{ $value }}" @selected($member->role === $value)>{{ $label }}</option>
-                @endforeach
-              </select>
-              <select name="status" aria-label="Status for {{ $member->display_name }}">
-                @foreach ($statuses as $value => $label)
-                  <option value="{{ $value }}" @selected($member->status === $value)>{{ $label }}</option>
-                @endforeach
-              </select>
-              <button class="button subtle" type="submit">Gem</button>
-            </form>
+            <div class="member-access-controls">
+              <div class="account-status" aria-label="Status for {{ $member->display_name }}">
+                <strong class="account-status-badge @if ($hasAccount) is-active @else is-pending @endif">
+                  {{ $hasAccount ? 'Aktiv' : 'Afventer oprettelse' }}
+                </strong>
+              </div>
 
-            <form action="{{ route('classes.members.destroy', [$schoolClass->id, $member->id]) }}" method="post">
-              @csrf
-              @method('DELETE')
-              <button class="button danger" type="submit">Fjern</button>
-            </form>
+              <form class="row-controls" action="{{ route('classes.members.update', [$schoolClass->id, $member->id]) }}" method="post">
+                @csrf
+                @method('PATCH')
+                <select name="role" aria-label="Rolle for {{ $member->display_name }}">
+                  @foreach ($roles as $value => $label)
+                    <option value="{{ $value }}" @selected($member->role === $value)>{{ $label }}</option>
+                  @endforeach
+                </select>
+                <button class="button subtle" type="submit">Gem rolle</button>
+              </form>
+            </div>
+
           </div>
-        @endforeach
+        @empty
+          <div class="empty-state">
+            <strong>Ingen aktive medlemmer endnu.</strong>
+            <span>Tilføj et medlem med knappen ovenfor, eller gendan et fjernet medlem fra arkivet.</span>
+          </div>
+        @endforelse
       </div>
-    </section>
-    @else
-      <section class="panel" id="indstillinger">
-        <div class="empty-state">
-          <strong>Klasseindstillinger og medlemmer kræver adgang til klassen.</strong>
-          <span>Alle roller har fuld adgang lige nu, indtil adgangsniveauerne bliver defineret.</span>
-        </div>
-      </section>
-    @endif
 
-    <section class="panel" id="cms">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">Indhold</p>
-          <h2>CMS</h2>
+      @if ($members->isNotEmpty())
+        <form id="bulk-remove-members-form" class="bulk-actions" action="{{ route('classes.members.destroy-many', $schoolClass->id) }}" method="post">
+          @csrf
+          @method('DELETE')
+          <span>Vælg flere brugere og fjern dem samlet.</span>
+          <button class="button danger" type="submit">Fjern valgte</button>
+        </form>
+      @endif
+
+      </section>
+
+      <dialog
+        id="add-member-dialog"
+        class="modal"
+        aria-labelledby="add-member-title"
+        @if ($errors->has('displayName') || $errors->has('email')) data-open-on-load data-focus-target="member-display-name" @endif
+      >
+        <div class="modal-panel">
+          <div class="modal-heading">
+            <div>
+              <p class="eyebrow">Adgang</p>
+              <h2 id="add-member-title">Tilføj medlem</h2>
+            </div>
+            <button class="button subtle" type="button" data-dialog-close>Luk</button>
+          </div>
+
+          <form class="modal-form" action="{{ route('classes.members.store', $schoolClass->id) }}" method="post">
+            @csrf
+            <label>
+              Navn
+              <input id="member-display-name" name="displayName" value="{{ old('displayName') }}" required>
+              @error('displayName')
+                <span class="field-error">{{ $message }}</span>
+              @enderror
+            </label>
+
+            <label>
+              Email
+              <input name="email" value="{{ old('email') }}" type="email" autocomplete="email" required>
+              @error('email')
+                <span class="field-error">{{ $message }}</span>
+              @enderror
+            </label>
+
+            <label>
+              Rolle
+              <select name="role" required>
+                @foreach ($roles as $value => $label)
+                  <option value="{{ $value }}" @selected(old('role', 'student') === $value)>{{ $label }}</option>
+                @endforeach
+              </select>
+            </label>
+
+            <div class="form-actions">
+              <button class="button subtle" type="button" data-dialog-close>Annuller</button>
+              <button class="button primary" type="submit">Opret medlem</button>
+            </div>
+          </form>
         </div>
-      </div>
+      </dialog>
+
+    @if ($removedMembers->isNotEmpty())
+      <dialog id="removed-members-dialog" class="modal" aria-labelledby="removed-members-title">
+        <div class="modal-panel">
+          <div class="modal-heading sticky">
+            <div>
+              <p class="eyebrow">Arkiv</p>
+              <h2 id="removed-members-title">Fjernede medlemmer</h2>
+            </div>
+            <button class="button subtle" type="button" data-dialog-close>Luk</button>
+          </div>
+
+          <div class="data-list removed-list">
+            @foreach ($removedMembers as $member)
+              <div class="member-row removed-member-row">
+                <div class="person">
+                  <strong>{{ $member->display_name }}</strong>
+                  <span>{{ $member->email ?: 'Ingen email' }} · {{ $roles[$member->role] ?? ucfirst($member->role) }}</span>
+                </div>
+
+                <form action="{{ route('classes.members.update', [$schoolClass->id, $member->id]) }}" method="post">
+                  @csrf
+                  @method('PATCH')
+                  <input type="hidden" name="role" value="{{ $member->role }}">
+                  <input type="hidden" name="status" value="active">
+                  <button class="button subtle" type="submit">Gendan</button>
+                </form>
+              </div>
+            @endforeach
+          </div>
+        </div>
+      </dialog>
+    @endif
+      @else
+        <section class="panel" id="indstillinger">
+          <div class="empty-state">
+            <strong>Klasseindstillinger og medlemmer kræver ejeradgang.</strong>
+            <span>Moderatorer kan stadig styre CMS og events.</span>
+          </div>
+        </section>
+      @endif
+
+      <section class="panel" id="cms">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Indhold</p>
+            <h2>CMS</h2>
+          </div>
+        </div>
 
       @if ($canManageContent)
         <form class="content-create" action="{{ route('classes.content.store', $schoolClass->id) }}" method="post">
@@ -300,17 +387,17 @@
           </div>
         @endforelse
       </div>
-    </section>
+      </section>
 
-    <section class="panel" id="events">
-      <div class="panel-heading">
-        <div>
-          <p class="eyebrow">Kalender</p>
-          <h2>Begivenheder</h2>
+      <section class="panel" id="events">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Kalender</p>
+            <h2>Begivenheder</h2>
+          </div>
         </div>
-      </div>
 
-      @if ($canManageContent)
+      @if ($canManageEvents)
         <form class="content-create" action="{{ route('classes.events.store', $schoolClass->id) }}" method="post">
         @csrf
         <div class="form-grid">
@@ -343,7 +430,7 @@
 
       <div class="data-list split-list">
         @forelse ($events as $event)
-          @if ($canManageContent)
+          @if ($canManageEvents)
             <form class="editor-row" action="{{ route('classes.events.update', [$schoolClass->id, $event->id]) }}" method="post">
             @csrf
             @method('PATCH')
@@ -399,6 +486,7 @@
           </div>
         @endforelse
       </div>
-    </section>
+      </section>
+    </div>
   </section>
 @endsection

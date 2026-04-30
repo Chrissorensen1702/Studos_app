@@ -1,6 +1,7 @@
 @extends('layouts.studos')
 
 @section('title', 'Studos')
+@section('bodyClass', 'landing-body')
 
 @section('headerActions')
   @auth
@@ -11,54 +12,58 @@
 @endsection
 
 @section('content')
-  <section class="landing-hero">
+  <section class="landing-hero" aria-labelledby="landing-title">
     <img class="landing-image" src="{{ asset('assets/landing-hero.png') }}" alt="">
     <div class="landing-shade"></div>
+
     <div class="landing-content">
-      <p class="eyebrow">Studenteråret samlet et sted</p>
-      <h1>Studos</h1>
+      <p class="eyebrow">GØR STUDENTERTIDEN LIDT SJOVERE</p>
+      <h1 id="landing-title" class="landing-wordmark" aria-label="Studos">
+        <span class="landing-wordmark-row" aria-hidden="true">
+          <span class="landing-wordmark-light">Stu</span><span>dos</span>
+        </span>
+        <span class="landing-wordmark-underline" aria-hidden="true"></span>
+      </h1>
       <p>
-        En privat klassehub til invite, medlemmer, events, globale beskeder og alt
-        det praktiske omkring studenteråret.
+        Jeres private hub til alt, der gør studenteråret nemmere at planlægge og
+        sjovere at opleve – og hvor I kan connecte, chatte og dyste på tværs af
+        klasser.
       </p>
-      <div class="landing-actions">
-        @auth
-          <a class="button primary" href="{{ route('admin') }}">Åbn admin</a>
-        @else
-          <a class="button primary" href="{{ route('classes.create') }}">Opret klasse</a>
-          <a class="button light" href="{{ route('login') }}">Login</a>
-        @endauth
+
+      <div id="download-app" class="landing-store-actions" aria-label="Download Studos appen">
+        <a class="store-badge" href="#download-app" aria-label="Hent Studos på Google Play">
+          <span class="store-badge-mark google-play-mark" aria-hidden="true">
+            <svg viewBox="0 0 42 46" focusable="false">
+              <path d="M4 2L26 23L4 44Z" fill="#29c45a" />
+              <path d="M26 23L34 15L39 18C42 20 42 26 39 28L34 31Z" fill="#ffd23f" />
+              <path d="M4 2L34 15L26 23Z" fill="#24b6f2" />
+              <path d="M4 44L26 23L34 31Z" fill="#f35b5f" />
+            </svg>
+          </span>
+          <span class="store-badge-copy">
+            <span class="store-badge-kicker">GET IT ON</span>
+            <span class="store-badge-name">Google Play</span>
+          </span>
+        </a>
+
+        <a class="store-badge" href="#download-app" aria-label="Hent Studos i App Store">
+          <span class="store-badge-mark apple-mark" aria-hidden="true"></span>
+          <span class="store-badge-copy">
+            <span class="store-badge-kicker">Download on the</span>
+            <span class="store-badge-name">App Store</span>
+          </span>
+        </a>
+
       </div>
     </div>
-  </section>
 
-  <section class="page landing-page">
-    <div class="section-heading">
-      <p class="eyebrow">Web og app</p>
-      <h2>Forsiden er offentlig. CMS ligger bag login.</h2>
-    </div>
-
-    <div class="feature-grid">
-      <article class="feature-card">
-        <span>01</span>
-        <h3>Opret klasse</h3>
-        <p>Første bruger oprettes sammen med klassen og bliver owner.</p>
-      </article>
-      <article class="feature-card">
-        <span>02</span>
-        <h3>Adminpanel</h3>
-        <p>Klasseadgang styrer medlemmer, roller, invite og indstillinger.</p>
-      </article>
-      <article class="feature-card">
-        <span>03</span>
-        <h3>CMS</h3>
-        <p>Globale beskeder, links, program og kontaktpersoner kræver login.</p>
-      </article>
-      <article class="feature-card">
-        <span>04</span>
-        <h3>Events</h3>
-        <p>Dimission, vogntur, møder og deadlines samles på klassen.</p>
-      </article>
+    <div class="landing-device-stage" aria-hidden="true">
+      <div class="landing-device">
+        <div class="landing-device-screen">
+          <span class="landing-device-notch"></span>
+          <img src="{{ asset('assets/mockup-index.png') }}" alt="">
+        </div>
+      </div>
     </div>
   </section>
 @endsection

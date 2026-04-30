@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Mail\MemberInvitationMail;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -62,7 +64,11 @@ class ExampleTest extends TestCase
         $response
             ->assertStatus(200)
             ->assertSee('Studos')
-            ->assertSee('CMS ligger bag login');
+            ->assertSee('Opret')
+            ->assertSee('Login')
+            ->assertSee('Google Play')
+            ->assertSee('App Store')
+            ->assertSee('mockup-index.png');
     }
 
     public function test_old_index_html_redirects_to_app_url(): void
@@ -80,6 +86,7 @@ class ExampleTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('roles.0.id', 'owner')
             ->assertJsonMissing(['id' => 'admin'])
+            ->assertJsonPath('roles.2.permissions.0', 'view_class')
             ->assertJsonPath('statuses.1.id', 'active');
     }
 
@@ -1290,6 +1297,16 @@ class ExampleTest extends TestCase
         $this->get('/admin/classes/demo-class')->assertRedirect('/login');
     }
 
+    public function test_login_page_uses_cms_marketing_layout(): void
+    {
+        $this->get('/login')
+            ->assertStatus(200)
+            ->assertSee('login-screen', false)
+            ->assertSee('CMS til studentertiden')
+            ->assertSee('Åbn Studos admin')
+            ->assertDontSee('app-header', false);
+    }
+
     public function test_demo_class_dashboard_returns_admin_modules_after_login(): void
     {
         $this->post('/login', [
@@ -1303,10 +1320,309 @@ class ExampleTest extends TestCase
 
         $response
             ->assertStatus(200)
-            ->assertSee('Indstillinger')
+            ->assertSee('Overblik')
             ->assertSee('Medlemmer')
             ->assertSee('CMS')
             ->assertSee('Begivenheder');
+    }
+
+    public function test_class_identity_fields_are_readonly_in_cms_settings(): void
+    {
+        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
+
+        $response = $this->get('/admin/classes/demo-class');
+        $html = $response->getContent();
+
+        $response->assertStatus(200);
+        $this->assertStringNotContainsString('name="schoolName"', $html);
+        $this->assertStringNotContainsString('name="inviteCode"', $html);
+        $this->assertStringNotContainsString('overview-identity-pills', $html);
+        $this->assertStringContainsString('STU-DEMO26', $html);
+        $this->assertStringContainsString('KlasseID', $html);
+
+        $this->from('/admin/classes/demo-class')
+            ->patch('/admin/classes/demo-class/settings', [
+                'schoolName' => 'Manipuleret Gymnasium',
+                'className' => '3.Z',
+                'graduationYear' => '2027',
+                'graduationDate' => '2027-06-25',
+                'inviteCode' => 'HACK-CODE',
+                'joinPolicy' => 'closed',
+            ])
+            ->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('classes', [
+            'id' => 'demo-class',
+            'school_name' => 'Midtby Gymnasium',
+            'class_name' => '3.Z',
+            'graduation_year' => '2027',
+            'graduation_date' => '2027-06-25',
+            'invite_code' => 'STU-DEMO26',
+            'join_policy' => 'closed',
+        ]);
+    }
+
+    public function test_cms_member_creation_defaults_to_pending_account_status_without_status_controls(): void
+    {
+        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
+
+        $response = $this->get('/admin/classes/demo-class');
+
+        $response
+            ->assertStatus(200)
+            ->assertSee('account-status', false)
+            ->assertDontSee('status-toggle', false)
+            ->assertDontSee('<select name="status"', false)
+            ->assertDontSee('value="removed"', false);
+
+        $html = $response->getContent();
+        $this->assertStringContainsString('data-dialog-open="add-member-dialog"', $html);
+        $this->assertStringContainsString('id="add-member-dialog"', $html);
+        $this->assertStringContainsString('class="modal-form"', $html);
+        $this->assertStringNotContainsString('add-member-form', $html);
+        $this->assertStringNotContainsString('href="#add-member-form"', $html);
+        $this->assertStringNotContainsString('id="add-member-form" class="inline-create"', $html);
+
+        Mail::fake();
+
+        $this->from('/admin/classes/demo-class')
+            ->post('/admin/classes/demo-class/members', [
+                'displayName' => 'Cms Uden Email',
+                'role' => 'student',
+            ])
+            ->assertRedirect('/admin/classes/demo-class')
+            ->assertSessionHasErrors('email');
+
+        Mail::assertNothingSent();
+
+        $this->from('/admin/classes/demo-class')
+            ->post('/admin/classes/demo-class/members', [
+                'displayName' => 'Cms Nybruger',
+                'email' => 'cms.nybruger@example.test',
+                'role' => 'student',
+                'status' => 'removed',
+            ])
+            ->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('members', [
+            'class_id' => 'demo-class',
+            'display_name' => 'Cms Nybruger',
+            'email' => 'cms.nybruger@example.test',
+            'role' => 'student',
+            'status' => 'pending',
+        ]);
+
+        $schoolClass = DB::table('classes')->where('id', 'demo-class')->first();
+
+        Mail::assertSent(MemberInvitationMail::class, function (MemberInvitationMail $mail) use ($schoolClass): bool {
+            return $mail->hasTo('cms.nybruger@example.test')
+                && $mail->displayName === 'Cms Nybruger'
+                && $mail->className === $schoolClass->class_name
+                && $mail->schoolName === $schoolClass->school_name
+                && $mail->inviteCode === $schoolClass->invite_code
+                && str_contains($mail->inviteUrl, 'invite='.$schoolClass->invite_code);
+        });
+
+        $this->assertNull(DB::table('members')->where('email', 'cms.nybruger@example.test')->value('password_hash'));
+
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        $this->postJson('/api/classes/join', [
+            'inviteCode' => 'STU-DEMO26',
+            'schoolId' => $schoolId,
+            'firstName' => 'Cms',
+            'lastName' => 'Nybruger',
+            'email' => 'cms.nybruger@example.test',
+            'birthday' => '2007-05-14',
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('session.member.status', 'active');
+
+        $this->assertDatabaseHas('members', [
+            'class_id' => 'demo-class',
+            'display_name' => 'Cms Nybruger',
+            'email' => 'cms.nybruger@example.test',
+            'role' => 'student',
+            'status' => 'active',
+        ]);
+        $this->assertNotEmpty(DB::table('members')->where('email', 'cms.nybruger@example.test')->value('password_hash'));
+    }
+
+    public function test_removed_members_are_archived_separately_in_cms(): void
+    {
+        $this->createActiveDemoMember('cms-removed-member', 'Slettet Cmsbruger', 'slettet.cms@example.test');
+        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
+
+        $this->from('/admin/classes/demo-class')
+            ->delete('/admin/classes/demo-class/members/cms-removed-member')
+            ->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'cms-removed-member',
+            'status' => 'removed',
+        ]);
+
+        $response = $this->get('/admin/classes/demo-class');
+        $response
+            ->assertStatus(200)
+            ->assertSee('Se fjernede medlemmer (1)')
+            ->assertSee('Fjernede medlemmer')
+            ->assertSee('Slettet Cmsbruger')
+            ->assertSee('Gendan');
+
+        $this->assertFalse($response->viewData('members')->contains('id', 'cms-removed-member'));
+        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-removed-member'));
+
+        $this->from('/admin/classes/demo-class')
+            ->patch('/admin/classes/demo-class/members/cms-removed-member', [
+                'role' => 'student',
+                'status' => 'active',
+            ])->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'cms-removed-member',
+            'status' => 'active',
+        ]);
+
+        $response = $this->get('/admin/classes/demo-class');
+        $this->assertTrue($response->viewData('members')->contains('id', 'cms-removed-member'));
+        $this->assertFalse($response->viewData('removedMembers')->contains('id', 'cms-removed-member'));
+    }
+
+    public function test_owner_can_bulk_archive_selected_members_in_cms(): void
+    {
+        $this->createActiveDemoMember('cms-bulk-alma', 'Alma Bulk', 'alma.bulk@example.test');
+        $this->createActiveDemoMember('cms-bulk-bertil', 'Bertil Bulk', 'bertil.bulk@example.test');
+        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
+
+        $this->from('/admin/classes/demo-class')
+            ->delete('/admin/classes/demo-class/members', [
+                'memberIds' => ['cms-bulk-alma', 'cms-bulk-bertil'],
+            ])
+            ->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'cms-bulk-alma',
+            'status' => 'removed',
+        ]);
+        $this->assertDatabaseHas('members', [
+            'id' => 'cms-bulk-bertil',
+            'status' => 'removed',
+        ]);
+
+        $response = $this->get('/admin/classes/demo-class');
+        $this->assertFalse($response->viewData('members')->contains('id', 'cms-bulk-alma'));
+        $this->assertFalse($response->viewData('members')->contains('id', 'cms-bulk-bertil'));
+        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-bulk-alma'));
+        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-bulk-bertil'));
+        $response
+            ->assertSee('Fjern valgte')
+            ->assertDontSee('member-remove-form', false)
+            ->assertDontSee('>Fjern</button>', false);
+
+        $this->from('/admin/classes/demo-class')
+            ->delete('/admin/classes/demo-class/members', [
+                'memberIds' => ['demo-owner'],
+            ])
+            ->assertRedirect('/admin/classes/demo-class')
+            ->assertSessionHasErrors('member');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'demo-owner',
+            'status' => 'active',
+        ]);
+    }
+
+    public function test_student_cannot_access_web_admin_dashboard(): void
+    {
+        $user = User::factory()->create([
+            'name' => 'Student User',
+            'email' => 'student-web@example.test',
+        ]);
+        $this->createActiveDemoMember('student-web', 'Student Web', 'student-web@example.test');
+
+        $this->actingAs($user);
+
+        $this->get('/admin')
+            ->assertStatus(200)
+            ->assertSee('Du er allerede medlem af 3.B')
+            ->assertSee('Ingen admin-adgang');
+        $this->get('/admin/classes/demo-class')->assertForbidden();
+
+        $this->post('/admin/classes', [
+            'schoolId' => DB::table('classes')->where('id', 'demo-class')->value('school_id'),
+            'className' => '3.S',
+            'graduationYear' => '2026',
+            'graduationDate' => '2026-06-24',
+            'joinPolicy' => 'approval',
+        ])
+            ->assertRedirect('/admin')
+            ->assertSessionHasErrors('class');
+    }
+
+    public function test_moderator_can_manage_cms_but_not_member_access(): void
+    {
+        $user = User::factory()->create([
+            'name' => 'Moderator User',
+            'email' => 'moderator-web@example.test',
+        ]);
+        $this->createActiveDemoMember('moderator-web', 'Moderator Web', 'moderator-web@example.test');
+        DB::table('members')->where('id', 'moderator-web')->update(['role' => 'moderator']);
+
+        $this->actingAs($user);
+
+        $this->get('/admin')->assertRedirect('/admin/classes/demo-class');
+        $this->get('/admin/classes/demo-class')
+            ->assertStatus(200)
+            ->assertSee('CMS')
+            ->assertSee('Begivenheder')
+            ->assertSee('Klasseindstillinger og medlemmer kræver ejeradgang');
+
+        $this->post('/admin/classes/demo-class/content', [
+            'type' => 'info',
+            'title' => 'Moderator info',
+            'body' => 'Husk fælles besked.',
+            'sortOrder' => 10,
+        ])->assertRedirect('/admin/classes/demo-class');
+
+        $this->assertDatabaseHas('class_content_blocks', [
+            'class_id' => 'demo-class',
+            'title' => 'Moderator info',
+        ]);
+
+        $this->patch('/admin/classes/demo-class/members/demo-owner', [
+            'role' => 'moderator',
+            'status' => 'active',
+        ])->assertForbidden();
+    }
+
+    public function test_api_member_access_can_only_be_changed_by_owner(): void
+    {
+        $this->createActiveDemoMember('api-moderator', 'API Moderator', 'api-moderator@example.test');
+        $this->createActiveDemoMember('api-student', 'Student API', 'api-student@example.test');
+        DB::table('members')->where('id', 'api-moderator')->update(['role' => 'moderator']);
+
+        $moderatorToken = $this->issueTestMemberToken('api-moderator');
+
+        $this->postJson('/api/classes/demo-class/members/api-student/access', [
+            'role' => 'moderator',
+        ], [
+            'Authorization' => 'Bearer '.$moderatorToken,
+        ])->assertForbidden();
+
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->postJson('/api/classes/demo-class/members/api-student/access', [
+            'role' => 'moderator',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('member.role', 'moderator');
     }
 
     public function test_public_create_class_creates_user_and_owner(): void

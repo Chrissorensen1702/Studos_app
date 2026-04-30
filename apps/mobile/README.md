@@ -32,12 +32,13 @@ adgangskode. Backend finder brugeren ud fra tokenet og maa ikke stole paa
 `memberId` fra klienten til private handlinger.
 
 Efter login har appen en topbar med skole/klasse, side-menu med sektionerne
-`Din klasse` og `Andre klasser`, samt fast footernavigation mellem:
+`Din klasse`, `Andre klasser` og `Kommer snart`, samt fast footernavigation
+mellem:
 
 - Kalender
 - Chat
 - Overblik
-- Wallet
+- Duel
 - Walls
 
 `Chat` er ikke laengere en placeholder. Den har foerste rigtige version med
@@ -79,24 +80,25 @@ chat-/beskedrapporter gemmes i `member_reports`, og chathandlinger logges i
 `chat_moderation_events`.
 
 `Kalender` har et rigtigt oprettelsesflow til studentergilder: egen side i
-stedet for modal, cover-upload, dato-pill med kalender, tidshjul for time/minut,
-invitationer til hele klassen/crew/valgte personer og RSVP
-`Deltager`/`Deltager ikke`.
+stedet for modal, cover-upload eller cover-skabelon, dato-pill med kalender,
+tidshjul for time/minut, invitationer til hele klassen/crew/valgte personer og
+RSVP `Deltager`/`Deltager ikke`. Tidligere events findes via en fuldbredde
+knap nederst paa kalendersiden og beregnes paa lokal dato/tid.
 
-`Overblik` har dynamisk countdown til studenterugen, check-in-kortet
-`Hvordan er stemningen i dag?`, sidste opdateret-tekst, stemningsmodal og en
-foerste social-score/klip UI-retning.
+`Overblik` har dynamisk countdown til studenterugen, `Mit Studos`, lokal
+hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste walls
+aktivitet`, `Klassedueller` og `Dagens stemning`. Dagens stemning gemmes lokalt
+pr. bruger og resetter ved lokal midnat.
 
 ## App-shell og navigation
 
-Topbaren viser menu, skole, klasse og Studos-wordmark. Menu-ikonet er bygget af
-simple React Native views, saa linjeafstand og placering kan styres stabilt i
-stedet for at vaere bundet til et ikonfont-symbol.
+Topbaren viser menu, skole, klasse og Studos-wordmark. Overblik-headeren
+clamper ved scroll, og hovedindholdet scroller under headeren ligesom paa de
+andre sider.
 
-Sidebaren er kompakt og ikke-scrollende. `Mit crew` ligger som en separat
-top-entry med ikon, label, medlemstal og pil yderst til hoejre. Resten af
-sidebaren er delt op i `Din klasse` og `Andre klasser`, med `Indstillinger` og
-`Min profil` nederst.
+Sidebaren er delt op i `Din klasse`, `Andre klasser` og `Kommer snart`.
+`Wallet` og `Blaa bog` ligger laast under kommende features. `Noedkontakter`
+ligger i en roed low-opacity container lige over `Indstillinger` nederst.
 
 Sidebar-ikonerne bruger en fast Studos-palette:
 
@@ -105,9 +107,9 @@ Sidebar-ikonerne bruger en fast Studos-palette:
 - Roed: `#FF6F73`
 - Moerk: `#172143`
 
-Flerfarvede ikoner bygges som simple `View`-kompositioner i en fast ramme,
-ikke som svaere SVG'er. Det goer dem nemmere at justere og holde stabile i
-React Native.
+Flerfarvede ikoner bygges som simple `View`-kompositioner i en fast ramme eller
+som smaa PNG-assets, ikke som svaere SVG'er. Det goer dem nemmere at justere og
+holde stabile i React Native.
 
 ## Start
 
