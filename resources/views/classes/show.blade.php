@@ -15,7 +15,10 @@
 @endsection
 
 @section('headerActions')
-  <button class="button subtle" type="button" data-copy="{{ $inviteUrl }}">Kopier invite</button>
+  <form action="{{ route('logout') }}" method="post">
+    @csrf
+    <button class="button subtle" type="submit">Log ud</button>
+  </form>
 @endsection
 
 @section('content')

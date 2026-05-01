@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1310" height="310" viewBox="290 40 1310 310" fill="none">
+  <defs>
+    <linearGradient id="pd-circle-ring" x1="500" y1="84" x2="686" y2="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9CB4DE"/>
+      <stop offset="1" stop-color="#5D79AB"/>
+    </linearGradient>
+    <linearGradient id="pd-circle-fill" x1="520" y1="102" x2="672" y2="228" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EEF4FF" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#C6D6F0" stop-opacity="0.18"/>
+    </linearGradient>
+    <linearGradient id="pd-saas-underline" x1="336" y1="322" x2="1556" y2="322" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6A7FAF" stop-opacity="0"/>
+      <stop offset="0.14" stop-color="#8095C3" stop-opacity="0.84"/>
+      <stop offset="0.52" stop-color="#6F84B5" stop-opacity="0.98"/>
+      <stop offset="0.86" stop-color="#5E75A7" stop-opacity="0.88"/>
+      <stop offset="1" stop-color="#5E75A7" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <circle cx="592" cy="164" r="86" fill="url(#pd-circle-fill)"/>
+    <circle cx="592" cy="164" r="78" stroke="url(#pd-circle-ring)" stroke-width="16"/>
+    <circle cx="592" cy="164" r="58" stroke="#FFFFFF24" stroke-width="2"/>
+  </g>
+
+  <text
+    x="592"
+    y="214"
+    text-anchor="middle"
+    font-family="Avenir Next, Avenir, 'SF Pro Display', Inter, 'Helvetica Neue', Arial, sans-serif"
+    font-size="138"
+    font-weight="700"
+    letter-spacing="-3.6"
+    fill="#0E1833"
+  >P</text>
+
+  <text
+    x="690"
+    y="216"
+    font-family="Avenir Next, Avenir, 'SF Pro Display', Inter, 'Helvetica Neue', Arial, sans-serif"
+    font-size="148"
+    font-weight="700"
+    letter-spacing="-4.5"
+  ><tspan fill="#0E1833">late</tspan><tspan fill="#7087B8">Digital</tspan></text>
+
+  <path
+    d="M336 314C556 298 750 292 946 292C1142 292 1336 298 1556 314"
+    stroke="url(#pd-saas-underline)"
+    stroke-width="11"
+    stroke-linecap="round"
+  />
+</svg>

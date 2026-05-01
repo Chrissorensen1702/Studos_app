@@ -16,13 +16,24 @@
       </a>
 
       <nav class="top-nav" aria-label="Hovednavigation">
-        <a href="{{ route('home') }}">Forside</a>
-        @auth
-          <a href="{{ route('admin') }}">Admin</a>
-        @else
-          <a href="{{ route('classes.create') }}">Opret klasse</a>
-          <a href="{{ route('login') }}">Login</a>
-        @endauth
+        <details class="top-nav-dropdown">
+          <summary>
+            <span>Funktioner</span>
+            <span class="top-nav-chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="top-nav-menu">
+            <a href="{{ route('home') }}#landing-features-title">Kalender</a>
+            <a href="{{ route('home') }}#landing-features-title">Chat</a>
+            <a href="{{ route('home') }}#landing-features-title">Caps</a>
+            <a href="{{ route('home') }}#landing-features-title">Challenges</a>
+            <a href="{{ route('home') }}#landing-features-title">Galleri</a>
+            <a href="{{ route('home') }}#landing-features-title">Klasseawards</a>
+            <a href="{{ route('home') }}#landing-features-title">Klassedyst</a>
+          </div>
+        </details>
+        <a href="{{ route('home') }}#landing-title">Om Studos</a>
+        <a href="{{ route('home') }}#det-med-smaat">Moderation</a>
+        <a href="{{ route('faq') }}">FAQ</a>
         @yield('nav')
       </nav>
 

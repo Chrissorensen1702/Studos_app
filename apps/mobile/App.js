@@ -305,10 +305,7 @@ const createWebPublicBaseUrl = () => {
     return null;
   }
 
-  const pwaPathIndex = window.location.pathname.indexOf('/pwa');
-  const publicBasePath = pwaPathIndex >= 0 ? window.location.pathname.slice(0, pwaPathIndex) : '';
-
-  return `${window.location.origin}${publicBasePath}`;
+  return window.location.origin;
 };
 
 const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
@@ -346,7 +343,7 @@ const APP_TABS = [
   { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', accentColor: STUDOS_THEME.red },
   { id: 'overview', label: 'Overblik', icon: 'home-outline', activeIcon: 'home' },
   { id: 'challenges', label: 'Duel', icon: 'flash-outline', activeIcon: 'flash', accentColor: STUDOS_THEME.red },
-  { id: 'walls', label: 'Walls', icon: 'images-outline', activeIcon: 'images', accentColor: STUDOS_THEME.yellow },
+  { id: 'walls', label: 'Galleri', icon: 'images-outline', activeIcon: 'images', accentColor: STUDOS_THEME.yellow },
 ];
 const CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE = 18;
 const CHAT_THREAD_BACK_SWIPE_DISTANCE = 72;
@@ -358,6 +355,7 @@ const APP_DRAWER_SECTIONS = [
     title: 'Din klasse',
     items: [
       { id: 'leaderboard', label: 'Leaderboard', icon: 'stats-chart-outline', activeIcon: 'stats-chart', accentColor: STUDOS_THEME.red },
+      { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
       { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
       { id: 'badges', label: 'Klasseawards', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
       { id: 'randomizer', label: 'Randomizer', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
@@ -377,6 +375,14 @@ const APP_DRAWER_SECTIONS = [
       { id: 'bluebook', label: 'Blå bog', icon: 'book-outline', activeIcon: 'book', accentColor: STUDOS_THEME.blue, locked: true },
     ],
   },
+];
+
+const GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES = [
+  { id: 'preview-3a', className: '3.A', schoolName: 'Aarhus Gymnasium', score: 18420, movement: '+2' },
+  { id: 'preview-2b', className: '2.B', schoolName: 'Nørre Campus', score: 16880, movement: '+1' },
+  { id: 'preview-3x', className: '3.X', schoolName: 'Køge HHX', score: 15460, movement: '-1' },
+  { id: 'preview-2g', className: '2.G', schoolName: 'Roskilde Gymnasium', score: 13990, movement: 'ny' },
+  { id: 'preview-3c', className: '3.C', schoolName: 'Viby Handelsgymnasium', score: 12630, movement: '-2' },
 ];
 
 const emptyProfile = {
@@ -2432,9 +2438,21 @@ function AppTabScreen({
       <FeatureScreen
         icon="images"
         kicker={schoolClass.className}
-        title="Walls"
-        emptyTitle="Ingen walls endnu"
-        emptyText="Billeder, minder og opslag lander her."
+        title="Galleri"
+        emptyTitle="Galleriet er tomt endnu"
+        emptyText="Billeder, minder og opslag fra klassen lander her."
+      />
+    );
+  }
+
+  if (activeTab === 'activities') {
+    return (
+      <FeatureScreen
+        icon="pulse"
+        kicker={schoolClass.className}
+        title="Aktiviteter"
+        emptyTitle="Ingen aktivitet endnu"
+        emptyText="Nye opslag, billeder, challenges, Caps og klasseopdateringer samles her."
       />
     );
   }
@@ -2497,12 +2515,9 @@ function AppTabScreen({
 
   if (activeTab === 'classBattle') {
     return (
-      <FeatureScreen
-        icon="podium"
-        kicker={schoolClass.className}
-        title="Klassedyst"
-        emptyTitle="Ingen dyste endnu"
-        emptyText="Point, udfordringer og klassekampe lander her."
+      <ClassBattleScreen
+        events={events}
+        schoolClass={schoolClass}
       />
     );
   }
@@ -2621,7 +2636,7 @@ function AppTabScreen({
       nextEvent={nextEvent}
       onOpenCalendar={openCalendarTab}
       onOpenPointDuel={() => onChangeTab?.('challenges')}
-      onOpenWalls={() => onChangeTab?.('walls')}
+      onOpenActivities={() => onChangeTab?.('activities')}
       pinnedContent={pinnedContent}
       profile={profile}
       schoolClass={schoolClass}
@@ -7637,6 +7652,116 @@ function CalendarScreen({
   );
 }
 
+function ClassBattleScreen({ events = [], schoolClass }) {
+  const activeMembers = schoolClass?.members?.filter((member) => member.status === 'active') ?? [];
+  const currentClassScore = Math.max(8600, activeMembers.length * 520 + (events?.length ?? 0) * 340 + 7200);
+  const schoolYear = (() => {
+    const now = new Date();
+    const startYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+
+    return `${startYear}/${String(startYear + 1).slice(-2)}`;
+  })();
+  const rows = [
+    ...GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES,
+    {
+      id: schoolClass?.id ?? 'current-class',
+      className: schoolClass?.className ?? 'Din klasse',
+      schoolName: schoolClass?.schoolName ?? 'Din skole',
+      score: currentClassScore,
+      current: true,
+    },
+  ]
+    .sort((left, right) => right.score - left.score)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+  const currentRow = rows.find((row) => row.current) ?? rows[0];
+  const leaderScore = rows[0]?.score ?? currentClassScore;
+  const scoreGap = Math.max(0, leaderScore - (currentRow?.score ?? 0));
+  const formatNumber = (value) => new Intl.NumberFormat('da-DK').format(value);
+
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.tabHeader}>
+        <View>
+          <Text style={styles.kicker}>{schoolClass.className}</Text>
+          <Text style={styles.title}>Klassedyst</Text>
+        </View>
+        <View style={styles.headerIcon}>
+          <Ionicons name="podium" size={28} color="#f6d36d" />
+        </View>
+      </View>
+
+      <View style={styles.classBattleStatsGrid}>
+        <View style={styles.classBattleStatCard}>
+          <Text style={styles.classBattleStatValue}>#{currentRow?.rank ?? '-'}</Text>
+          <Text style={styles.classBattleStatLabel}>Din placering</Text>
+        </View>
+        <View style={styles.classBattleStatCard}>
+          <Text style={styles.classBattleStatValue}>{formatNumber(currentRow?.score ?? 0)}</Text>
+          <Text style={styles.classBattleStatLabel}>Caps</Text>
+        </View>
+        <View style={styles.classBattleStatCard}>
+          <Text style={styles.classBattleStatValue}>{formatNumber(scoreGap)}</Text>
+          <Text style={styles.classBattleStatLabel}>Til førsteplads</Text>
+        </View>
+      </View>
+
+      <View style={styles.classBattleLeaderboardCard}>
+        <View style={styles.classBattleLeaderboardHeader}>
+          <View>
+            <Text style={styles.classBattleSectionTitle}>Global rangliste</Text>
+            <Text style={styles.classBattleSectionMeta}>Skoleåret {schoolYear}</Text>
+          </View>
+          <View style={styles.classBattleLiveBadge}>
+            <View style={styles.classBattleLiveDot} />
+            <Text style={styles.classBattleLiveText}>Preview</Text>
+          </View>
+        </View>
+
+        <View style={styles.classBattleRows}>
+          {rows.map((row) => (
+            <View
+              key={row.id}
+              style={[
+                styles.classBattleRow,
+                row.current ? styles.classBattleRowCurrent : null,
+              ]}
+            >
+              <View style={[
+                styles.classBattleRankBadge,
+                row.rank === 1 ? styles.classBattleRankBadgeFirst : null,
+              ]}>
+                <Text style={[
+                  styles.classBattleRankText,
+                  row.rank === 1 ? styles.classBattleRankTextFirst : null,
+                ]}>
+                  {row.rank}
+                </Text>
+              </View>
+
+              <View style={styles.classBattleRowCopy}>
+                <View style={styles.classBattleRowTitleLine}>
+                  <Text numberOfLines={1} style={styles.classBattleRowTitle}>{row.className}</Text>
+                  {row.current ? (
+                    <View style={styles.classBattleCurrentPill}>
+                      <Text style={styles.classBattleCurrentPillText}>Din klasse</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text numberOfLines={1} style={styles.classBattleRowMeta}>{row.schoolName}</Text>
+              </View>
+
+              <View style={styles.classBattleScoreBlock}>
+                <Text style={styles.classBattleScoreText}>{formatNumber(row.score)}</Text>
+                <Text style={styles.classBattleScoreLabel}>Caps</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, title }) {
   return (
     <View style={styles.flowStack}>
@@ -8897,7 +9022,7 @@ function AccountProfileScreen({
   );
 }
 
-function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar, onOpenPointDuel, onOpenWalls }) {
+function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities, onOpenCalendar, onOpenPointDuel }) {
   const [selectedMood, setSelectedMood] = useState('klar');
   const [moodModalOpen, setMoodModalOpen] = useState(false);
   const [moodUpdatedAt, setMoodUpdatedAt] = useState(null);
@@ -9561,18 +9686,14 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar, 
           <View style={styles.overviewWallsActivityCard}>
             <View style={styles.overviewWallsActivityHeader}>
               <View style={styles.overviewWallsActivityIconWrap}>
-                <Image
-                  source={FOOTER_WALLS_ICON}
-                  resizeMode="contain"
-                  style={styles.overviewWallsActivityIcon}
-                />
+                <Ionicons name="pulse" size={25} color={STUDOS_THEME.ink} />
               </View>
               <View style={styles.overviewWallsActivityCopy}>
                 <Text numberOfLines={1} style={styles.overviewWallsActivityTitle}>
-                  Seneste Walls-aktivitet
+                  Seneste aktivitet
                 </Text>
                 <Text numberOfLines={1} style={styles.overviewWallsActivityMeta}>
-                  Billeder, opslag og reaktioner fra klassen
+                  Opslag, billeder, challenges og Caps fra klassen
                 </Text>
               </View>
             </View>
@@ -9585,19 +9706,19 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenCalendar, 
                   Ingen ny aktivitet endnu
                 </Text>
                 <Text style={styles.overviewWallsActivityEmptyText}>
-                  Når der kommer nye minder på Walls, vises de her.
+                  Når der sker nyt i klassen, vises det her.
                 </Text>
               </View>
             </View>
             <Pressable
               accessibilityRole="button"
-              onPress={onOpenWalls}
+              onPress={onOpenActivities}
               style={({ pressed }) => [
                 styles.overviewWallsActivityAction,
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              <Text style={styles.overviewWallsActivityActionText}>Åbn Walls</Text>
+              <Text style={styles.overviewWallsActivityActionText}>Åbn aktiviteter</Text>
               <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.red} />
             </Pressable>
           </View>
@@ -10894,6 +11015,183 @@ const styles = StyleSheet.create({
   },
   flowStack: {
     gap: 16,
+  },
+  classBattleStatsGrid: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  classBattleStatCard: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 3,
+    justifyContent: 'center',
+    minHeight: 72,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 6,
+  },
+  classBattleStatValue: {
+    color: STUDOS_THEME.ink,
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  classBattleStatLabel: {
+    color: '#65748b',
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+    textAlign: 'center',
+  },
+  classBattleLeaderboardCard: {
+    gap: 13,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 13,
+  },
+  classBattleLeaderboardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  classBattleSectionTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 19,
+  },
+  classBattleSectionMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  classBattleLiveBadge: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 26,
+    borderRadius: 13,
+    backgroundColor: '#EEF9F7',
+    paddingHorizontal: 9,
+  },
+  classBattleLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  classBattleLiveText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleRows: {
+    gap: 8,
+  },
+  classBattleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 64,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  classBattleRowCurrent: {
+    borderColor: '#FFD0D2',
+    backgroundColor: '#FFF6F6',
+  },
+  classBattleRankBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFFFFF',
+  },
+  classBattleRankBadgeFirst: {
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  classBattleRankText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleRankTextFirst: {
+    color: STUDOS_THEME.ink,
+  },
+  classBattleRowCopy: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
+  },
+  classBattleRowTitleLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  classBattleRowTitle: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 1,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  classBattleCurrentPill: {
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  classBattleCurrentPillText: {
+    color: '#FFFFFF',
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleRowMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  classBattleScoreBlock: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    minWidth: 58,
+  },
+  classBattleScoreText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  classBattleScoreLabel: {
+    color: STUDOS_THEME.red,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 11,
+    textTransform: 'uppercase',
   },
   calendarScreen: {
     flex: 1,

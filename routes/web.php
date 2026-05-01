@@ -5,6 +5,9 @@ use App\Http\Controllers\StudosWebController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [StudosWebController::class, 'landing'])->name('home');
+Route::get('/faq', [StudosWebController::class, 'faq'])->name('faq');
+Route::redirect('/pwa', '/');
+Route::redirect('/pwa/{any}', '/')->where('any', '.*');
 Route::get('/classes/{class}', [StudosWebController::class, 'redirectLegacyClass']);
 
 Route::middleware('guest')->group(function (): void {

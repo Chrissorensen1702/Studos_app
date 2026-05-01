@@ -70,6 +70,11 @@ class StudosWebController extends Controller
         return view('home');
     }
 
+    public function faq(): View
+    {
+        return view('faq');
+    }
+
     public function createClass(): View
     {
         return view('auth.register-class', [

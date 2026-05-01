@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-04-30 efter public landing/index-polish med ny hero,
-feature-kort, app-mockup-karussel og lokale screenshots.
+Status er opdateret 2026-05-01 efter landing/header/footer-polish,
+FAQ-side og fjernelse af den gamle PWA-wrapper.
 
 Se ogsaa:
 
@@ -19,6 +19,9 @@ Se ogsaa:
 - Lokal web ligger paa `http://localhost/studenter-app/public/`.
 - Public index/landing page bruger hero, store-badges, feature-kort og
   app-mockups fra `public/assets`.
+- Headeren bruger Studos-logo som forside-link, `Funktioner` dropdown,
+  `Om Studos`, `Moderation`, `FAQ` og CTA-knapper i hoejre side.
+- FAQ ligger som offentlig Laravel-side paa `/faq`.
 - Cloud ligger paa `https://studos.laravel.cloud`.
 - Cloud API ligger paa `https://studos.laravel.cloud/api`.
 - Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.83.
@@ -26,8 +29,7 @@ Se ogsaa:
   Metro.
 - Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
   afhaengige af lokal dev-server.
-- PWA'en er midlertidig test-wrapper under `public/pwa/`, pt. cache-version
-  `v15`. Den er ikke hovedproduktet til release.
+- PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 
 ## Struktur
 
@@ -37,7 +39,7 @@ studenter-app/
   bootstrap/ Laravel bootstrap/cache
   config/    Laravel konfiguration
   database/  Migrations og seeders
-  public/    XAMPP/Apache webroot, PWA-shell og web-assets
+  public/    XAMPP/Apache webroot og web-assets
   resources/ Blade views
   routes/    Laravel web/API routes
   storage/   Laravel cache/log/session storage
@@ -171,12 +173,14 @@ Hero:
 - Bruger `public/assets/landing-hero.png` som fuld hero-baggrund.
 - Viser Studos-wordmark, download-badges og app-mockup
   `public/assets/mockup-index.png`.
+- Download-badges har en visuel gratis-callout: `Det er HELT gratis!` med
+  haandtegnet pil mod app-knapperne.
 - Har en bloed bund-fade i CSS, saa overgangen til feature-sektionen ikke bliver
   haard.
 
 Feature-sektionen:
 
-- Overskriften er `Det der holder vognen i gang`.
+- Overskriften er `Det der holder vognen i gang` med kort introbroedtekst under.
 - Layoutet har app-mockup-karussel i venstre kolonne og 8 UI-kort i hoejre
   kolonne.
 - Kortene er SEO-laesbar HTML med `h3` og tekst, mens screenshots kun er visuel
@@ -188,6 +192,29 @@ Feature-sektionen:
 - Nye lokale screenshots ligger i `public/assets/index-mockups/`:
   `Kalender.png`, `Chats.png`, `Dyst.png`, `Walls.png`, `Overblik.png`,
   `Spil.png`, `Klasseawards.png` og `Klassedyst.png`.
+
+Header/footer pr. 2026-05-01:
+
+- Header-nav viser ikke laengere `Forside` eller `Admin`; forside ligger paa
+  logoet, og CMS-handlinger ligger i CTA/header-slot.
+- `Funktioner` er en CSS-only dropdown med links til feature-sektionen.
+- Klasse-CMS viser `Log ud` i header-slot; invitekopiering ligger stadig inde i
+  klassevisningen.
+- Footer er cremefarvet med mint/coral gradients, fire lige fordelte kolonner og
+  diskret topskygge.
+- Footerens brandkolonne viser Studos-logo, kontaktoplysninger for
+  PlateDigital, og `En del af` + PlateDigital-logo fra
+  `public/assets/PlateDigital-logo-saas.svg`.
+- Footer-navigationen har `Navigation`, `Det med smaat` og `Hold kontakten`.
+  `Hold kontakten` bruger kompakte store-badges og store originale Instagram /
+  Facebook ikoner.
+
+FAQ:
+
+- Route: `GET /faq` (`route('faq')`).
+- View: `resources/views/faq.blade.php`.
+- Siden bruger native `details/summary` accordion-spoergsmaal om Studos,
+  klasseoprettelse, CMS, elever, moderation og support.
 
 ## Mobilappen Lige Nu
 
@@ -259,26 +286,29 @@ Android:
 - `android.permission.RECORD_AUDIO` er blokeret, fordi appen ikke har en reel
   mikrofonfeature lige nu.
 
-## Oprydning 2026-04-29
+## Oprydning
+
+2026-05-01:
+
+- Fjernet den gamle PWA-wrapper under `public/pwa/`.
+- Fjernet PWA-manifestet, Expo web-bundlet under `public/_expo/` og PWA-only
+  assets under `public/assets/assets/`.
+- Beholder kun `public/sw.js` som midlertidig cleanup-worker, der afregistrerer
+  gamle service workers og sletter `studos-pwa-*` caches.
+- Gamle `/pwa`-links redirecter til forsiden.
+- Web/login/opret klasse/admin/CMS ligger fortsat i Laravel.
+
+2026-04-29:
 
 Ryddet op:
 
 - Fjernet tom root-`app.json`, som kunne forvirre Expo config.
 - Fjernet gamle ubrugte `footer-duel` PNG-assets. Duel-ikonet tegnes nu stabilt
   i React Native.
-- Fjernet tre gamle PWA JS-bundles, som ikke var refereret af `pwa/index.html`
-  eller `sw.js`.
-- Fjernet tom `public/favicon.ico` og peget web/PWA paa Studos SVG-marken som
+- Fjernet gamle ubrugte JS-bundles.
+- Fjernet tom `public/favicon.ico` og peget web paa Studos SVG-marken som
   favicon.
-- Opdateret PWA manifest fra cache-version `v9` til `v15`.
 - Blokeret Android mikrofonpermission.
-
-Ikke slettet:
-
-- Native `ios/Pods` og Xcode Derived/native filer, fordi de er build-/native
-  output og kan vaere noedvendige for lokal iOS release.
-- PWA bundle/assets, der stadig er refereret af `public/pwa/index.html`,
-  `public/sw.js` eller manifestet.
 
 ## App Store / Google Play Status
 

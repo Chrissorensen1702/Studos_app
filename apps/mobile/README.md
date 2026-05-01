@@ -39,7 +39,7 @@ mellem:
 - Chat
 - Overblik
 - Duel
-- Walls
+- Galleri
 
 `Chat` er ikke laengere en placeholder. Den har foerste rigtige version med
 1-1 samtaler, gruppechats, gruppebillede, tekst/emoji, unread-count,
@@ -86,9 +86,9 @@ RSVP `Deltager`/`Deltager ikke`. Tidligere events findes via en fuldbredde
 knap nederst paa kalendersiden og beregnes paa lokal dato/tid.
 
 `Overblik` har dynamisk countdown til studenterugen, `Mit Studos`, lokal
-hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste walls
-aktivitet`, `Klassedueller` og `Dagens stemning`. Dagens stemning gemmes lokalt
-pr. bruger og resetter ved lokal midnat.
+hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste aktivitet`,
+`Klassedueller` og `Dagens stemning`. Dagens stemning gemmes lokalt pr. bruger
+og resetter ved lokal midnat.
 
 ## App-shell og navigation
 
