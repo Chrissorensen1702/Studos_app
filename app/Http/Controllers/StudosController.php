@@ -115,6 +115,230 @@ class StudosController extends Controller
         ]);
     }
 
+    public function classBattle(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $rows = DB::table('classes')
+            ->leftJoin('members', function ($join): void {
+                $join->on('members.class_id', '=', 'classes.id')
+                    ->where('members.status', '=', 'active');
+            })
+            ->select([
+                'classes.id',
+                'classes.public_id as classId',
+                'classes.school_name as schoolName',
+                'classes.class_name as className',
+                DB::raw('COUNT(members.id) as active_members'),
+                DB::raw('COALESCE(SUM(COALESCE(members.caps_balance, 1000)), 0) as total_caps'),
+            ])
+            ->groupBy('classes.id', 'classes.public_id', 'classes.school_name', 'classes.class_name')
+            ->havingRaw('COUNT(members.id) > 0')
+            ->get()
+            ->map(function (object $row) use ($member): array {
+                $activeMembers = max(1, (int) $row->active_members);
+                $totalCaps = (int) $row->total_caps;
+
+                return [
+                    'id' => $row->id,
+                    'classId' => $row->classId,
+                    'className' => $row->className,
+                    'schoolName' => $row->schoolName,
+                    'activeMembers' => $activeMembers,
+                    'totalCaps' => $totalCaps,
+                    'score' => (int) round($totalCaps / $activeMembers),
+                    'current' => (string) $row->id === (string) $member->class_id,
+                ];
+            })
+            ->sort(function (array $left, array $right): int {
+                return [$right['score'], $right['totalCaps'], $left['className']]
+                    <=> [$left['score'], $left['totalCaps'], $right['className']];
+            })
+            ->values()
+            ->map(fn (array $row, int $index): array => [
+                ...$row,
+                'rank' => $index + 1,
+            ]);
+
+        return response()->json([
+            'metric' => 'caps_per_active_member',
+            'resetDate' => '2026-08-01',
+            'currentMember' => [
+                'id' => $member->id,
+                'classId' => $member->class_id,
+                'capsBalance' => (int) ($member->caps_balance ?? 1000),
+            ],
+            'classes' => $rows->all(),
+        ]);
+    }
+
+    public function currentGoodDeed(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        return response()->json([
+            'goodDeed' => $this->goodDeedStateForMember($member, $request),
+        ]);
+    }
+
+    public function weeklyCheckIn(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        return response()->json([
+            'weeklyCheckIn' => $this->weeklyCheckInStateForMember($member),
+        ]);
+    }
+
+    public function storeWeeklyCheckIn(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        abort_unless(Schema::hasTable('weekly_check_ins'), 500, 'Ugentlig check-in er ikke klar endnu.');
+
+        $result = DB::transaction(function () use ($member): array {
+            $today = now()->toDateString();
+            $existing = DB::table('weekly_check_ins')
+                ->where('member_id', $member->id)
+                ->where('day_key', $today)
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing) {
+                return [
+                    'state' => $this->weeklyCheckInStateForMember($member),
+                    'awardedCaps' => 0,
+                ];
+            }
+
+            $yesterday = Carbon::parse($today)->subDay()->toDateString();
+            $previousCheckIn = DB::table('weekly_check_ins')
+                ->where('member_id', $member->id)
+                ->where('day_key', $yesterday)
+                ->lockForUpdate()
+                ->first();
+            $previousStreak = $previousCheckIn ? min(7, max(0, (int) $previousCheckIn->streak_day)) : 0;
+            $previousRewardAwarded = (bool) ($previousCheckIn->reward_awarded ?? false);
+            $rewardReached = $previousStreak === 6 && ! $previousRewardAwarded;
+            $streakDay = $rewardReached || $previousStreak >= 7 ? 1 : $previousStreak + 1;
+            $capsAwarded = $rewardReached ? 100 : 0;
+            $checkInId = (string) Str::uuid();
+            $now = now()->format('Y-m-d H:i:s');
+
+            DB::table('weekly_check_ins')->insert([
+                'id' => $checkInId,
+                'member_id' => $member->id,
+                'class_id' => $member->class_id,
+                'day_key' => $today,
+                'streak_day' => $streakDay,
+                'reward_awarded' => $capsAwarded > 0,
+                'caps_awarded' => $capsAwarded,
+                'created_at' => $now,
+            ]);
+
+            if ($capsAwarded > 0) {
+                DB::table('members')->where('id', $member->id)->increment('caps_balance', $capsAwarded);
+                $this->recordCapTransaction(
+                    $member->id,
+                    $member->class_id,
+                    $capsAwarded,
+                    'weekly_check_in',
+                    'Ugentlig check-in streak',
+                    'weekly_check_in',
+                    $checkInId,
+                    $member->id,
+                    [
+                        'dayKey' => $today,
+                        'completedStreakDays' => 7,
+                        'nextStreakDay' => $streakDay,
+                    ],
+                );
+            }
+
+            return [
+                'state' => $this->weeklyCheckInStateForMember($member),
+                'awardedCaps' => $capsAwarded,
+            ];
+        });
+
+        return response()->json([
+            'weeklyCheckIn' => [
+                ...$result['state'],
+                'awardedCaps' => $result['awardedCaps'],
+            ],
+            'awardedCaps' => $result['awardedCaps'],
+        ]);
+    }
+
+    public function storeGoodDeedClaim(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        ['week' => $week, 'weekKey' => $weekKey] = $this->currentGoodDeedWeek();
+
+        $this->expireGoodDeedClaims();
+
+        $result = DB::transaction(function () use ($member, $request, $week, $weekKey): array {
+            $existingClaim = DB::table('good_deed_claims')
+                ->where('week_key', $weekKey)
+                ->where('member_id', $member->id)
+                ->lockForUpdate()
+                ->first();
+
+            abort_if($existingClaim, 422, 'Du har allerede claimet ugens gode gerning.');
+
+            $now = now();
+            $claimId = (string) Str::uuid();
+            $baseCaps = (int) $week->base_caps;
+
+            DB::table('good_deed_claims')->insert([
+                'id' => $claimId,
+                'week_key' => $weekKey,
+                'good_deed_week_id' => $week->id,
+                'class_id' => $member->class_id,
+                'member_id' => $member->id,
+                'verifier_member_id' => $member->id,
+                'photo_url' => null,
+                'status' => 'approved',
+                'base_caps' => $baseCaps,
+                'photo_bonus_caps' => 0,
+                'approved_at' => $now->format('Y-m-d H:i:s'),
+                'rejected_at' => null,
+                'expires_at' => null,
+                'created_at' => $now->format('Y-m-d H:i:s'),
+                'updated_at' => $now->format('Y-m-d H:i:s'),
+            ]);
+
+            DB::table('members')->where('id', $member->id)->increment('caps_balance', $baseCaps);
+            $this->recordCapTransaction(
+                $member->id,
+                $member->class_id,
+                $baseCaps,
+                'weekly_good_deed',
+                'Ugens gode gerning',
+                'good_deed_claim',
+                $claimId,
+                $member->id,
+                [
+                    'weekKey' => $weekKey,
+                ],
+            );
+
+            $capsBalance = (int) (DB::table('members')->where('id', $member->id)->value('caps_balance') ?? 1000);
+
+            return [
+                'goodDeed' => $this->goodDeedStateForMember($member, $request),
+                'awardedCaps' => $baseCaps,
+                'capsBalance' => $capsBalance,
+            ];
+        });
+
+        return response()->json([
+            'goodDeed' => $result['goodDeed'],
+            'awardedCaps' => $result['awardedCaps'],
+            'capsBalance' => $result['capsBalance'],
+        ], 201);
+    }
+
     public function schools(): JsonResponse
     {
         return response()->json([
@@ -837,6 +1061,186 @@ class StudosController extends Controller
                 'member' => $serializedMember,
             ],
             'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    private function goodDeedStateForMember(object $member, Request $request): array
+    {
+        ['week' => $week, 'weekKey' => $weekKey] = $this->currentGoodDeedWeek();
+
+        $this->expireGoodDeedClaims();
+
+        $myClaim = $this->goodDeedClaimQuery()
+            ->where('good_deed_claims.week_key', $weekKey)
+            ->where('good_deed_claims.member_id', $member->id)
+            ->orderByDesc('good_deed_claims.created_at')
+            ->first();
+
+        return [
+            'week' => [
+                'id' => $week->id,
+                'weekKey' => $weekKey,
+                'weekNumber' => (int) $week->week_number,
+                'title' => $week->title,
+                'description' => $week->description,
+                'verificationHint' => $week->verification_hint,
+                'baseCaps' => (int) $week->base_caps,
+                'photoBonusCaps' => 0,
+            ],
+            'myClaim' => $myClaim ? $this->serializeGoodDeedClaim($myClaim, $request) : null,
+            'pendingVerifications' => [],
+            'buddyOptions' => [],
+        ];
+    }
+
+    private function weeklyCheckInStateForMember(object $member): array
+    {
+        if (! Schema::hasTable('weekly_check_ins')) {
+            return [
+                'checkedInToday' => false,
+                'completedWeeks' => 0,
+                'lastDayKey' => null,
+                'streak' => 0,
+                'rewardCaps' => 100,
+                'capsBalance' => (int) ($member->caps_balance ?? 1000),
+            ];
+        }
+
+        $today = now()->toDateString();
+        $yesterday = Carbon::parse($today)->subDay()->toDateString();
+        $latestCheckIn = DB::table('weekly_check_ins')
+            ->where('member_id', $member->id)
+            ->orderByDesc('day_key')
+            ->first();
+        $latestDayKey = $latestCheckIn?->day_key ? Carbon::parse($latestCheckIn->day_key)->toDateString() : null;
+        $streak = in_array($latestDayKey, [$today, $yesterday], true)
+            ? min(7, max(0, (int) ($latestCheckIn->streak_day ?? 0)))
+            : 0;
+
+        if ($latestDayKey === $yesterday && $streak >= 7) {
+            $streak = 0;
+        }
+
+        $completedWeeks = (int) DB::table('weekly_check_ins')
+            ->where('member_id', $member->id)
+            ->where('reward_awarded', true)
+            ->count();
+        $capsBalance = (int) (DB::table('members')->where('id', $member->id)->value('caps_balance') ?? 1000);
+
+        return [
+            'checkedInToday' => $latestDayKey === $today,
+            'completedWeeks' => $completedWeeks,
+            'lastDayKey' => $latestDayKey,
+            'streak' => $streak,
+            'rewardCaps' => 100,
+            'capsBalance' => $capsBalance,
+        ];
+    }
+
+    private function currentGoodDeedWeek(): array
+    {
+        $now = now();
+        $isoWeek = (int) $now->isoWeek();
+        $weekNumber = (($isoWeek - 1) % 52) + 1;
+        $week = DB::table('good_deed_weeks')
+            ->where('week_number', $weekNumber)
+            ->first();
+
+        abort_unless($week, 500, 'Ugens gode gerning mangler.');
+
+        return [
+            'week' => $week,
+            'weekKey' => sprintf('%d-W%02d', (int) $now->isoWeekYear(), $isoWeek),
+        ];
+    }
+
+    private function expireGoodDeedClaims(): void
+    {
+        DB::table('good_deed_claims')
+            ->where('status', 'pending')
+            ->whereNotNull('expires_at')
+            ->where('expires_at', '<', now()->format('Y-m-d H:i:s'))
+            ->update([
+                'status' => 'expired',
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+    }
+
+    private function goodDeedClaimQuery()
+    {
+        return DB::table('good_deed_claims')
+            ->join('good_deed_weeks', 'good_deed_weeks.id', '=', 'good_deed_claims.good_deed_week_id')
+            ->join('members as claimants', 'claimants.id', '=', 'good_deed_claims.member_id')
+            ->join('members as verifiers', 'verifiers.id', '=', 'good_deed_claims.verifier_member_id')
+            ->select([
+                'good_deed_claims.*',
+                'good_deed_weeks.title as weekTitle',
+                'claimants.display_name as memberDisplayName',
+                'claimants.first_name as memberFirstName',
+                'claimants.profile_photo_url as memberProfilePhotoUrl',
+                'verifiers.display_name as verifierDisplayName',
+                'verifiers.first_name as verifierFirstName',
+                'verifiers.profile_photo_url as verifierProfilePhotoUrl',
+            ]);
+    }
+
+    private function serializeGoodDeedClaim(object $claim, Request $request): array
+    {
+        $photoBonusCaps = filled($claim->photo_url ?? null) ? (int) $claim->photo_bonus_caps : 0;
+        $baseCaps = (int) $claim->base_caps;
+
+        return [
+            'id' => $claim->id,
+            'weekKey' => $claim->week_key,
+            'weekTitle' => $claim->weekTitle ?? null,
+            'status' => $claim->status,
+            'member' => [
+                'id' => $claim->member_id,
+                'displayName' => $claim->memberDisplayName ?? null,
+                'firstName' => $claim->memberFirstName ?? null,
+                'profilePhotoUrl' => UploadedImage::publicUrl($claim->memberProfilePhotoUrl ?? null, $request),
+            ],
+            'verifier' => [
+                'id' => $claim->verifier_member_id,
+                'displayName' => $claim->verifierDisplayName ?? null,
+                'firstName' => $claim->verifierFirstName ?? null,
+                'profilePhotoUrl' => UploadedImage::publicUrl($claim->verifierProfilePhotoUrl ?? null, $request),
+            ],
+            'photoUrl' => UploadedImage::publicUrl($claim->photo_url ?? null, $request),
+            'baseCaps' => $baseCaps,
+            'photoBonusCaps' => $photoBonusCaps,
+            'totalCaps' => $baseCaps + $photoBonusCaps,
+            'expiresAt' => $this->apiDateTime($claim->expires_at ?? null),
+            'approvedAt' => $this->apiDateTime($claim->approved_at ?? null),
+            'rejectedAt' => $this->apiDateTime($claim->rejected_at ?? null),
+            'createdAt' => $this->apiDateTime($claim->created_at ?? null),
+            'updatedAt' => $this->apiDateTime($claim->updated_at ?? null),
+        ];
+    }
+
+    private function recordCapTransaction(
+        string $memberId,
+        string $classId,
+        int $amount,
+        string $type,
+        string $description,
+        ?string $sourceType = null,
+        ?string $sourceId = null,
+        ?string $createdByMemberId = null,
+        array $metadata = [],
+    ): void {
+        DB::table('cap_transactions')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => $memberId,
+            'class_id' => $classId,
+            'amount' => $amount,
+            'type' => $type,
+            'description' => $description,
+            'source_type' => $sourceType,
+            'source_id' => $sourceId,
+            'created_by_member_id' => $createdByMemberId,
+            'metadata' => empty($metadata) ? null : json_encode($metadata),
+            'created_at' => now()->format('Y-m-d H:i:s'),
         ]);
     }
 
@@ -1820,6 +2224,7 @@ class StudosController extends Controller
             'firstName' => $firstName,
             'lastName' => $lastName,
             'profilePhotoUrl' => UploadedImage::publicUrl($member->profile_photo_url ?? null),
+            'capsBalance' => (int) ($member->caps_balance ?? 1000),
             'role' => $this->normalizeRole($member->role),
             'status' => $this->normalizeStatus($member->status ?? 'active'),
             'joinedAt' => $this->apiDateTime($member->joined_at),

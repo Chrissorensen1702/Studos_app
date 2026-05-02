@@ -72,7 +72,7 @@ return new class extends Migration
                 'class_name' => '3.B',
                 'graduation_year' => '2026',
                 'graduation_date' => '2026-06-26',
-                'owner_name' => 'Chris',
+                'owner_name' => 'Chris Elsborg Sørensen',
                 'owner_email' => 'chris@skole.dk',
                 'invite_code' => 'STU-DEMO26',
                 'allow_member_posts' => true,
@@ -85,7 +85,7 @@ return new class extends Migration
             ['id' => 'demo-owner'],
             [
                 'class_id' => 'demo-class',
-                'display_name' => 'Chris',
+                'display_name' => 'Chris Elsborg Sørensen',
                 'email' => 'chris@skole.dk',
                 'role' => 'owner',
                 'status' => 'active',

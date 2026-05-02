@@ -95,6 +95,8 @@ og resetter ved lokal midnat.
 Topbaren viser menu, skole, klasse og Studos-wordmark. Overblik-headeren
 clamper ved scroll, og hovedindholdet scroller under headeren ligesom paa de
 andre sider.
+`Klassedyst` bruger samme sidetitel-stil som `Overblik`, `Chat` og `Kalender`
+med en kompakt podium-grafik i Studos-farver og en kort intro under titlen.
 
 Sidebaren er delt op i `Din klasse`, `Andre klasser` og `Kommer snart`.
 `Wallet` og `Blaa bog` ligger laast under kommende features. `Noedkontakter`

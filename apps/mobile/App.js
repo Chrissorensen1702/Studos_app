@@ -29,6 +29,7 @@ const SESSION_STORAGE_KEY = 'studos.session.v1';
 const ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.androidNotificationPrompt.v1';
 const OVERVIEW_MOOD_STORAGE_KEY = 'studos.overviewMood.v1';
 const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
+const EARN_CAPS_CHECKIN_STORAGE_KEY = 'studos.earnCapsCheckIn.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
 const CHAT_SEND_ROCKET = require('./assets/chat-send-rocket.png');
 const CAPS_COIN = require('./assets/caps-coin.png');
@@ -354,6 +355,7 @@ const APP_DRAWER_SECTIONS = [
   {
     title: 'Din klasse',
     items: [
+      { id: 'earnCaps', label: 'Optjen Caps', icon: 'sparkles-outline', activeIcon: 'sparkles', accentColor: STUDOS_THEME.yellow },
       { id: 'leaderboard', label: 'Leaderboard', icon: 'stats-chart-outline', activeIcon: 'stats-chart', accentColor: STUDOS_THEME.red },
       { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
       { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
@@ -384,6 +386,7 @@ const GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES = [
   { id: 'preview-2g', className: '2.G', schoolName: 'Roskilde Gymnasium', score: 13990, movement: 'ny' },
   { id: 'preview-3c', className: '3.C', schoolName: 'Viby Handelsgymnasium', score: 12630, movement: '-2' },
 ];
+const CLASS_BATTLE_GOOD_DEEDS_GOAL = 23000;
 
 const emptyProfile = {
   schoolId: '',
@@ -950,6 +953,16 @@ const moodDayKeyFor = (date = new Date()) => {
   ].join('-');
 };
 
+const dayNumberForDayKey = (dayKey) => {
+  const [year, month, day] = String(dayKey ?? '').split('-').map((part) => Number(part));
+
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return Math.floor(new Date(year, month - 1, day).getTime() / 86400000);
+};
+
 const millisecondsUntilNextMidnight = (date = new Date()) => {
   const nextMidnight = new Date(date);
 
@@ -1370,6 +1383,8 @@ export default function App() {
   const [error, setError] = useState('');
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [weeklyCheckInReward, setWeeklyCheckInReward] = useState(null);
+  const [weeklyCheckInSnapshot, setWeeklyCheckInSnapshot] = useState(null);
   const [notificationState, setNotificationState] = useState({
     expoPushToken: '',
     permissionStatus: 'unknown',
@@ -1382,6 +1397,7 @@ export default function App() {
     testLoading: false,
   });
   const appScrollRef = useRef(null);
+  const weeklyCheckInAutoRef = useRef('');
 
   const activeClass = schoolClass ?? session?.class;
   const activeMember = session?.member ?? null;
@@ -1394,7 +1410,10 @@ export default function App() {
     () => daysUntil(activeClass?.graduationDate),
     [activeClass?.graduationDate],
   );
-  const appContentDetached = activeTab === 'chat' || activeTab === 'calendar' || activeTab === 'overview';
+  const appContentDetached = activeTab === 'chat'
+    || activeTab === 'calendar'
+    || activeTab === 'overview'
+    || activeTab === 'earnCaps';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1416,6 +1435,42 @@ export default function App() {
 
     setActiveTab('calendar');
   }, []);
+
+  const updateActiveMemberCapsBalance = useCallback((capsBalance) => {
+    const nextCapsBalance = Number(capsBalance);
+
+    if (!Number.isFinite(nextCapsBalance) || !session?.member?.id) {
+      return;
+    }
+
+    setSession((current) => {
+      if (!current?.member) {
+        return current;
+      }
+
+      return {
+        ...current,
+        member: {
+          ...current.member,
+          capsBalance: nextCapsBalance,
+        },
+      };
+    });
+    setSchoolClass((current) => {
+      if (!current?.members) {
+        return current;
+      }
+
+      return {
+        ...current,
+        members: current.members.map((member) => (
+          String(member.id) === String(session.member.id)
+            ? { ...member, capsBalance: nextCapsBalance }
+            : member
+        )),
+      };
+    });
+  }, [session?.member?.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1507,7 +1562,7 @@ export default function App() {
       responseSubscription = notifications.addNotificationResponseReceivedListener((response) => {
         const targetScreen = response?.notification?.request?.content?.data?.screen;
 
-        if (targetScreen === 'chat' || targetScreen === 'calendar' || targetScreen === 'overview') {
+        if (targetScreen === 'chat' || targetScreen === 'calendar' || targetScreen === 'overview' || targetScreen === 'classBattle') {
           setActiveTab(targetScreen);
         }
       });
@@ -1612,6 +1667,83 @@ export default function App() {
   }, [session?.member?.id, session?.token]);
 
   useEffect(() => {
+    if (step !== 'overview' || !session?.member?.id || !session?.token) {
+      return undefined;
+    }
+
+    const dayKey = moodDayKeyFor();
+    const autoCheckInKey = `${session.member.id}:${dayKey}`;
+
+    if (weeklyCheckInAutoRef.current === autoCheckInKey) {
+      return undefined;
+    }
+
+    weeklyCheckInAutoRef.current = autoCheckInKey;
+
+    let cancelled = false;
+
+    apiFetch('/check-ins/weekly', {
+      authToken: session.token,
+      method: 'POST',
+    })
+      .then(async (data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const weeklyCheckIn = data?.weeklyCheckIn ?? {};
+        const awardedCaps = Number(data?.awardedCaps ?? weeklyCheckIn?.awardedCaps ?? 0);
+        const capsBalance = Number(weeklyCheckIn?.capsBalance);
+
+        setWeeklyCheckInSnapshot(weeklyCheckIn);
+
+        if (Number.isFinite(capsBalance)) {
+          setSession((current) => {
+            if (!current?.member) {
+              return current;
+            }
+
+            return {
+              ...current,
+              member: {
+                ...current.member,
+                capsBalance,
+              },
+            };
+          });
+          setSchoolClass((current) => {
+            if (!current?.members) {
+              return current;
+            }
+
+            return {
+              ...current,
+              members: current.members.map((member) => (
+                String(member.id) === String(session.member.id)
+                  ? { ...member, capsBalance }
+                  : member
+              )),
+            };
+          });
+        }
+
+        if (awardedCaps > 0) {
+          setWeeklyCheckInReward({
+            amount: awardedCaps,
+            streak: Number(weeklyCheckIn?.streak) || 7,
+          });
+        }
+      })
+      .catch(() => {
+        weeklyCheckInAutoRef.current = '';
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.member?.id, session?.token, step]);
+
+  useEffect(() => {
     let isMounted = true;
     const token = session?.token;
 
@@ -1657,6 +1789,8 @@ export default function App() {
     setActiveTab('overview');
     setSidebarOpen(false);
     setChatUnreadCount(0);
+    setWeeklyCheckInSnapshot(null);
+    setWeeklyCheckInReward(null);
     setNotificationState((current) => ({
       ...current,
       error: '',
@@ -2165,6 +2299,7 @@ export default function App() {
                 styles.appScreen,
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
+                activeTab === 'earnCaps' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
               ]}>
@@ -2185,6 +2320,7 @@ export default function App() {
                   onDeleteEvent={deleteCalendarEvent}
                   onEnableAndroidNotifications={enableAndroidNotifications}
                   onBlockMember={blockClassMember}
+                  onCapsBalanceChange={updateActiveMemberCapsBalance}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
@@ -2196,6 +2332,7 @@ export default function App() {
                   schoolClass={activeClass}
                   sessionToken={session.token}
                   notificationState={notificationState}
+                  weeklyCheckInSnapshot={weeklyCheckInSnapshot}
                 />
               </View>
             ) : (
@@ -2222,6 +2359,7 @@ export default function App() {
                   onDeleteEvent={deleteCalendarEvent}
                   onEnableAndroidNotifications={enableAndroidNotifications}
                   onBlockMember={blockClassMember}
+                  onCapsBalanceChange={updateActiveMemberCapsBalance}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
@@ -2233,6 +2371,7 @@ export default function App() {
                   schoolClass={activeClass}
                   sessionToken={session.token}
                   notificationState={notificationState}
+                  weeklyCheckInSnapshot={weeklyCheckInSnapshot}
                 />
               </ScrollView>
             )}
@@ -2258,6 +2397,11 @@ export default function App() {
               visible={notificationPromptVisible}
               onDismiss={closeAndroidNotificationPrompt}
               onEnable={enableAndroidNotificationsFromPrompt}
+            />
+            <WeeklyCheckInRewardModal
+              reward={weeklyCheckInReward}
+              visible={Boolean(weeklyCheckInReward)}
+              onDismiss={() => setWeeklyCheckInReward(null)}
             />
           </View>
         </KeyboardAvoidingView>
@@ -2387,6 +2531,7 @@ function AppTabScreen({
   onDeleteEvent,
   onEnableAndroidNotifications,
   onBlockMember,
+  onCapsBalanceChange,
   onProfilePhotoUpdate,
   onRequestScrollTop,
   onReportEvent,
@@ -2398,6 +2543,7 @@ function AppTabScreen({
   schoolClass,
   sessionToken,
   notificationState,
+  weeklyCheckInSnapshot,
 }) {
   const openCalendarTab = (target) => {
     if (onOpenCalendar) {
@@ -2516,8 +2662,23 @@ function AppTabScreen({
   if (activeTab === 'classBattle') {
     return (
       <ClassBattleScreen
+        activeMember={activeMember}
         events={events}
+        onCapsBalanceChange={onCapsBalanceChange}
         schoolClass={schoolClass}
+        sessionToken={sessionToken}
+      />
+    );
+  }
+
+  if (activeTab === 'earnCaps') {
+    return (
+      <EarnCapsScreen
+        activeMember={activeMember}
+        onCapsBalanceChange={onCapsBalanceChange}
+        onOpenPointDuel={() => onChangeTab?.('challenges')}
+        sessionToken={sessionToken}
+        weeklyCheckInSnapshot={weeklyCheckInSnapshot}
       />
     );
   }
@@ -2635,6 +2796,7 @@ function AppTabScreen({
       events={events}
       nextEvent={nextEvent}
       onOpenCalendar={openCalendarTab}
+      onOpenEarnCaps={() => onChangeTab?.('earnCaps')}
       onOpenPointDuel={() => onChangeTab?.('challenges')}
       onOpenActivities={() => onChangeTab?.('activities')}
       pinnedContent={pinnedContent}
@@ -7652,72 +7814,350 @@ function CalendarScreen({
   );
 }
 
-function ClassBattleScreen({ events = [], schoolClass }) {
+function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, schoolClass, sessionToken }) {
+  const leaderboardScrollRef = useRef(null);
+  const [classBattleData, setClassBattleData] = useState(null);
+  const [classBattleRowsScrolled, setClassBattleRowsScrolled] = useState(false);
+  const [goodDeedData, setGoodDeedData] = useState(null);
+  const [goodDeedLoading, setGoodDeedLoading] = useState(false);
+  const [goodDeedSubmitting, setGoodDeedSubmitting] = useState(false);
+  const [goodDeedError, setGoodDeedError] = useState('');
   const activeMembers = schoolClass?.members?.filter((member) => member.status === 'active') ?? [];
-  const currentClassScore = Math.max(8600, activeMembers.length * 520 + (events?.length ?? 0) * 340 + 7200);
+  const currentMember = activeMembers.find((member) => String(member.id) === String(activeMember?.id));
+  const capsForMember = (member) => {
+    const capsSource = member?.capsBalance ?? member?.points;
+
+    return Number.isFinite(Number(capsSource)) ? Number(capsSource) : 1000;
+  };
+  const classScoreMembers = activeMembers.length ? activeMembers : activeMember ? [activeMember] : [];
+  const localClassTotalCaps = classScoreMembers.reduce((total, member) => total + capsForMember(member), 0);
+  const localClassMemberCount = Math.max(1, classScoreMembers.length);
+  const localClassScore = Math.round(localClassTotalCaps / localClassMemberCount);
   const schoolYear = (() => {
     const now = new Date();
     const startYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
 
     return `${startYear}/${String(startYear + 1).slice(-2)}`;
   })();
-  const rows = [
-    ...GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES,
+  const fallbackRows = [
     {
       id: schoolClass?.id ?? 'current-class',
       className: schoolClass?.className ?? 'Din klasse',
       schoolName: schoolClass?.schoolName ?? 'Din skole',
-      score: currentClassScore,
+      activeMembers: localClassMemberCount,
+      totalCaps: localClassTotalCaps,
+      score: localClassScore,
       current: true,
     },
-  ]
-    .sort((left, right) => right.score - left.score)
+    ...GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES,
+  ];
+  const apiRows = Array.isArray(classBattleData?.classes) ? classBattleData.classes : [];
+  const rows = (apiRows.length ? apiRows : fallbackRows)
+    .map((row) => {
+      const activeMemberCount = Number(row.activeMembers);
+      const totalCaps = Number(row.totalCaps);
+      const score = Number(row.score);
+
+      return {
+        ...row,
+        activeMembers: Number.isFinite(activeMemberCount) ? activeMemberCount : null,
+        totalCaps: Number.isFinite(totalCaps) ? totalCaps : null,
+        score: Number.isFinite(score) ? score : 0,
+        current: Boolean(row.current) || String(row.id) === String(schoolClass?.id),
+      };
+    })
+    .sort((left, right) => (
+      (right.score - left.score)
+      || ((right.totalCaps ?? 0) - (left.totalCaps ?? 0))
+      || String(left.className ?? '').localeCompare(String(right.className ?? ''), 'da')
+    ))
     .map((row, index) => ({ ...row, rank: index + 1 }));
   const currentRow = rows.find((row) => row.current) ?? rows[0];
-  const leaderScore = rows[0]?.score ?? currentClassScore;
-  const scoreGap = Math.max(0, leaderScore - (currentRow?.score ?? 0));
+  const currentRowIndex = rows.findIndex((row) => row.current);
+  const currentClassTotalCaps = Number.isFinite(Number(currentRow?.totalCaps))
+    ? Number(currentRow.totalCaps)
+    : localClassTotalCaps;
+  const memberCapsFromApi = Number(classBattleData?.currentMember?.capsBalance);
+  const memberCaps = Number.isFinite(memberCapsFromApi) ? memberCapsFromApi : capsForMember(currentMember ?? activeMember);
+  const memberClassShare = currentClassTotalCaps > 0
+    ? Math.min(100, Math.max(0, (memberCaps / currentClassTotalCaps) * 100))
+    : 0;
+  const goodDeedsProgress = Math.min(
+    100,
+    Math.max(0, Math.round((currentClassTotalCaps / CLASS_BATTLE_GOOD_DEEDS_GOAL) * 100)),
+  );
+  const goodDeedsBubblePosition = Math.min(88, Math.max(12, goodDeedsProgress));
   const formatNumber = (value) => new Intl.NumberFormat('da-DK').format(value);
+  const formatPercent = (value) => new Intl.NumberFormat('da-DK', {
+    maximumFractionDigits: 1,
+  }).format(value);
+  const goodDeedWeek = goodDeedData?.week ?? null;
+  const goodDeedClaim = goodDeedData?.myClaim ?? null;
+  const goodDeedBaseCaps = Number.isFinite(Number(goodDeedWeek?.baseCaps)) ? Number(goodDeedWeek.baseCaps) : 25;
+  const goodDeedClaimStatus = goodDeedClaim?.status ?? '';
+  const canClaimGoodDeed = Boolean(sessionToken)
+    && !goodDeedSubmitting
+    && !goodDeedClaim;
+  const goodDeedStatusText = goodDeedClaim
+    ? `Claimet +${formatNumber(goodDeedClaim?.totalCaps ?? goodDeedBaseCaps)}`
+    : '';
+  const refreshClassBattleData = useCallback(async () => {
+    if (!sessionToken) {
+      setClassBattleData(null);
+      return null;
+    }
+
+    try {
+      const data = await apiFetch('/class-battle', { authToken: sessionToken });
+
+      setClassBattleData(data);
+      return data;
+    } catch {
+      setClassBattleData(null);
+      return null;
+    }
+  }, [sessionToken]);
+  const refreshGoodDeedData = useCallback(async () => {
+    if (!sessionToken) {
+      setGoodDeedData(null);
+      return null;
+    }
+
+    setGoodDeedLoading(true);
+
+    try {
+      const data = await apiFetch('/good-deeds/current', { authToken: sessionToken });
+      const nextGoodDeed = data?.goodDeed ?? null;
+
+      setGoodDeedData(nextGoodDeed);
+      setGoodDeedError('');
+      return nextGoodDeed;
+    } catch (apiError) {
+      setGoodDeedData(null);
+      setGoodDeedError(apiError.message || 'Ugens gode gerning kunne ikke hentes.');
+      return null;
+    } finally {
+      setGoodDeedLoading(false);
+    }
+  }, [sessionToken]);
+  useEffect(() => {
+    if (!sessionToken) {
+      setClassBattleData(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    apiFetch('/class-battle', { authToken: sessionToken })
+      .then((data) => {
+        if (!cancelled) {
+          setClassBattleData(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClassBattleData(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
+  useEffect(() => {
+    refreshGoodDeedData();
+  }, [refreshGoodDeedData]);
+  const submitGoodDeedClaim = async () => {
+    if (!canClaimGoodDeed) {
+      return;
+    }
+
+    setGoodDeedSubmitting(true);
+    setGoodDeedError('');
+
+    try {
+      const data = await apiFetch('/good-deeds/claims', {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      setGoodDeedData(data?.goodDeed ?? null);
+      if (Number.isFinite(Number(data?.capsBalance))) {
+        onCapsBalanceChange?.(Number(data.capsBalance));
+      }
+      refreshClassBattleData();
+    } catch (apiError) {
+      setGoodDeedError(apiError.message || 'Den gode gerning kunne ikke claimes.');
+    } finally {
+      setGoodDeedSubmitting(false);
+    }
+  };
+  const scrollToCurrentClass = () => {
+    if (currentRowIndex < 0) {
+      return;
+    }
+
+    leaderboardScrollRef.current?.scrollTo({
+      y: Math.max(0, currentRowIndex * 72 - 8),
+      animated: true,
+    });
+  };
+  const updateClassBattleRowsScrolled = useCallback((event) => {
+    const scrolled = event.nativeEvent.contentOffset.y > 4;
+
+    setClassBattleRowsScrolled((current) => (current === scrolled ? current : scrolled));
+  }, []);
 
   return (
     <View style={styles.flowStack}>
-      <View style={styles.tabHeader}>
-        <View>
-          <Text style={styles.kicker}>{schoolClass.className}</Text>
-          <Text style={styles.title}>Klassedyst</Text>
+      <View style={styles.classBattleHeroHeader}>
+        <View style={styles.classBattleHeroCopy}>
+          <ClassBattleTitle />
+          <Text style={styles.classBattleIntroText}>
+            Hvem har udført flest gode gerninger og vundet flest dueller?
+          </Text>
+          <View style={styles.classBattleGoodDeedCard}>
+            <View style={styles.classBattleGoodDeedCardTop}>
+              <View style={styles.classBattleGoodDeedIcon}>
+                <Ionicons name="sparkles" size={15} color={STUDOS_THEME.ink} />
+              </View>
+              <Text numberOfLines={1} style={styles.classBattleGoodDeedKicker}>
+                Ugens gode gerning
+              </Text>
+              <View style={styles.classBattleGoodDeedCapsPill}>
+                <Text style={styles.classBattleGoodDeedCapsText}>+{formatNumber(goodDeedBaseCaps)}</Text>
+                <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleGoodDeedCapsCoin} />
+              </View>
+            </View>
+            <Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.classBattleGoodDeedTitle}>
+              {goodDeedWeek?.title ?? (goodDeedLoading ? 'Henter mission...' : 'Gør én lille god ting for klassen')}
+            </Text>
+            <View style={styles.classBattleGoodDeedFooter}>
+              {goodDeedStatusText ? (
+                <View style={[
+                  styles.classBattleGoodDeedStatusPill,
+                  goodDeedClaimStatus === 'approved' ? styles.classBattleGoodDeedStatusPillApproved : null,
+                  ['rejected', 'expired'].includes(goodDeedClaimStatus) ? styles.classBattleGoodDeedStatusPillMuted : null,
+                ]}>
+                  <Text numberOfLines={1} style={styles.classBattleGoodDeedStatusText}>
+                    {goodDeedStatusText}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!canClaimGoodDeed}
+              onPress={submitGoodDeedClaim}
+              style={({ pressed }) => [
+                styles.classBattleGoodDeedButton,
+                !canClaimGoodDeed ? styles.classBattleGoodDeedButtonDisabled : null,
+                pressed && canClaimGoodDeed ? styles.footerItemPressed : null,
+              ]}
+            >
+              {goodDeedSubmitting ? (
+                <ActivityIndicator color={STUDOS_THEME.yellow} size="small" />
+              ) : (
+                <>
+                  <Ionicons
+                    name={goodDeedClaim ? 'checkmark-circle' : 'sparkles'}
+                    size={13}
+                    color={!canClaimGoodDeed ? '#65748b' : STUDOS_THEME.yellow}
+                  />
+                  <Text style={[
+                    styles.classBattleGoodDeedButtonText,
+                    !canClaimGoodDeed ? styles.classBattleGoodDeedButtonTextDisabled : null,
+                  ]}>
+                    {goodDeedClaim ? 'Claimet' : 'Claim'}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+            {goodDeedError ? (
+              <Text numberOfLines={2} style={styles.classBattleGoodDeedInlineError}>
+                {goodDeedError}
+              </Text>
+            ) : null}
+          </View>
+          <View style={styles.classBattleGoodDeedsProgress}>
+            <Text style={styles.classBattleGoodDeedsText}>
+              Årets gode gerninger er i hus
+            </Text>
+            <View style={styles.classBattleGoodDeedsTrack}>
+              <View style={[styles.classBattleGoodDeedsFill, { width: `${goodDeedsProgress}%` }]} />
+              <View style={[styles.classBattleGoodDeedsBubble, { left: `${goodDeedsBubblePosition}%` }]}>
+                <Text style={styles.classBattleGoodDeedsBubbleText}>{goodDeedsProgress}%</Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.classBattleHeroLeaderboardHeader}>
+            <Text style={styles.classBattleSectionTitle}>Global rangliste</Text>
+            <Text style={styles.classBattleSectionMeta}>Skoleåret {schoolYear}</Text>
+          </View>
         </View>
-        <View style={styles.headerIcon}>
-          <Ionicons name="podium" size={28} color="#f6d36d" />
-        </View>
-      </View>
 
-      <View style={styles.classBattleStatsGrid}>
-        <View style={styles.classBattleStatCard}>
-          <Text style={styles.classBattleStatValue}>#{currentRow?.rank ?? '-'}</Text>
-          <Text style={styles.classBattleStatLabel}>Din placering</Text>
-        </View>
-        <View style={styles.classBattleStatCard}>
-          <Text style={styles.classBattleStatValue}>{formatNumber(currentRow?.score ?? 0)}</Text>
-          <Text style={styles.classBattleStatLabel}>Caps</Text>
-        </View>
-        <View style={styles.classBattleStatCard}>
-          <Text style={styles.classBattleStatValue}>{formatNumber(scoreGap)}</Text>
-          <Text style={styles.classBattleStatLabel}>Til førsteplads</Text>
+        <View style={styles.classBattleHeroStats}>
+          <View style={styles.classBattleHeaderStatCard}>
+            <Text style={styles.classBattleStatLabel}>Placering</Text>
+            <Text style={styles.classBattleStatValue}>#{currentRow?.rank ?? '-'}</Text>
+          </View>
+          <View style={styles.classBattleHeaderStatCard}>
+            <Text style={styles.classBattleStatLabel}>Dine Caps</Text>
+            <View style={styles.classBattleStatValueRow}>
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[styles.classBattleStatValue, styles.classBattleCapsStatValue]}
+              >
+                {formatNumber(memberCaps)}
+              </Text>
+              <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleStatCoinImage} />
+            </View>
+          </View>
+          <View style={styles.classBattleHeaderStatCard}>
+            <Text style={styles.classBattleStatLabel}>Klasseandel</Text>
+            <Text style={styles.classBattleStatValue}>{formatPercent(memberClassShare)}%</Text>
+          </View>
         </View>
       </View>
 
       <View style={styles.classBattleLeaderboardCard}>
-        <View style={styles.classBattleLeaderboardHeader}>
-          <View>
-            <Text style={styles.classBattleSectionTitle}>Global rangliste</Text>
-            <Text style={styles.classBattleSectionMeta}>Skoleåret {schoolYear}</Text>
-          </View>
-          <View style={styles.classBattleLiveBadge}>
-            <View style={styles.classBattleLiveDot} />
-            <Text style={styles.classBattleLiveText}>Preview</Text>
+        <View style={[
+          styles.classBattleLeaderboardTopBar,
+          classBattleRowsScrolled ? styles.classBattleLeaderboardTopBarScrolled : null,
+        ]}>
+          <Pressable
+            accessibilityLabel="Find min klasse i ranglisten"
+            accessibilityRole="button"
+            onPress={scrollToCurrentClass}
+            style={({ pressed }) => [
+              styles.classBattleJumpButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="locate" size={13} color={STUDOS_THEME.ink} />
+            <Text numberOfLines={1} style={styles.classBattleJumpButtonText}>
+              Find min klasse
+            </Text>
+          </Pressable>
+          <View style={styles.classBattleResetInfo}>
+            <Ionicons name="refresh" size={12} color="#65748b" />
+            <Text numberOfLines={2} style={styles.classBattleResetInfoText}>
+              Rangliste nulstilles d. 1 august
+            </Text>
           </View>
         </View>
-
-        <View style={styles.classBattleRows}>
+        <ScrollView
+          contentContainerStyle={styles.classBattleRows}
+          ref={leaderboardScrollRef}
+          nestedScrollEnabled
+          onScroll={updateClassBattleRowsScrolled}
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator={false}
+          style={styles.classBattleRowsScroll}
+        >
           {rows.map((row) => (
             <View
               key={row.id}
@@ -7729,10 +8169,14 @@ function ClassBattleScreen({ events = [], schoolClass }) {
               <View style={[
                 styles.classBattleRankBadge,
                 row.rank === 1 ? styles.classBattleRankBadgeFirst : null,
+                row.rank === 2 ? styles.classBattleRankBadgeSecond : null,
+                row.rank === 3 ? styles.classBattleRankBadgeThird : null,
               ]}>
                 <Text style={[
                   styles.classBattleRankText,
                   row.rank === 1 ? styles.classBattleRankTextFirst : null,
+                  row.rank === 2 ? styles.classBattleRankTextSecond : null,
+                  row.rank === 3 ? styles.classBattleRankTextThird : null,
                 ]}>
                   {row.rank}
                 </Text>
@@ -7751,12 +8195,20 @@ function ClassBattleScreen({ events = [], schoolClass }) {
               </View>
 
               <View style={styles.classBattleScoreBlock}>
-                <Text style={styles.classBattleScoreText}>{formatNumber(row.score)}</Text>
-                <Text style={styles.classBattleScoreLabel}>Caps</Text>
+                <View style={styles.classBattleScoreValueRow}>
+                  <Text style={styles.classBattleScoreText}>{formatNumber(row.score)}</Text>
+                  <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleScoreCoinImage} />
+                </View>
+                <Text numberOfLines={1} style={styles.classBattleScoreMetricText}>pr. elev</Text>
+                {Number.isFinite(Number(row.totalCaps)) ? (
+                  <Text numberOfLines={1} style={styles.classBattleScoreTotalText}>
+                    {formatNumber(row.totalCaps)} samlet
+                  </Text>
+                ) : null}
               </View>
             </View>
           ))}
-        </View>
+        </ScrollView>
       </View>
     </View>
   );
@@ -7788,6 +8240,342 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, ti
         </View>
         <Text style={styles.sectionTitle}>{emptyTitle}</Text>
         <Text style={styles.feedText}>{emptyText}</Text>
+      </View>
+    </View>
+  );
+}
+
+function EarnCapsScreen({
+  activeMember,
+  onCapsBalanceChange,
+  onOpenPointDuel,
+  sessionToken,
+  weeklyCheckInSnapshot,
+}) {
+  const todayDayKey = moodDayKeyFor();
+  const checkInStorageKey = useMemo(
+    () => `${EARN_CAPS_CHECKIN_STORAGE_KEY}.${activeMember?.id ?? activeMember?.email ?? 'guest'}`,
+    [activeMember?.email, activeMember?.id],
+  );
+  const [checkInState, setCheckInState] = useState({
+    completedWeeks: 0,
+    lastDayKey: '',
+    streak: 0,
+  });
+  const [checkInError, setCheckInError] = useState('');
+  const [earnCapsGoodDeed, setEarnCapsGoodDeed] = useState(null);
+  const [earnCapsGoodDeedError, setEarnCapsGoodDeedError] = useState('');
+  const [earnCapsGoodDeedSubmitting, setEarnCapsGoodDeedSubmitting] = useState(false);
+  const normalizeCheckInState = useCallback((payload = {}) => ({
+    completedWeeks: Math.max(0, Number(payload.completedWeeks) || 0),
+    lastDayKey: payload.lastDayKey ? String(payload.lastDayKey) : '',
+    streak: Math.min(7, Math.max(0, Number(payload.streak) || 0)),
+  }), []);
+  useEffect(() => {
+    if (weeklyCheckInSnapshot) {
+      setCheckInState(normalizeCheckInState(weeklyCheckInSnapshot));
+      setCheckInError('');
+    }
+  }, [normalizeCheckInState, weeklyCheckInSnapshot]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (sessionToken) {
+      apiFetch('/check-ins/weekly', { authToken: sessionToken })
+        .then((data) => {
+          if (!cancelled) {
+            setCheckInState(normalizeCheckInState(data?.weeklyCheckIn));
+            setCheckInError('');
+          }
+        })
+        .catch((apiError) => {
+          if (!cancelled) {
+            setCheckInError(apiError.message || 'Check-in kunne ikke hentes.');
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    SessionStore.getItemAsync(checkInStorageKey)
+      .then((storedCheckIn) => {
+        if (cancelled || !storedCheckIn) {
+          return;
+        }
+
+        let parsedCheckIn = null;
+
+        try {
+          parsedCheckIn = JSON.parse(storedCheckIn);
+        } catch {
+          parsedCheckIn = null;
+        }
+
+        if (!parsedCheckIn || typeof parsedCheckIn !== 'object') {
+          return;
+        }
+
+        setCheckInState(normalizeCheckInState(parsedCheckIn));
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [checkInStorageKey, normalizeCheckInState, sessionToken]);
+
+  const todayDayNumber = dayNumberForDayKey(todayDayKey);
+  const lastCheckInDayNumber = dayNumberForDayKey(checkInState.lastDayKey);
+  const checkedInToday = checkInState.lastDayKey === todayDayKey;
+  const checkInStreak = (() => {
+    const storedStreak = Math.min(7, Math.max(0, Number(checkInState.streak) || 0));
+
+    if (!storedStreak || !lastCheckInDayNumber || !todayDayNumber) {
+      return 0;
+    }
+
+    if (checkedInToday || lastCheckInDayNumber === todayDayNumber - 1) {
+      if (!checkedInToday && storedStreak >= 7) {
+        return 0;
+      }
+
+      return storedStreak;
+    }
+
+    return 0;
+  })();
+  const refreshEarnCapsGoodDeed = useCallback(async () => {
+    if (!sessionToken) {
+      setEarnCapsGoodDeed(null);
+      return null;
+    }
+
+    try {
+      const data = await apiFetch('/good-deeds/current', { authToken: sessionToken });
+      const nextGoodDeed = data?.goodDeed ?? null;
+
+      setEarnCapsGoodDeed(nextGoodDeed);
+      setEarnCapsGoodDeedError('');
+      return nextGoodDeed;
+    } catch (apiError) {
+      setEarnCapsGoodDeed(null);
+      setEarnCapsGoodDeedError(apiError.message || 'Ugens gode gerning kunne ikke hentes.');
+      return null;
+    }
+  }, [sessionToken]);
+  useEffect(() => {
+    refreshEarnCapsGoodDeed();
+  }, [refreshEarnCapsGoodDeed]);
+
+  const earnCapsGoodDeedClaim = earnCapsGoodDeed?.myClaim ?? null;
+  const earnCapsGoodDeedBaseCaps = Number.isFinite(Number(earnCapsGoodDeed?.week?.baseCaps))
+    ? Number(earnCapsGoodDeed.week.baseCaps)
+    : 25;
+  const canClaimEarnCapsGoodDeed = Boolean(sessionToken)
+    && !earnCapsGoodDeedSubmitting
+    && !earnCapsGoodDeedClaim;
+  const claimEarnCapsGoodDeed = async () => {
+    if (!canClaimEarnCapsGoodDeed) {
+      return;
+    }
+
+    setEarnCapsGoodDeedSubmitting(true);
+    setEarnCapsGoodDeedError('');
+
+    try {
+      const data = await apiFetch('/good-deeds/claims', {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      setEarnCapsGoodDeed(data?.goodDeed ?? null);
+      if (Number.isFinite(Number(data?.capsBalance))) {
+        onCapsBalanceChange?.(Number(data.capsBalance));
+      }
+    } catch (apiError) {
+      setEarnCapsGoodDeedError(apiError.message || 'Ugens gode gerning kunne ikke claimes.');
+    } finally {
+      setEarnCapsGoodDeedSubmitting(false);
+    }
+  };
+  const methods = [
+    {
+      id: 'weekly',
+      actionDisabled: !canClaimEarnCapsGoodDeed,
+      actionDone: Boolean(earnCapsGoodDeedClaim),
+      actionLabel: earnCapsGoodDeedClaim ? 'Claimet' : 'Claim',
+      actionLoading: earnCapsGoodDeedSubmitting,
+      icon: 'heart',
+      reward: `+${earnCapsGoodDeedBaseCaps}`,
+      statusText: earnCapsGoodDeedError,
+      subtitle: 'Lav en god gerning og få point.',
+      title: 'Ugens gode gerning',
+      onPress: claimEarnCapsGoodDeed,
+    },
+    {
+      id: 'check-in',
+      actionLabel: 'Scan QR',
+      icon: 'qr-code',
+      reward: '+50',
+      subtitle: 'Tjek ind til fitness, klubber og events ved at scanne QR-koden.',
+      title: 'Check-in',
+      onPress: () => {},
+    },
+    {
+      id: 'duels',
+      actionLabel: 'Åbn dueller',
+      icon: 'shield',
+      reward: 'Indsats',
+      subtitle: 'Udfordr dit crew i challenges. I bestemmer indsats og udfordring.',
+      title: 'Sæt point på højkant i dueller',
+      onPress: onOpenPointDuel,
+      swords: true,
+    },
+  ];
+
+  return (
+    <View style={styles.earnCapsScreen}>
+      <View style={styles.earnCapsHeroHeader}>
+        <View style={styles.earnCapsHeroCopy}>
+          <EarnCapsTitle />
+          <Text style={styles.earnCapsIntroText}>
+            Optjenes gennem gode gerninger, crew-challenges, weekly streaks og check-ins.
+          </Text>
+        </View>
+      </View>
+      <View style={styles.earnCapsCheckInCard}>
+        <View style={styles.earnCapsCheckInHeader}>
+          <View style={styles.earnCapsCheckInIconWrap}>
+            <Image source={STUDOS_LOGO} resizeMode="contain" style={styles.earnCapsCheckInLogo} />
+          </View>
+          <View style={styles.earnCapsCheckInCopy}>
+            <Text numberOfLines={1} style={styles.earnCapsCheckInTitle}>
+              Weekly streak
+            </Text>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              style={styles.earnCapsCheckInText}
+            >
+              Åbn appen 7 dage i træk og få 100 Caps.
+            </Text>
+          </View>
+          <View style={styles.earnCapsCheckInRewardPill}>
+            <Text numberOfLines={1} style={styles.earnCapsCheckInRewardText}>+100</Text>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.earnCapsCheckInRewardCoin} />
+          </View>
+        </View>
+        <View style={styles.earnCapsCheckInDays}>
+          {Array.from({ length: 7 }, (_, index) => {
+            const dayNumber = index + 1;
+            const completed = dayNumber <= checkInStreak;
+            const current = !checkedInToday && dayNumber === Math.min(7, checkInStreak + 1);
+
+            return (
+              <View
+                key={dayNumber}
+                style={[
+                  styles.earnCapsCheckInDay,
+                  completed ? styles.earnCapsCheckInDayDone : null,
+                  current ? styles.earnCapsCheckInDayCurrent : null,
+                ]}
+              >
+                {completed ? (
+                  <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+                ) : (
+                  <Text style={[
+                    styles.earnCapsCheckInDayText,
+                    current ? styles.earnCapsCheckInDayTextCurrent : null,
+                  ]}>
+                    {dayNumber}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+        </View>
+        {checkInError ? (
+          <Text style={styles.earnCapsCheckInError}>{checkInError}</Text>
+        ) : null}
+      </View>
+      <View style={styles.earnCapsMethodsPanel}>
+        <View style={styles.earnCapsMethodsPanelHeader}>
+          <Text numberOfLines={1} style={styles.earnCapsMethodsPanelTitle}>
+            Andre måder at optjene Caps
+          </Text>
+        </View>
+        <ScrollView
+          contentContainerStyle={styles.earnCapsMethodStack}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          style={styles.earnCapsMethodsScroll}
+        >
+          {methods.map((method) => (
+            <View key={method.id} style={styles.earnCapsMethodCard}>
+              <View style={styles.earnCapsMethodIconWrap}>
+                {method.swords ? (
+                  <View style={styles.earnCapsDuelIcon}>
+                    <Ionicons name="shield" size={24} color={STUDOS_THEME.yellow} />
+                    <MaterialCommunityIcons
+                      name="sword-cross"
+                      size={17}
+                      color={STUDOS_THEME.red}
+                      style={styles.earnCapsDuelSwords}
+                    />
+                  </View>
+                ) : (
+                  <Ionicons name={method.icon} size={23} color={STUDOS_THEME.red} />
+                )}
+              </View>
+              <View style={styles.earnCapsMethodCopy}>
+                <View style={styles.earnCapsMethodTitleLine}>
+                  <Text numberOfLines={1} style={styles.earnCapsMethodTitle}>{method.title}</Text>
+                  <View style={styles.earnCapsRewardPill}>
+                    <Text numberOfLines={1} style={styles.earnCapsRewardText}>{method.reward}</Text>
+                    {method.reward.startsWith('+') ? (
+                      <Image source={CAPS_COIN} resizeMode="contain" style={styles.earnCapsRewardCoin} />
+                    ) : null}
+                  </View>
+                </View>
+                <Text style={styles.earnCapsMethodText}>{method.subtitle}</Text>
+                {method.statusText ? (
+                  <Text numberOfLines={2} style={styles.earnCapsMethodError}>
+                    {method.statusText}
+                  </Text>
+                ) : null}
+                {typeof method.onPress === 'function' ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={Boolean(method.actionDisabled)}
+                    onPress={method.onPress}
+                    style={({ pressed }) => [
+                      styles.earnCapsMethodAction,
+                      method.actionDisabled ? styles.earnCapsMethodActionDisabled : null,
+                      pressed && !method.actionDisabled ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    {method.actionLoading ? (
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                      <>
+                        <Text style={styles.earnCapsMethodActionText}>{method.actionLabel}</Text>
+                        <Ionicons
+                          name={method.actionDone ? 'checkmark' : 'chevron-forward'}
+                          size={15}
+                          color="#FFFFFF"
+                        />
+                      </>
+                    )}
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
       </View>
     </View>
   );
@@ -8160,6 +8948,23 @@ function StudosWordmark() {
 }
 
 function SidebarMenuIcon({ active = false, item }) {
+  if (item.id === 'earnCaps') {
+    return (
+      <View style={styles.sidebarMenuIconWrap}>
+        <View style={styles.sidebarEarnCapsIcon}>
+          <View style={styles.sidebarEarnCapsIconBack} />
+          <View style={styles.sidebarEarnCapsIconFace}>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.sidebarEarnCapsIconCoin} />
+          </View>
+          <View style={styles.sidebarEarnCapsIconPlus}>
+            <Ionicons name="add" size={8} color={STUDOS_THEME.ink} />
+          </View>
+          <View style={styles.sidebarEarnCapsIconDot} />
+        </View>
+      </View>
+    );
+  }
+
   if (item.id === 'leaderboard') {
     const bars = [
       { height: 13, color: STUDOS_THEME.blue },
@@ -8367,6 +9172,52 @@ function AndroidNotificationPromptModal({ loading, visible, onDismiss, onEnable 
               </Text>
             </Pressable>
           </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function WeeklyCheckInRewardModal({ reward, visible, onDismiss }) {
+  const amount = Number(reward?.amount) || 100;
+
+  return (
+    <Modal
+      animationType="fade"
+      onRequestClose={onDismiss}
+      transparent
+      visible={visible}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk ugentlig check-in reward"
+          style={styles.chatModalBackdrop}
+          onPress={onDismiss}
+        />
+        <View style={[styles.chatModalPanel, styles.weeklyCheckInRewardPanel]}>
+          <View style={styles.weeklyCheckInRewardIcon}>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.weeklyCheckInRewardCoin} />
+            <View style={styles.weeklyCheckInRewardPlus}>
+              <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+            </View>
+          </View>
+          <View style={styles.notificationPromptCopy}>
+            <Text style={styles.chatModalKicker}>Weekly streak</Text>
+            <Text style={styles.notificationPromptTitle}>Tillykke, du gjorde det!</Text>
+            <Text style={styles.notificationPromptText}>
+              Du har åbnet Studos 7 dage i træk. Der er tilføjet {amount} Caps til din konto.
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onDismiss}
+            style={({ pressed }) => [
+              styles.weeklyCheckInRewardButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={styles.notificationPromptPrimaryText}>Fedt</Text>
+          </Pressable>
         </View>
       </View>
     </Modal>
@@ -9022,7 +9873,15 @@ function AccountProfileScreen({
   );
 }
 
-function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities, onOpenCalendar, onOpenPointDuel }) {
+function OverviewScreen({
+  activeMember,
+  countdown,
+  events = [],
+  onOpenActivities,
+  onOpenCalendar,
+  onOpenEarnCaps,
+  onOpenPointDuel,
+}) {
   const [selectedMood, setSelectedMood] = useState('klar');
   const [moodModalOpen, setMoodModalOpen] = useState(false);
   const [moodUpdatedAt, setMoodUpdatedAt] = useState(null);
@@ -9038,12 +9897,14 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
   const personalStudosCode = activeMember?.personalCode ?? 'Mangler';
+  const overviewNumberFormat = useMemo(() => new Intl.NumberFormat('da-DK'), []);
+  const formatOverviewNumber = useCallback((value) => overviewNumberFormat.format(value), [overviewNumberFormat]);
   const capsBalance = Number.isFinite(Number(activeMember?.capsBalance ?? activeMember?.points))
     ? Number(activeMember?.capsBalance ?? activeMember?.points)
     : 1000;
-  const formattedCapsBalance = new Intl.NumberFormat('da-DK').format(capsBalance);
+  const formattedCapsBalance = formatOverviewNumber(capsBalance);
   const overviewStats = [
-    { id: 'challenges', icon: 'flash', label: 'Dueller', value: '4', color: STUDOS_THEME.red },
+    { id: 'challenges', icon: 'flash', label: 'Udfordringer', value: '4', color: STUDOS_THEME.red },
     { id: 'parties', icon: 'wine', label: 'Gilder', value: '3', color: STUDOS_THEME.yellow },
     { id: 'memories', icon: 'images', label: 'Minder', value: '21', color: STUDOS_THEME.blue },
   ];
@@ -9090,7 +9951,6 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities
   const overviewMoodUpdatedText = hasCheckedInToday
     ? `Sidst opdateret: ${formatMoodUpdatedAt(moodUpdatedAt)}`
     : 'Ikke checket ind endnu';
-
   useEffect(() => {
     const timeout = setTimeout(() => {
       const nextDayKey = moodDayKeyFor();
@@ -9469,98 +10329,113 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities
                       </View>
                     </View>
                     <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
-                      Skal du have et hueklip?
+                      Klassens stræber
                     </Text>
                   </View>
                 </View>
               </View>
-              <View style={styles.overviewStudosStats}>
-                {overviewStats.map((stat) => (
-                  <View key={stat.id} style={styles.overviewStudosStat}>
-                    <Ionicons name={stat.icon} size={14} color={stat.color} />
-                    <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
-                    <Text numberOfLines={1} style={styles.overviewStudosStatLabel}>{stat.label}</Text>
-                  </View>
-                ))}
+              <View style={styles.overviewClipIconGrid}>
+                {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
+                  const completed = completedClipIds.includes(counter.id);
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={`Klip ${index + 1}${completed ? ', gennemført' : ', ikke gennemført'}`}
+                      accessibilityRole="button"
+                      hitSlop={6}
+                      key={counter.id}
+                      onPress={() => setSelectedClipId(counter.id)}
+                      style={({ pressed }) => [
+                        styles.overviewClipIconButton,
+                        completed ? styles.overviewClipIconButtonCompleted : null,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      {counter.id === 'wave' ? (
+                        <MaterialCommunityIcons
+                          name="waves"
+                          size={24}
+                          color={completed ? '#1F9D55' : STUDOS_THEME.ink}
+                        />
+                      ) : (
+                        <Ionicons
+                          name={counter.icon}
+                          size={23}
+                          color={completed ? '#1F9D55' : STUDOS_THEME.ink}
+                        />
+                      )}
+                      {completed ? (
+                        <View style={styles.overviewClipCompletedMark}>
+                          <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                        </View>
+                      ) : (
+                        <View style={styles.overviewClipAddMark}>
+                          <Ionicons name="add" size={14} color={STUDOS_THEME.ink} />
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
               </View>
             </View>
-            <View style={styles.overviewClipIconRow}>
-              {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
-                const completed = completedClipIds.includes(counter.id);
-
+            <View style={styles.overviewStudosStats}>
+              {overviewStats.map((stat) => {
                 return (
-                  <Pressable
-                    accessibilityLabel={`Klip ${index + 1}${completed ? ', gennemført' : ', ikke gennemført'}`}
-                    accessibilityRole="button"
-                    hitSlop={6}
-                    key={counter.id}
-                    onPress={() => setSelectedClipId(counter.id)}
-                    style={({ pressed }) => [
-                      styles.overviewClipIconButton,
-                      completed ? styles.overviewClipIconButtonCompleted : null,
-                      pressed ? styles.footerItemPressed : null,
-                    ]}
-                  >
-                    {counter.id === 'wave' ? (
-                      <MaterialCommunityIcons
-                        name="waves"
-                        size={24}
-                        color={completed ? '#1F9D55' : STUDOS_THEME.ink}
-                      />
-                    ) : (
-                      <Ionicons
-                        name={counter.icon}
-                        size={23}
-                        color={completed ? '#1F9D55' : STUDOS_THEME.ink}
-                      />
-                    )}
-                    {completed ? (
-                      <View style={styles.overviewClipCompletedMark}>
-                        <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-                      </View>
-                    ) : (
-                      <View style={styles.overviewClipAddMark}>
-                        <Ionicons name="add" size={14} color={STUDOS_THEME.ink} />
-                      </View>
-                    )}
-                  </Pressable>
+                  <View key={stat.id} style={styles.overviewStudosStat}>
+                    <Ionicons name={stat.icon} size={13} color={stat.color} />
+                    <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.76}
+                      style={styles.overviewStudosStatLabel}
+                    >
+                      {stat.label}
+                    </Text>
+                  </View>
                 );
               })}
             </View>
-            <View style={styles.overviewStudosMoodRow}>
-              <View style={styles.overviewMoodHeaderCopy}>
-                <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
-                  {overviewMoodQuestion}
+            <View style={styles.overviewStudosCapsBottomRow}>
+              <View style={styles.overviewStudosCapsBottomCoinShell}>
+                <Image
+                  source={CAPS_COIN}
+                  resizeMethod="resize"
+                  resizeMode="contain"
+                  style={styles.overviewStudosCapsBottomCoin}
+                />
+              </View>
+              <View style={styles.overviewStudosCapsBottomCopy}>
+                <Text numberOfLines={1} style={styles.overviewStudosCapsBottomLabel}>
+                  DINE CAPS
                 </Text>
-                <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
-                  {overviewMoodUpdatedText}
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  style={styles.overviewStudosCapsBottomValue}
+                >
+                  {formattedCapsBalance}
                 </Text>
               </View>
               <Pressable
-                accessibilityLabel="Vælg stemning"
+                accessibilityLabel="Åbn Optjen Caps"
                 accessibilityRole="button"
-                onPress={() => setMoodModalOpen(true)}
+                onPress={onOpenEarnCaps}
                 style={({ pressed }) => [
-                  styles.overviewMoodCurrentBadge,
-                  hasCheckedInToday
-                    ? styles.overviewMoodCurrentBadgeCheckedIn
-                    : styles.overviewMoodCurrentBadgeNeedsCheckIn,
+                  styles.overviewStudosCapsEarnButton,
                   pressed ? styles.footerItemPressed : null,
                 ]}
               >
-                <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.overviewMoodCurrentText,
-                    hasCheckedInToday
-                      ? styles.overviewMoodCurrentTextOnBlue
-                      : styles.overviewMoodCurrentTextOnAccent,
-                  ]}
-                >
-                  {activeMood.label}
+                <View style={styles.overviewStudosCapsEarnIconWrap}>
+                  <Ionicons name="sparkles" size={18} color={STUDOS_THEME.yellow} />
+                  <View style={styles.overviewStudosCapsEarnPlus}>
+                    <Ionicons name="add" size={10} color={STUDOS_THEME.ink} />
+                  </View>
+                </View>
+                <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={styles.overviewStudosCapsEarnText}>
+                  Optjen Caps
                 </Text>
-                <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
               </Pressable>
             </View>
             <View pointerEvents="none" style={styles.overviewStudosBottomWave}>
@@ -9577,41 +10452,43 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities
           </View>
         </Animated.View>
         <Animated.View
-          onLayout={setOverviewCardLayout('caps')}
-          style={overviewCardScrollStyle('caps')}
+          onLayout={setOverviewCardLayout('dailyMood')}
+          style={overviewCardScrollStyle('dailyMood')}
         >
-          <View style={styles.overviewCapsCard}>
-            <Image source={CAPS_COIN} resizeMode="contain" style={styles.overviewCapsCoinImage} />
-            <View style={styles.overviewCapsCopy}>
-              <Text style={styles.overviewCapsKicker}>Dine Caps</Text>
-              <Text numberOfLines={1} style={styles.overviewCapsBalance}>
-                {formattedCapsBalance}
+          <View style={styles.overviewMoodStandaloneCard}>
+            <View style={styles.overviewMoodHeaderCopy}>
+              <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
+                {overviewMoodQuestion}
+              </Text>
+              <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
+                {overviewMoodUpdatedText}
               </Text>
             </View>
             <Pressable
-              accessibilityLabel="Udfordr en anden til Pointduel"
+              accessibilityLabel="Vælg stemning"
               accessibilityRole="button"
-              onPress={onOpenPointDuel}
+              onPress={() => setMoodModalOpen(true)}
               style={({ pressed }) => [
-                styles.overviewCapsAction,
+                styles.overviewMoodCurrentBadge,
+                hasCheckedInToday
+                  ? styles.overviewMoodCurrentBadgeCheckedIn
+                  : styles.overviewMoodCurrentBadgeNeedsCheckIn,
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              <View style={styles.overviewCapsDuelMark}>
-                <Ionicons name="shield" size={19} color={STUDOS_THEME.yellow} />
-                <MaterialCommunityIcons
-                  name="sword-cross"
-                  size={16}
-                  color={STUDOS_THEME.red}
-                  style={styles.overviewCapsDuelSwords}
-                />
-                <View style={styles.overviewCapsDuelPlus}>
-                  <Ionicons name="add" size={9} color={STUDOS_THEME.ink} />
-                </View>
-              </View>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.82} style={styles.overviewCapsActionText}>
-                Udfordr
+              <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.overviewMoodCurrentText,
+                  hasCheckedInToday
+                    ? styles.overviewMoodCurrentTextOnBlue
+                    : styles.overviewMoodCurrentTextOnAccent,
+                ]}
+              >
+                {activeMood.label}
               </Text>
+              <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
             </Pressable>
           </View>
         </Animated.View>
@@ -9786,63 +10663,6 @@ function OverviewScreen({ activeMember, countdown, events = [], onOpenActivities
             >
               <Text style={styles.overviewClassDuelsActionText}>Åbn Duel</Text>
               <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
-            </Pressable>
-          </View>
-        </Animated.View>
-        <Animated.View
-          onLayout={setOverviewCardLayout('dailyMood')}
-          style={overviewCardScrollStyle('dailyMood')}
-        >
-          <View style={styles.overviewDailyMoodCard}>
-            <View style={styles.overviewDailyMoodHeader}>
-              <View style={styles.overviewDailyMoodIconWrap}>
-                <Ionicons name="happy" size={23} color={STUDOS_THEME.ink} />
-              </View>
-              <View style={styles.overviewDailyMoodCopy}>
-                <Text numberOfLines={1} style={styles.overviewDailyMoodTitle}>
-                  Dagens stemning
-                </Text>
-                <Text numberOfLines={1} style={styles.overviewDailyMoodMeta}>
-                  {overviewMoodUpdatedText}
-                </Text>
-              </View>
-            </View>
-            <Pressable
-              accessibilityLabel="Vælg dagens stemning"
-              accessibilityRole="button"
-              onPress={() => setMoodModalOpen(true)}
-              style={({ pressed }) => [
-                styles.overviewDailyMoodCurrent,
-                hasCheckedInToday
-                  ? styles.overviewDailyMoodCurrentCheckedIn
-                  : styles.overviewDailyMoodCurrentNeedsCheckIn,
-                pressed ? styles.footerItemPressed : null,
-              ]}
-            >
-              <View style={styles.overviewDailyMoodCurrentIcon}>
-                <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
-              </View>
-              <View style={styles.overviewDailyMoodCurrentCopy}>
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.overviewDailyMoodCurrentLabel,
-                    hasCheckedInToday ? styles.overviewDailyMoodCurrentLabelCheckedIn : null,
-                  ]}
-                >
-                  {activeMood.label}
-                </Text>
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.overviewDailyMoodCurrentText,
-                    hasCheckedInToday ? styles.overviewDailyMoodCurrentTextCheckedIn : null,
-                  ]}
-                >
-                  {hasCheckedInToday ? 'Stemningen er gemt for i dag' : 'Tryk og vælg din vibe'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
             </Pressable>
           </View>
         </Animated.View>
@@ -10174,6 +10994,54 @@ function CalendarTitle() {
   );
 }
 
+function EarnCapsTitleGraphic({ style }) {
+  return (
+    <View style={[styles.earnCapsTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.earnCapsTitleGraphicBack} />
+      <View style={styles.earnCapsTitleCoinFace}>
+        <Image source={CAPS_COIN} resizeMode="contain" style={styles.earnCapsTitleCoinImage} />
+      </View>
+      <View style={styles.earnCapsTitlePlusBadge}>
+        <Ionicons name="add" size={10} color={STUDOS_THEME.ink} />
+      </View>
+      <View style={styles.earnCapsTitleGraphicDot} />
+    </View>
+  );
+}
+
+function EarnCapsTitle() {
+  return (
+    <View accessible accessibilityLabel="Optjen Caps" style={[styles.overviewPageTitleWrap, styles.earnCapsPageTitleWrap]}>
+      <Text style={[styles.overviewPageTitleRest, styles.earnCapsPageTitleText]}>Optjen Caps</Text>
+      <EarnCapsTitleGraphic />
+    </View>
+  );
+}
+
+function ClassBattleTitleGraphic({ style }) {
+  return (
+    <View style={[styles.classBattleTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.classBattleTitleGraphicBack} />
+      <View style={styles.classBattleTitlePodiumFace}>
+        <View style={[styles.classBattleTitlePodiumBar, styles.classBattleTitlePodiumBarSecond]} />
+        <View style={[styles.classBattleTitlePodiumBar, styles.classBattleTitlePodiumBarFirst]} />
+        <View style={[styles.classBattleTitlePodiumBar, styles.classBattleTitlePodiumBarThird]} />
+        <View style={styles.classBattleTitlePodiumBase} />
+      </View>
+      <View style={styles.classBattleTitleGraphicDot} />
+    </View>
+  );
+}
+
+function ClassBattleTitle() {
+  return (
+    <View accessible accessibilityLabel="Klassedyst" style={[styles.overviewPageTitleWrap, styles.classBattlePageTitleWrap]}>
+      <Text style={[styles.overviewPageTitleRest, styles.classBattlePageTitleText]}>Klassedyst</Text>
+      <ClassBattleTitleGraphic />
+    </View>
+  );
+}
+
 function StudentCap() {
   return (
     <View style={styles.studentCap}>
@@ -10491,7 +11359,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 42,
     position: 'relative',
-    width: 66,
+    width: 74,
   },
   wordmarkTextRow: {
     alignItems: 'center',
@@ -10519,7 +11387,7 @@ const styles = StyleSheet.create({
   wordmarkDot: {
     position: 'absolute',
     right: 5,
-    top: -1,
+    top: -3,
     width: 7,
     height: 7,
     borderRadius: 7,
@@ -10662,6 +11530,64 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: 34,
     height: 34,
+  },
+  sidebarEarnCapsIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 34,
+    height: 34,
+  },
+  sidebarEarnCapsIconBack: {
+    position: 'absolute',
+    right: 5,
+    bottom: 5,
+    width: 22,
+    height: 21,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  sidebarEarnCapsIconFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    width: 25,
+    height: 24,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    transform: [{ rotate: '-4deg' }],
+  },
+  sidebarEarnCapsIconCoin: {
+    width: 29,
+    height: 29,
+  },
+  sidebarEarnCapsIconPlus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 2,
+    bottom: 3,
+    width: 13,
+    height: 13,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 7,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  sidebarEarnCapsIconDot: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 6,
+    backgroundColor: STUDOS_THEME.blue,
   },
   sidebarLeaderboardIcon: {
     alignItems: 'flex-end',
@@ -11016,16 +11942,268 @@ const styles = StyleSheet.create({
   flowStack: {
     gap: 16,
   },
-  classBattleStatsGrid: {
+  classBattleHeroHeader: {
+    alignItems: 'flex-start',
     flexDirection: 'row',
-    gap: 8,
+    gap: 18,
+    justifyContent: 'space-between',
   },
-  classBattleStatCard: {
-    alignItems: 'center',
+  classBattleHeroCopy: {
     flex: 1,
+    gap: 10,
+    minWidth: 0,
+    paddingRight: 4,
+  },
+  classBattleHeroStats: {
+    flexShrink: 0,
+    gap: 11,
+    paddingTop: 10,
+  },
+  classBattleIntroText: {
+    color: '#6B7688',
+    fontSize: 13.5,
+    fontWeight: '650',
+    letterSpacing: 0,
+    lineHeight: 19,
+    maxWidth: 228,
+  },
+  classBattleGoodDeedCard: {
+    gap: 8,
+    maxWidth: 236,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 9,
+  },
+  classBattleGoodDeedCardTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  classBattleGoodDeedIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+  },
+  classBattleGoodDeedKicker: {
+    color: STUDOS_THEME.red,
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+    textTransform: 'uppercase',
+  },
+  classBattleGoodDeedCapsPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 3,
+    minHeight: 24,
+    borderRadius: 8,
+    backgroundColor: '#E3F8EF',
+    paddingHorizontal: 6,
+  },
+  classBattleGoodDeedCapsText: {
+    color: '#1F9D55',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleGoodDeedCapsCoin: {
+    width: 15,
+    height: 15,
+  },
+  classBattleGoodDeedTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  classBattleGoodDeedFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  classBattleGoodDeedStatusPill: {
+    flexShrink: 1,
+    minHeight: 20,
+    borderRadius: 8,
+    backgroundColor: '#FFF4D8',
+    paddingHorizontal: 6,
+    justifyContent: 'center',
+  },
+  classBattleGoodDeedStatusPillApproved: {
+    backgroundColor: '#E3F8EF',
+  },
+  classBattleGoodDeedStatusPillMuted: {
+    backgroundColor: '#EEF1F5',
+  },
+  classBattleGoodDeedStatusText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 11,
+  },
+  classBattleGoodDeedButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 32,
+    borderColor: STUDOS_THEME.yellow,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 11,
+    shadowColor: '#1F9D55',
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  classBattleGoodDeedButtonDisabled: {
+    borderColor: '#DDE3EA',
+    backgroundColor: '#E5E8EF',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  classBattleGoodDeedButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleGoodDeedButtonTextDisabled: {
+    color: '#65748b',
+  },
+  classBattleVerificationStack: {
+    gap: 6,
+    borderTopColor: '#EEF1F5',
+    borderTopWidth: 1,
+    paddingTop: 7,
+  },
+  classBattleVerificationKicker: {
+    color: '#65748b',
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  classBattleVerificationRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    minWidth: 0,
+  },
+  classBattleVerificationCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  classBattleVerificationName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 13,
+  },
+  classBattleVerificationMeta: {
+    color: '#65748b',
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 11,
+  },
+  classBattleVerificationIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#EEF1F5',
+  },
+  classBattleVerificationApproveButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  classBattleGoodDeedInlineError: {
+    color: STUDOS_THEME.red,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  classBattleGoodDeedsProgress: {
+    gap: 7,
+    maxWidth: 236,
+    paddingTop: 4,
+  },
+  classBattleHeroLeaderboardHeader: {
+    gap: 1,
+    marginTop: 10,
+  },
+  classBattleGoodDeedsText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  classBattleGoodDeedsTrack: {
+    height: 18,
+    borderRadius: 8,
+    backgroundColor: '#DDEBE8',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  classBattleGoodDeedsFill: {
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  classBattleGoodDeedsBubble: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: -1,
+    minWidth: 38,
+    height: 24,
+    marginLeft: -19,
+    borderColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.ink,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 7,
+    elevation: 4,
+  },
+  classBattleGoodDeedsBubbleText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  classBattleHeaderStatCard: {
+    alignItems: 'center',
     gap: 3,
     justifyContent: 'center',
-    minHeight: 72,
+    width: 102,
+    minHeight: 58,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
@@ -11039,6 +12217,25 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 20,
   },
+  classBattleStatValueRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'center',
+    maxWidth: '100%',
+    minWidth: 0,
+  },
+  classBattleCapsStatValue: {
+    flexShrink: 1,
+    maxWidth: 62,
+    minWidth: 0,
+    textAlign: 'right',
+  },
+  classBattleStatCoinImage: {
+    flexShrink: 0,
+    width: 18,
+    height: 18,
+  },
   classBattleStatLabel: {
     color: '#65748b',
     fontSize: 9.5,
@@ -11048,18 +12245,65 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   classBattleLeaderboardCard: {
-    gap: 13,
+    gap: 10,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
-    padding: 13,
+    padding: 10,
   },
-  classBattleLeaderboardHeader: {
+  classBattleLeaderboardTopBar: {
     alignItems: 'center',
     flexDirection: 'row',
+    gap: 8,
     justifyContent: 'space-between',
-    gap: 10,
+    marginHorizontal: -2,
+    paddingHorizontal: 2,
+    paddingBottom: 1,
+    zIndex: 2,
+  },
+  classBattleLeaderboardTopBarScrolled: {
+    borderBottomColor: 'rgba(23, 33, 67, 0.08)',
+    borderBottomWidth: 1,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  classBattleJumpButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 5,
+    minHeight: 28,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+    paddingHorizontal: 8,
+  },
+  classBattleJumpButtonText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  classBattleResetInfo: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'flex-end',
+    minWidth: 0,
+  },
+  classBattleResetInfoText: {
+    color: '#65748b',
+    flexShrink: 1,
+    fontSize: 9.5,
+    fontWeight: '850',
+    letterSpacing: 0,
+    lineHeight: 11,
+    textAlign: 'right',
   },
   classBattleSectionTitle: {
     color: STUDOS_THEME.ink,
@@ -11075,29 +12319,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 14,
   },
-  classBattleLiveBadge: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 5,
-    minHeight: 26,
-    borderRadius: 13,
-    backgroundColor: '#EEF9F7',
-    paddingHorizontal: 9,
-  },
-  classBattleLiveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 7,
-    backgroundColor: STUDOS_THEME.blue,
-  },
-  classBattleLiveText: {
-    color: STUDOS_THEME.ink,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
   classBattleRows: {
     gap: 8,
+    paddingBottom: 2,
+  },
+  classBattleRowsScroll: {
+    maxHeight: 356,
   },
   classBattleRow: {
     alignItems: 'center',
@@ -11126,6 +12353,12 @@ const styles = StyleSheet.create({
   classBattleRankBadgeFirst: {
     backgroundColor: STUDOS_THEME.yellow,
   },
+  classBattleRankBadgeSecond: {
+    backgroundColor: '#DDE3EA',
+  },
+  classBattleRankBadgeThird: {
+    backgroundColor: '#D99A5B',
+  },
   classBattleRankText: {
     color: STUDOS_THEME.ink,
     fontSize: 13,
@@ -11134,6 +12367,12 @@ const styles = StyleSheet.create({
   },
   classBattleRankTextFirst: {
     color: STUDOS_THEME.ink,
+  },
+  classBattleRankTextSecond: {
+    color: STUDOS_THEME.ink,
+  },
+  classBattleRankTextThird: {
+    color: '#FFFFFF',
   },
   classBattleRowCopy: {
     flex: 1,
@@ -11176,7 +12415,13 @@ const styles = StyleSheet.create({
   classBattleScoreBlock: {
     alignItems: 'flex-end',
     flexShrink: 0,
-    minWidth: 58,
+    minWidth: 76,
+  },
+  classBattleScoreValueRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'flex-end',
   },
   classBattleScoreText: {
     color: STUDOS_THEME.ink,
@@ -11185,13 +12430,189 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 16,
   },
-  classBattleScoreLabel: {
-    color: STUDOS_THEME.red,
-    fontSize: 9,
+  classBattleScoreMetricText: {
+    color: '#65748b',
+    fontSize: 8.5,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 11,
-    textTransform: 'uppercase',
+    lineHeight: 10,
+    textAlign: 'right',
+  },
+  classBattleScoreTotalText: {
+    color: STUDOS_THEME.red,
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 10,
+    textAlign: 'right',
+  },
+  classBattleScoreCoinImage: {
+    width: 17,
+    height: 17,
+  },
+  classBattleGoodDeedModalPanel: {
+    maxHeight: '86%',
+  },
+  classBattleGoodDeedModalTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  classBattleGoodDeedRewardLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  classBattleGoodDeedRewardPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 30,
+    borderRadius: 8,
+    backgroundColor: '#E3F8EF',
+    paddingHorizontal: 9,
+  },
+  classBattleGoodDeedRewardText: {
+    color: '#1F9D55',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleGoodDeedRewardCoin: {
+    width: 18,
+    height: 18,
+  },
+  classBattleGoodDeedPhotoBonusPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 30,
+    borderRadius: 8,
+    backgroundColor: '#F1FBF8',
+    paddingHorizontal: 9,
+  },
+  classBattleGoodDeedPhotoBonusText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleGoodDeedBuddyScroll: {
+    maxHeight: 230,
+  },
+  classBattleGoodDeedBuddyList: {
+    gap: 8,
+  },
+  classBattleBuddyRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 54,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+  },
+  classBattleBuddyRowSelected: {
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: '#FFF4D8',
+  },
+  classBattleBuddyRowDisabled: {
+    opacity: 0.48,
+  },
+  classBattleBuddyCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  classBattleBuddyName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  classBattleBuddyMeta: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  classBattleGoodDeedPhotoPicker: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 64,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  classBattleGoodDeedPhotoPreview: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderColor: '#FFF3CD',
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  classBattleGoodDeedPhotoPreviewImage: {
+    width: 44,
+    height: 44,
+  },
+  classBattleGoodDeedPhotoCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  classBattleGoodDeedPhotoTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  classBattleGoodDeedPhotoText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    marginTop: 1,
+  },
+  classBattleGoodDeedPhotoRemove: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#EEF1F5',
+  },
+  classBattleGoodDeedError: {
+    color: STUDOS_THEME.red,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  classBattleGoodDeedSubmitButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 14,
+  },
+  classBattleGoodDeedSubmitButtonDisabled: {
+    backgroundColor: '#DDE3EA',
+  },
+  classBattleGoodDeedSubmitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   calendarScreen: {
     flex: 1,
@@ -13104,93 +14525,159 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   overviewStudosStats: {
-    flexShrink: 0,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    flexDirection: 'row',
     gap: 6,
-    width: 112,
+    position: 'relative',
+    width: '100%',
+    zIndex: 3,
   },
   overviewStudosStat: {
     alignItems: 'center',
+    flex: 1,
     flexDirection: 'row',
-    gap: 5,
-    minHeight: 30,
+    gap: 4,
+    minHeight: 29,
+    minWidth: 0,
     borderColor: '#EEF1F5',
     borderRadius: 999,
     borderWidth: 1,
     backgroundColor: '#F7FAFA',
-    paddingHorizontal: 8,
-    width: '100%',
+    paddingHorizontal: 6,
   },
   overviewStudosStatValue: {
     color: STUDOS_THEME.ink,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
   },
   overviewStudosStatLabel: {
     color: '#65748b',
     flex: 1,
-    fontSize: 10,
+    fontSize: 8.9,
     fontWeight: '900',
     letterSpacing: 0,
+    minWidth: 0,
   },
-  overviewCapsCard: {
+  overviewStudosCapsBottomRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
-    minHeight: 76,
+    gap: 9,
+    position: 'relative',
+    zIndex: 3,
+    minHeight: 54,
     borderColor: '#FFE1B1',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 11,
-    paddingVertical: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 24 },
-    shadowOpacity: 0.28,
-    shadowRadius: 34,
-    elevation: 18,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 5,
   },
-  overviewCapsCoinImage: {
-    width: 54,
-    height: 54,
-    marginLeft: -4,
+  overviewStudosCapsBottomCoinShell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 39,
+    height: 39,
+    borderRadius: 20,
+    overflow: 'hidden',
   },
-  overviewCapsCopy: {
+  overviewStudosCapsBottomCopy: {
     flex: 1,
-    gap: 2,
+    gap: 0,
     minWidth: 0,
   },
-  overviewCapsKicker: {
+  overviewStudosCapsBottomLabel: {
     color: '#65748b',
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '900',
     letterSpacing: 0,
-    textTransform: 'uppercase',
+    lineHeight: 11,
   },
-  overviewCapsBalance: {
+  overviewStudosCapsBottomMeta: {
+    color: '#65748b',
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 10,
+  },
+  overviewStudosCapsBottomValue: {
     color: STUDOS_THEME.ink,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 25,
+    lineHeight: 23,
+    minWidth: 0,
   },
-  overviewCapsAction: {
+  overviewStudosCapsBottomCoin: {
+    width: 45,
+    height: 45,
+  },
+  overviewStudosCapsEarnButton: {
     alignItems: 'center',
     flexShrink: 0,
-    gap: 4,
+    gap: 2,
     justifyContent: 'center',
-    width: 74,
-    minHeight: 56,
+    width: 66,
+    minHeight: 43,
     borderColor: STUDOS_THEME.yellow,
     borderRadius: 8,
     borderWidth: 1.5,
     backgroundColor: STUDOS_THEME.ink,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
     shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.18,
+    shadowRadius: 9,
+    elevation: 5,
+  },
+  overviewStudosCapsEarnIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 21,
+    height: 20,
+  },
+  overviewStudosCapsEarnPlus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: 0,
+    right: -7,
+    width: 16,
+    height: 16,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  overviewStudosCapsEarnText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewMoodStandaloneCard: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
     elevation: 5,
   },
   overviewCapsDuelMark: {
@@ -13203,25 +14690,6 @@ const styles = StyleSheet.create({
   overviewCapsDuelSwords: {
     position: 'absolute',
     top: 2,
-  },
-  overviewCapsDuelPlus: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: -4,
-    right: -5,
-    width: 13,
-    height: 13,
-    borderColor: STUDOS_THEME.ink,
-    borderRadius: 7,
-    borderWidth: 1,
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  overviewCapsActionText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
   },
   overviewTodayCalendarCard: {
     gap: 16,
@@ -13954,14 +15422,291 @@ const styles = StyleSheet.create({
   overviewMoodModalOptionTextActive: {
     fontWeight: '900',
   },
-  overviewClipIconRow: {
+  earnCapsHeroHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 18,
+    justifyContent: 'space-between',
+  },
+  earnCapsScreen: {
+    flex: 1,
+    gap: 16,
+  },
+  earnCapsHeroCopy: {
+    flex: 1,
+    gap: 10,
+    minWidth: 0,
+    paddingRight: 4,
+  },
+  earnCapsIntroText: {
     alignSelf: 'stretch',
+    color: '#6B7688',
+    fontSize: 13.5,
+    fontWeight: '650',
+    letterSpacing: 0,
+    lineHeight: 19,
+    marginLeft: 8,
+    marginRight: 8,
+  },
+  earnCapsCheckInCard: {
+    gap: 12,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  earnCapsCheckInHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 1,
+    gap: 10,
+  },
+  earnCapsCheckInIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
-    width: '100%',
+    flexShrink: 0,
+    width: 42,
+    height: 42,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.ink,
+    overflow: 'hidden',
+  },
+  earnCapsCheckInLogo: {
+    width: 40,
+    height: 40,
+  },
+  earnCapsCheckInCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  earnCapsCheckInTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  earnCapsCheckInText: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 15,
+  },
+  earnCapsCheckInRewardPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 3,
+    minHeight: 26,
+    borderRadius: 8,
+    backgroundColor: '#E3F8EF',
+    paddingHorizontal: 8,
+  },
+  earnCapsCheckInRewardText: {
+    color: '#1F9D55',
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  earnCapsCheckInRewardCoin: {
+    width: 17,
+    height: 17,
+  },
+  earnCapsCheckInDays: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  earnCapsCheckInDay: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    aspectRatio: 1,
+    minWidth: 0,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+  },
+  earnCapsCheckInDayCurrent: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+  },
+  earnCapsCheckInDayDone: {
+    borderColor: '#1F9D55',
+    backgroundColor: '#1F9D55',
+  },
+  earnCapsCheckInDayText: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  earnCapsCheckInDayTextCurrent: {
+    color: STUDOS_THEME.ink,
+  },
+  earnCapsCheckInError: {
+    color: STUDOS_THEME.red,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  earnCapsMethodsPanel: {
+    flex: 1,
+    minHeight: 286,
+    gap: 10,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  earnCapsMethodsPanelHeader: {
+    minHeight: 20,
+    justifyContent: 'center',
+  },
+  earnCapsMethodsPanelTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  earnCapsMethodsScroll: {
+    flex: 1,
+  },
+  earnCapsMethodStack: {
+    gap: 10,
+    paddingBottom: 1,
+  },
+  earnCapsMethodCard: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 12,
+  },
+  earnCapsMethodIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 42,
+    height: 42,
+    borderColor: '#FFD0D2',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF6F6',
+  },
+  earnCapsDuelIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 27,
+    height: 25,
+  },
+  earnCapsDuelSwords: {
+    position: 'absolute',
+    top: 4,
+  },
+  earnCapsMethodCopy: {
+    flex: 1,
+    gap: 7,
+    minWidth: 0,
+  },
+  earnCapsMethodTitleLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minWidth: 0,
+  },
+  earnCapsMethodTitle: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  earnCapsRewardPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 3,
+    minHeight: 24,
+    borderRadius: 8,
+    backgroundColor: '#E3F8EF',
+    paddingHorizontal: 7,
+  },
+  earnCapsRewardText: {
+    color: '#1F9D55',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  earnCapsRewardCoin: {
+    width: 16,
+    height: 16,
+  },
+  earnCapsMethodText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  earnCapsMethodError: {
+    color: STUDOS_THEME.red,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  earnCapsMethodAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 30,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 10,
+  },
+  earnCapsMethodActionDisabled: {
+    backgroundColor: '#8D96A8',
+  },
+  earnCapsMethodActionText: {
+    color: '#FFFFFF',
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewClipIconGrid: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 84,
     zIndex: 3,
   },
   overviewClipIconButton: {
@@ -14143,6 +15888,160 @@ const styles = StyleSheet.create({
     lineHeight: 11,
   },
   calendarTitleIconDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  earnCapsPageTitleText: {
+    fontSize: 29,
+  },
+  earnCapsPageTitleWrap: {
+    flex: 0,
+  },
+  earnCapsTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 48,
+    height: 40,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  earnCapsTitleGraphicBack: {
+    position: 'absolute',
+    right: 2,
+    bottom: 1,
+    width: 33,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  earnCapsTitleCoinFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 38,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    overflow: 'hidden',
+    transform: [{ rotate: '-4deg' }],
+  },
+  earnCapsTitleCoinImage: {
+    width: 42,
+    height: 42,
+  },
+  earnCapsTitlePlusBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -1,
+    bottom: 0,
+    width: 17,
+    height: 17,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 9,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  earnCapsTitleGraphicDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  classBattlePageTitleText: {
+    fontSize: 29,
+  },
+  classBattlePageTitleWrap: {
+    flex: 0,
+  },
+  classBattleTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 48,
+    height: 40,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  classBattleTitleGraphicBack: {
+    position: 'absolute',
+    right: 2,
+    bottom: 1,
+    width: 33,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  classBattleTitlePodiumFace: {
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 38,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  classBattleTitlePodiumBar: {
+    position: 'absolute',
+    bottom: 8,
+    width: 7,
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+  },
+  classBattleTitlePodiumBarFirst: {
+    left: 15,
+    height: 18,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  classBattleTitlePodiumBarSecond: {
+    left: 7,
+    height: 13,
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  classBattleTitlePodiumBarThird: {
+    right: 7,
+    height: 10,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  classBattleTitlePodiumBase: {
+    position: 'absolute',
+    right: 6,
+    bottom: 6,
+    left: 6,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: STUDOS_THEME.ink,
+    opacity: 0.16,
+  },
+  classBattleTitleGraphicDot: {
     position: 'absolute',
     right: 0,
     top: 0,
@@ -14522,6 +16421,51 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  weeklyCheckInRewardPanel: {
+    alignItems: 'center',
+    gap: 14,
+    maxWidth: 360,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+  },
+  weeklyCheckInRewardIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 72,
+    height: 72,
+    borderColor: '#FFE1B1',
+    borderRadius: 36,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    overflow: 'hidden',
+  },
+  weeklyCheckInRewardCoin: {
+    width: 78,
+    height: 78,
+  },
+  weeklyCheckInRewardPlus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    width: 22,
+    height: 22,
+    borderColor: '#FFFFFF',
+    borderRadius: 11,
+    borderWidth: 2,
+    backgroundColor: '#1F9D55',
+  },
+  weeklyCheckInRewardButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    minHeight: 46,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 12,
   },
   sectionTitle: {
     color: '#182446',

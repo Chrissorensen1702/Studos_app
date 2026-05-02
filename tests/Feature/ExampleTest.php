@@ -64,11 +64,16 @@ class ExampleTest extends TestCase
         $response
             ->assertStatus(200)
             ->assertSee('Studos')
+            ->assertSee('Studos er under udvikling.')
+            ->assertSee('download-knapperne vises kun som design-preview')
+            ->assertSee('HELT GRATIS')
             ->assertSee('Opret')
             ->assertSee('Login')
             ->assertSee('Google Play')
             ->assertSee('App Store')
-            ->assertSee('mockup-index.png')
+            ->assertSee('landing-feature-preview-hero')
+            ->assertSee('Forrige mockup')
+            ->assertSee('Næste mockup')
             ->assertSee('Kalender og events')
             ->assertSee('Mini games')
             ->assertSee('Klassewards')
@@ -127,6 +132,206 @@ class ExampleTest extends TestCase
             ->assertJsonMissingPath('member.email')
             ->assertJsonMissingPath('member.phone')
             ->assertJsonMissingPath('member.birthday');
+    }
+
+    public function test_class_battle_ranks_classes_by_caps_per_active_member(): void
+    {
+        DB::table('members')->where('id', 'demo-owner')->update(['caps_balance' => 1000]);
+
+        DB::table('classes')->insert([
+            [
+                'id' => 'battle-big-class',
+                'public_id' => 'BG-3A-26',
+                'school_name' => 'Big Gymnasium',
+                'class_name' => '3.A',
+                'graduation_year' => '2026',
+                'graduation_date' => '2026-06-25',
+                'owner_name' => 'Big Owner',
+                'owner_email' => 'big.owner@example.test',
+                'invite_code' => 'STU-BIG26',
+                'join_policy' => 'approval',
+                'allow_member_posts' => true,
+                'require_approval_for_photos' => false,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'id' => 'battle-small-class',
+                'public_id' => 'SM-2B-26',
+                'school_name' => 'Small Gymnasium',
+                'class_name' => '2.B',
+                'graduation_year' => '2026',
+                'graduation_date' => '2026-06-25',
+                'owner_name' => 'Small Owner',
+                'owner_email' => 'small.owner@example.test',
+                'invite_code' => 'STU-SMALL26',
+                'join_policy' => 'approval',
+                'allow_member_posts' => true,
+                'require_approval_for_photos' => false,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        DB::table('members')->insert([
+            [
+                'id' => 'battle-big-one',
+                'personal_code' => 'BIG-ONE',
+                'class_id' => 'battle-big-class',
+                'display_name' => 'Big One',
+                'first_name' => 'Big',
+                'last_name' => 'One',
+                'email' => 'big.one@example.test',
+                'caps_balance' => 2000,
+                'role' => 'student',
+                'status' => 'active',
+                'joined_at' => now(),
+            ],
+            [
+                'id' => 'battle-big-two',
+                'personal_code' => 'BIG-TWO',
+                'class_id' => 'battle-big-class',
+                'display_name' => 'Big Two',
+                'first_name' => 'Big',
+                'last_name' => 'Two',
+                'email' => 'big.two@example.test',
+                'caps_balance' => 2000,
+                'role' => 'student',
+                'status' => 'active',
+                'joined_at' => now(),
+            ],
+            [
+                'id' => 'battle-small-one',
+                'personal_code' => 'SMALL-ONE',
+                'class_id' => 'battle-small-class',
+                'display_name' => 'Small One',
+                'first_name' => 'Small',
+                'last_name' => 'One',
+                'email' => 'small.one@example.test',
+                'caps_balance' => 3000,
+                'role' => 'student',
+                'status' => 'active',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        $token = $this->issueTestMemberToken('demo-owner');
+
+        $this->getJson('/api/class-battle', [
+            'Authorization' => 'Bearer '.$token,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('metric', 'caps_per_active_member')
+            ->assertJsonPath('classes.0.id', 'battle-small-class')
+            ->assertJsonPath('classes.0.score', 3000)
+            ->assertJsonPath('classes.0.totalCaps', 3000)
+            ->assertJsonPath('classes.0.activeMembers', 1)
+            ->assertJsonPath('classes.1.id', 'battle-big-class')
+            ->assertJsonPath('classes.1.score', 2000)
+            ->assertJsonPath('classes.1.totalCaps', 4000)
+            ->assertJsonPath('classes.1.activeMembers', 2)
+            ->assertJsonPath('classes.2.id', 'demo-class')
+            ->assertJsonPath('classes.2.current', true)
+            ->assertJsonPath('currentMember.capsBalance', 1000);
+    }
+
+    public function test_weekly_good_deed_claim_awards_caps_once_without_buddy_or_photo(): void
+    {
+        DB::table('members')->where('id', 'demo-owner')->update(['caps_balance' => 1000]);
+        $token = $this->issueTestMemberToken('demo-owner');
+
+        $claimResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->postJson('/api/good-deeds/claims');
+
+        $claimResponse
+            ->assertStatus(201)
+            ->assertJsonPath('goodDeed.myClaim.status', 'approved')
+            ->assertJsonPath('goodDeed.myClaim.member.id', 'demo-owner')
+            ->assertJsonPath('goodDeed.myClaim.verifier.id', 'demo-owner')
+            ->assertJsonPath('goodDeed.myClaim.baseCaps', 25)
+            ->assertJsonPath('goodDeed.myClaim.photoBonusCaps', 0)
+            ->assertJsonPath('goodDeed.myClaim.totalCaps', 25)
+            ->assertJsonPath('awardedCaps', 25)
+            ->assertJsonPath('capsBalance', 1025)
+            ->assertJsonCount(0, 'goodDeed.pendingVerifications')
+            ->assertJsonCount(0, 'goodDeed.buddyOptions');
+
+        $claimId = $claimResponse->json('goodDeed.myClaim.id');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'demo-owner',
+            'caps_balance' => 1025,
+        ]);
+        $this->assertDatabaseHas('cap_transactions', [
+            'member_id' => 'demo-owner',
+            'amount' => 25,
+            'type' => 'weekly_good_deed',
+            'source_id' => $claimId,
+        ]);
+        $this->assertSame(1, DB::table('cap_transactions')->where('source_id', $claimId)->count());
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->postJson('/api/good-deeds/claims')
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du har allerede claimet ugens gode gerning.');
+    }
+
+    public function test_weekly_check_in_awards_caps_after_seven_days(): void
+    {
+        DB::table('members')->where('id', 'demo-owner')->update(['caps_balance' => 1000]);
+        $token = $this->issueTestMemberToken('demo-owner');
+        $baseDay = \Illuminate\Support\Carbon::parse('2026-05-04 10:00:00');
+
+        for ($day = 0; $day < 7; $day++) {
+            $this->travelTo($baseDay->copy()->addDays($day));
+
+            $expectedVisibleStreak = $day === 6 ? 1 : $day + 1;
+            $response = $this
+                ->withHeader('Authorization', 'Bearer '.$token)
+                ->postJson('/api/check-ins/weekly')
+                ->assertOk()
+                ->assertJsonPath('weeklyCheckIn.checkedInToday', true)
+                ->assertJsonPath('weeklyCheckIn.streak', $expectedVisibleStreak);
+
+            $response->assertJsonPath('awardedCaps', $day === 6 ? 100 : 0);
+        }
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'demo-owner',
+            'caps_balance' => 1100,
+        ]);
+        $this->assertDatabaseHas('cap_transactions', [
+            'member_id' => 'demo-owner',
+            'amount' => 100,
+            'type' => 'weekly_check_in',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->postJson('/api/check-ins/weekly')
+            ->assertOk()
+            ->assertJsonPath('weeklyCheckIn.streak', 1)
+            ->assertJsonPath('awardedCaps', 0);
+
+        $this->assertSame(1, DB::table('cap_transactions')->where('type', 'weekly_check_in')->count());
+        $this->assertSame(1100, (int) DB::table('members')->where('id', 'demo-owner')->value('caps_balance'));
+
+        $this->travelTo($baseDay->copy()->addDays(7));
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->getJson('/api/check-ins/weekly')
+            ->assertOk()
+            ->assertJsonPath('weeklyCheckIn.checkedInToday', false)
+            ->assertJsonPath('weeklyCheckIn.streak', 1);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->postJson('/api/check-ins/weekly')
+            ->assertOk()
+            ->assertJsonPath('weeklyCheckIn.streak', 2);
     }
 
     public function test_personal_codes_create_consent_based_connection_requests(): void

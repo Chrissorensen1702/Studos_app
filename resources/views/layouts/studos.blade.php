@@ -9,6 +9,11 @@
   </head>
   <body class="@yield('bodyClass')">
     @unless (trim($__env->yieldContent('hideHeader')))
+    <div class="app-dev-topbar" role="status">
+      <span>Studos er under udvikling.</span>
+      <span>Appen er endnu ikke offentligt tilgængelig, og download-knapperne vises kun som design-preview.</span>
+    </div>
+
     <header class="app-header">
       <a class="brand" href="{{ route('home') }}" aria-label="Studos">
         <img class="brand-logo" src="{{ asset('assets/studos-mark.svg') }}" alt="">
@@ -16,11 +21,11 @@
       </a>
 
       <nav class="top-nav" aria-label="Hovednavigation">
-        <details class="top-nav-dropdown">
-          <summary>
+        <div class="top-nav-dropdown">
+          <button class="top-nav-trigger" type="button" aria-haspopup="true">
             <span>Funktioner</span>
-            <span class="top-nav-chevron" aria-hidden="true">⌄</span>
-          </summary>
+            <span class="top-nav-chevron" aria-hidden="true"></span>
+          </button>
           <div class="top-nav-menu">
             <a href="{{ route('home') }}#landing-features-title">Kalender</a>
             <a href="{{ route('home') }}#landing-features-title">Chat</a>
@@ -30,7 +35,7 @@
             <a href="{{ route('home') }}#landing-features-title">Klasseawards</a>
             <a href="{{ route('home') }}#landing-features-title">Klassedyst</a>
           </div>
-        </details>
+        </div>
         <a href="{{ route('home') }}#landing-title">Om Studos</a>
         <a href="{{ route('home') }}#det-med-smaat">Moderation</a>
         <a href="{{ route('faq') }}">FAQ</a>

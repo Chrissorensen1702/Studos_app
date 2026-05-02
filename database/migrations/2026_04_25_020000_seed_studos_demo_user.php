@@ -11,7 +11,7 @@ return new class extends Migration
         DB::table('users')->updateOrInsert(
             ['email' => 'chris@skole.dk'],
             [
-                'name' => 'Chris',
+                'name' => 'Chris Elsborg Sørensen',
                 'password' => Hash::make('studos123'),
                 'email_verified_at' => now(),
                 'created_at' => now(),

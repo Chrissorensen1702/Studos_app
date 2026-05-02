@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-01 efter landing/header/footer-polish,
-FAQ-side og fjernelse af den gamle PWA-wrapper.
+Status er opdateret 2026-05-03 efter dynamiske Caps, Klassedyst,
+Optjen Caps, weekly streak og forenklet claim-flow for ugens gode gerning.
 
 Se ogsaa:
 
@@ -25,6 +25,15 @@ Se ogsaa:
 - Cloud ligger paa `https://studos.laravel.cloud`.
 - Cloud API ligger paa `https://studos.laravel.cloud/api`.
 - Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.83.
+- Caps er nu en dynamisk backend-enhed via `members.caps_balance` og
+  `cap_transactions`.
+- Klassedyst bruger API-data og rangerer klasser efter Caps pr. aktiv elev.
+- Optjen Caps-siden samler weekly streak, ugens gode gerning, QR-check-in og
+  duel-indgange.
+- Ugens gode gerning er et simpelt claim: 25 Caps, direkte godkendt, maks en
+  gang pr. bruger pr. uge.
+- Weekly streak checker automatisk ind, naar appen aabnes, og giver 100 Caps
+  efter 7 dage i traek.
 - Native release-builds kan bygges med Cloud-env baked ind og kraever ikke
   Metro.
 - Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
@@ -123,6 +132,8 @@ Kernen er:
 - Chat med direkte samtaler, gruppechats, Reverb/polling, mute, hide, leave,
   delete, report og block.
 - Connections via personlig Studos-kode.
+- Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
+  Klassedyst, ugens gode gerning og weekly check-in.
 - Android push-token registrering og chat-push.
 
 Roller pr. 2026-04-29:
@@ -146,6 +157,11 @@ POST /api/classes/join
 POST /api/session/login
 GET  /api/session/me
 POST /api/profile/photo
+GET  /api/class-battle
+GET  /api/good-deeds/current
+POST /api/good-deeds/claims
+GET  /api/check-ins/weekly
+POST /api/check-ins/weekly
 POST /api/events
 POST /api/events/{event}/update
 POST /api/events/{event}/delete
@@ -171,10 +187,11 @@ landing page.
 Hero:
 
 - Bruger `public/assets/landing-hero.png` som fuld hero-baggrund.
-- Viser Studos-wordmark, download-badges og app-mockup
-  `public/assets/mockup-index.png`.
-- Download-badges har en visuel gratis-callout: `Det er HELT gratis!` med
-  haandtegnet pil mod app-knapperne.
+- Viser Studos-wordmark og download-badges oven paa hero-billedet.
+- Download-badges ligger direkte under hero-teksten og matcher officielle
+  store-badge-stile.
+- Den interaktive mockup-carousel ligger oven paa hero-billedet i samme
+  placering som det tidligere iPhone-mockup og kan skiftes med pile.
 - Har en bloed bund-fade i CSS, saa overgangen til feature-sektionen ikke bliver
   haard.
 
@@ -197,7 +214,12 @@ Header/footer pr. 2026-05-01:
 
 - Header-nav viser ikke laengere `Forside` eller `Admin`; forside ligger paa
   logoet, og CMS-handlinger ligger i CTA/header-slot.
-- `Funktioner` er en CSS-only dropdown med links til feature-sektionen.
+- Landing-headeren bruger samme cremebase og mint/coral gradientretning som
+  footeren, men mere afdaempet, saa heroen stadig er hovedfokus.
+- Landing-siden viser en midlertidig topbar, der forklarer at appen er under
+  udvikling, og at download-knapperne kun er design-preview.
+- `Funktioner` er en CSS-only hover/focus-dropdown med links til
+  feature-sektionen.
 - Klasse-CMS viser `Log ud` i header-slot; invitekopiering ligger stadig inde i
   klassevisningen.
 - Footer er cremefarvet med mint/coral gradients, fire lige fordelte kolonner og
@@ -228,7 +250,8 @@ Footer-navigation:
 
 Sidebar:
 
-- `Din klasse`: Leaderboard, Dagens stemning, Klasseawards, Tilfaeldig vaelger.
+- `Din klasse`: Optjen Caps, Leaderboard, Dagens stemning, Klasseawards,
+  Tilfaeldig vaelger.
 - `Andre klasser`: Andre klasser, Klassedueller.
 - `Kommende`: Wallet og Blaa bog er laast.
 - Nederst: Noedkontakter og Indstillinger.
@@ -241,7 +264,8 @@ Overblik:
 - `Mit Studos` viser profil, QR, hueklip og klasseinfo.
 - Hueklip-gennemfoert gemmes lokalt pr. bruger, indtil brugeren selv aendrer
   det igen.
-- Caps-container viser brugerens forelobige `1.000 Caps` og knap til Duel.
+- Caps-container viser brugerens rigtige `DINE CAPS`, capcoin-logo og knap til
+  Optjen Caps.
 - `Min kommende kalender` viser alle dagens events og maks 3 kommende events.
 - Klik paa et event i Overblik aabner Kalender paa den rigtige dag/eventkort.
 - `Dagens stemning` gemmes lokalt pr. bruger og resetter ved lokal midnat.
@@ -263,6 +287,25 @@ Chat:
 - Long-press paa samtaler/beskeder giver handlinger.
 - Rapportering, blokering og moderation logs er startet.
 - Realtime bruger Laravel Reverb, med polling fallback.
+
+Klassedyst:
+
+- Siden henter dynamisk rangliste fra `GET /api/class-battle`.
+- Klasser rangeres efter Caps pr. aktiv elev, saa store og smaa klasser kan
+  sammenlignes mere fair.
+- Ranglisten viser total Caps, Caps pr. elev, medaljefarver til top 3 og
+  markerer brugerens egen klasse.
+- Topkort viser klassens placering, brugerens Caps og brugerens klasseandel.
+- Ugens gode gerning kan claimes direkte paa kortet og opdaterer Caps.
+
+Optjen Caps:
+
+- Siden bruger samme headerstil som de andre app-sider.
+- Weekly streak registreres automatisk ved app-aabning.
+- Dag 7 giver 100 Caps, viser reward-modal og starter derefter en ny streak.
+- Andre maader at optjene Caps ligger i en intern scroll-container:
+  Ugens gode gerning, Check-in med `Scan QR`, og dueller med point paa hoejkant.
+- Ugens gode gerning giver 25 Caps og kan kun claimes en gang pr. uge.
 
 ## Build-/Store-Konfiguration
 
@@ -347,7 +390,7 @@ Release-blokkere foer Apple/Google:
 - Walls/feed/galleri.
 - Klasseawards/afstemninger.
 - Noedkontakter.
-- Pointduel backend, Caps-transaktioner og duel-regler.
+- Pointduel backend og duel-regler.
 - Backend-persistens for Dagens stemning og hueklip.
 - Kalender-push og daglig stemningsreminder.
 - Glemt adgangskode/email reset.
@@ -376,20 +419,26 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-04-29 efter oprydning og rolle/CMS-stramning:
+Senest koert 2026-05-03 efter Caps/Klassedyst/Optjen Caps-arbejdet:
 
 ```bash
-php artisan test
-npm run mobile:push:check
-npm --workspace @studenter-app/mobile exec expo export -- --platform ios --output-dir /private/tmp/studos-cleanup-ios-export --clear
+php -l app/Http/Controllers/StudosController.php
+php -l database/migrations/2026_05_02_010000_create_good_deed_and_cap_transaction_tables.php
+php -l database/migrations/2026_05_02_030000_simplify_good_deed_claims.php
+php -l tests/Feature/ExampleTest.php
+node -e "const fs=require('fs'); const parser=require('@babel/parser'); const code=fs.readFileSync('apps/mobile/App.js','utf8'); parser.parse(code,{sourceType:'module',plugins:['jsx','optionalChaining','nullishCoalescingOperator','objectRestSpread']}); console.log('App.js parse ok');"
+php artisan migrate
+php artisan test --filter test_class_battle_ranks_classes_by_caps_per_active_member
+php artisan test --filter test_weekly_good_deed_claim_awards_caps_once_without_buddy_or_photo
+php artisan test --filter test_weekly_check_in_awards_caps_after_seven_days
 ```
 
 Resultat:
 
-- `php artisan test`: 28 tests passed, 351 assertions.
-- `npm run mobile:push:check`: OK for baade `dk.studenterapp.mobile` og
-  `dk.studenterapp.mobile.dev`.
-- iOS Expo export: OK. Kun kendte Node `NO_COLOR`/`FORCE_COLOR` warnings.
+- PHP lint: OK.
+- `App.js parse ok`.
+- Migration koert lokalt.
+- 3 maalrettede feature-tests passer.
 
 ## Naeste Gode Skridt
 
@@ -397,6 +446,6 @@ Resultat:
 2. Lav privacy policy, terms/EULA og supportside paa web.
 3. Lav admin/moderationsside.
 4. Kør to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
-5. Gør Dagens stemning/hueklip/Caps rigtige i backend.
+5. Gør Dagens stemning/hueklip rigtige i backend.
 6. Lav App Store Connect metadata, screenshots, privacy labels og review notes.
 7. Lav production iOS/TestFlight build og Android production AAB.
