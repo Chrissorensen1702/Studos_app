@@ -175,6 +175,7 @@ POST /api/chat/conversations/{conversation}/report
 POST /api/chat/conversations/{conversation}/block
 POST /api/chat/messages/{message}/report
 DELETE /api/chat/messages/{message}
+DELETE /api/members/me
 POST /api/notifications/push-token
 POST /api/notifications/test
 ```
@@ -255,6 +256,11 @@ Sidebar:
 - `Andre klasser`: Andre klasser, Klassedueller.
 - `Kommende`: Wallet og Blaa bog er laast.
 - Nederst: Noedkontakter og Indstillinger.
+
+`Min profil` findes i sidebaren. Profilen viser elevoplysninger, QR/Studos-kode,
+profilfoto, samt handlinger til at ændre avatar, logge ud og slette konto.
+Sletning sker via `DELETE /api/members/me` med irreversibel flow, hvor brugeren
+bliver advaret tydeligt i UI.
 
 Overblik:
 
@@ -366,7 +372,8 @@ Det der ser godt ud:
 
 Release-blokkere foer Apple/Google:
 
-- Kontosletning skal kunne startes inde i appen og via offentlig webside.
+- Kontosletning er implementeret i appen (`DELETE /api/members/me`) med
+  tydelig irreversibel advarsel og anonymiseringsflow.
 - Privatlivspolitik, vilkaar/EULA og supportside skal vaere live og linket fra
   appen/store listings.
 - App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
@@ -397,7 +404,7 @@ Release-blokkere foer Apple/Google:
 - Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
 - Admin/moderationsside.
-- Kontosletning/data-export flow.
+- Data-export flow.
 
 ## Testdata
 
@@ -442,8 +449,8 @@ Resultat:
 
 ## Naeste Gode Skridt
 
-1. Lav kontosletning i app + offentlig deletion URL.
-2. Lav privacy policy, terms/EULA og supportside paa web.
+1. Færdiggør offentlig deletion URL + brugergodkendt slette-flow i websupport.
+2. Opdater privacy policy, terms/EULA og supportside med tydelig deletion/anonymisering.
 3. Lav admin/moderationsside.
 4. Kør to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
 5. Gør Dagens stemning/hueklip rigtige i backend.

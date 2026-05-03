@@ -134,6 +134,110 @@ class ExampleTest extends TestCase
             ->assertJsonMissingPath('member.birthday');
     }
 
+    public function test_member_can_delete_own_account_and_related_data_is_anonymized(): void
+    {
+        $memberId = 'delete-self';
+        $inviteTargetId = 'delete-event-target';
+        $eventId = 'delete-event-1';
+        $inviteId = 'delete-invite-1';
+        $reportId = 'delete-report-1';
+        $violationId = 'delete-violation-1';
+        $pushTokenId = 'delete-push-token';
+
+        $this->createActiveDemoMember($memberId, 'Delete Me', 'delete.me@example.test');
+        $this->createActiveDemoMember($inviteTargetId, 'Invite Target', 'invite.target@example.test');
+
+        DB::table('events')->insert([
+            'id' => $eventId,
+            'class_id' => 'demo-class',
+            'title' => 'Sletningstjek',
+            'event_date' => now()->toDateString(),
+            'rsvp_count' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+            'created_by_member_id' => $memberId,
+        ]);
+
+        DB::table('event_invites')->insert([
+            'id' => $inviteId,
+            'event_id' => $eventId,
+            'member_id' => $inviteTargetId,
+            'invited_by_member_id' => $memberId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('member_reports')->insert([
+            'id' => $reportId,
+            'reporter_member_id' => $memberId,
+            'reported_member_id' => $inviteTargetId,
+            'target_type' => 'member',
+            'target_id' => $inviteTargetId,
+            'reason' => 'Test rapport',
+            'status' => 'pending',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('moderation_violations')->insert([
+            'id' => $violationId,
+            'member_id' => $memberId,
+            'class_id' => 'demo-class',
+            'source' => 'account_deletion_test',
+            'field' => 'email',
+            'violation_type' => 'test',
+            'input_hash' => Str::random(64),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('member_push_tokens')->insert([
+            'id' => $pushTokenId,
+            'member_id' => $memberId,
+            'expo_push_token' => 'ExponentPushToken[delete-test-token]',
+            'platform' => 'ios',
+            'project_id' => 'studos-test',
+            'last_registered_at' => now(),
+            'created_at' => now(),
+        ]);
+
+        $token = $this->issueTestMemberToken($memberId);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->deleteJson('/api/members/me')
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('message', 'Kontoen er slettet permanent og personoplysninger er anonymiseret.');
+
+        $deletedMember = DB::table('members')->where('id', $memberId)->first();
+
+        $this->assertNotNull($deletedMember);
+        $this->assertSame('removed', $deletedMember->status);
+        $this->assertNotNull($deletedMember->deletion_requested_at);
+        $this->assertNotNull($deletedMember->deleted_at);
+        $this->assertStringStartsWith('Slettet bruger ', $deletedMember->display_name);
+        $this->assertNull($deletedMember->first_name);
+        $this->assertNull($deletedMember->last_name);
+        $this->assertNull($deletedMember->email);
+        $this->assertNull($deletedMember->phone);
+        $this->assertNull($deletedMember->birthday);
+        $this->assertNull($deletedMember->personal_code);
+        $this->assertNull($deletedMember->profile_photo_url);
+        $this->assertNull($deletedMember->password_hash);
+        $this->assertNull($deletedMember->terms_accepted_at);
+        $this->assertNull($deletedMember->privacy_accepted_at);
+        $this->assertNull($deletedMember->privacy_version);
+
+        $this->assertSame(0, DB::table('member_auth_tokens')->where('member_id', $memberId)->count());
+        $this->assertSame(0, DB::table('member_push_tokens')->where('member_id', $memberId)->count());
+        $this->assertNull(DB::table('events')->where('id', $eventId)->value('created_by_member_id'));
+        $this->assertNull(DB::table('event_invites')->where('id', $inviteId)->value('invited_by_member_id'));
+        $this->assertNull(DB::table('member_reports')->where('id', $reportId)->value('reporter_member_id'));
+        $this->assertNull(DB::table('member_reports')->where('id', $reportId)->value('reported_member_id'));
+        $this->assertNull(DB::table('moderation_violations')->where('id', $violationId)->value('member_id'));
+    }
+
     public function test_class_battle_ranks_classes_by_caps_per_active_member(): void
     {
         DB::table('members')->where('id', 'demo-owner')->update(['caps_balance' => 1000]);

@@ -356,25 +356,11 @@ const APP_DRAWER_SECTIONS = [
     title: 'Din klasse',
     items: [
       { id: 'earnCaps', label: 'Optjen Caps', icon: 'sparkles-outline', activeIcon: 'sparkles', accentColor: STUDOS_THEME.yellow },
-      { id: 'leaderboard', label: 'Leaderboard', icon: 'stats-chart-outline', activeIcon: 'stats-chart', accentColor: STUDOS_THEME.red },
-      { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
+      { id: 'classBattle', label: 'Leaderboard', icon: 'podium-outline', activeIcon: 'podium', accentColor: STUDOS_THEME.yellow },
       { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
       { id: 'badges', label: 'Klasseawards', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
-      { id: 'randomizer', label: 'Randomizer', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
-    ],
-  },
-  {
-    title: 'Andre klasser',
-    items: [
-      { id: 'connections', label: 'Andre klasser', icon: 'person-add-outline', activeIcon: 'person-add', accentColor: STUDOS_THEME.blue },
-      { id: 'classBattle', label: 'Klassedyst', icon: 'podium-outline', activeIcon: 'podium', accentColor: STUDOS_THEME.yellow },
-    ],
-  },
-  {
-    title: 'Kommer snart',
-    items: [
-      { id: 'wallet', label: 'Wallet', icon: 'wallet-outline', activeIcon: 'wallet', accentColor: STUDOS_THEME.yellow, locked: true },
-      { id: 'bluebook', label: 'Blå bog', icon: 'book-outline', activeIcon: 'book', accentColor: STUDOS_THEME.blue, locked: true },
+      { id: 'randomizer', label: 'Mini games', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
+      { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
     ],
   },
 ];
@@ -386,7 +372,6 @@ const GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES = [
   { id: 'preview-2g', className: '2.G', schoolName: 'Roskilde Gymnasium', score: 13990, movement: 'ny' },
   { id: 'preview-3c', className: '3.C', schoolName: 'Viby Handelsgymnasium', score: 12630, movement: '-2' },
 ];
-const CLASS_BATTLE_GOOD_DEEDS_GOAL = 23000;
 
 const emptyProfile = {
   schoolId: '',
@@ -412,6 +397,41 @@ const formatDate = (value) => {
     day: '2-digit',
     month: 'short',
   }).format(new Date(`${value}T12:00:00`));
+};
+
+const formatProfileDate = (value) => {
+  const rawValue = String(value ?? '').trim();
+
+  if (!rawValue) {
+    return 'Ikke angivet';
+  }
+
+  const dateFromYmd = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const date = dateFromYmd
+    ? new Date(Number(dateFromYmd[1]), Number(dateFromYmd[2]) - 1, Number(dateFromYmd[3]))
+    : new Date(rawValue);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Ikke angivet';
+  }
+
+  return new Intl.DateTimeFormat('da-DK', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+};
+
+const PROFILE_ROLE_LABELS = {
+  owner: 'Ejer',
+  moderator: 'Moderator',
+  student: 'Elev',
+};
+
+const PROFILE_STATUS_LABELS = {
+  active: 'Aktiv',
+  pending: 'Afventer',
+  removed: 'Fjernet',
 };
 
 const formatInputDate = (date = new Date()) => {
@@ -1413,7 +1433,8 @@ export default function App() {
   const appContentDetached = activeTab === 'chat'
     || activeTab === 'calendar'
     || activeTab === 'overview'
-    || activeTab === 'earnCaps';
+    || activeTab === 'earnCaps'
+    || activeTab === 'classBattle';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
@@ -2044,9 +2065,7 @@ export default function App() {
       const data = await apiFetch('/profile/photo', {
         authToken: session.token,
         method: 'POST',
-        body: JSON.stringify({
-          profilePhotoData,
-        }),
+        body: JSON.stringify({ profilePhotoData }),
       });
       const nextSession = {
         ...data.session,
@@ -2065,6 +2084,32 @@ export default function App() {
       return true;
     } catch (apiError) {
       setError(apiError.message || 'Profilbilledet kunne ikke gemmes.');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteCurrentAccount = async () => {
+    if (!session?.token) {
+      setError('Login mangler.');
+      return false;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      await apiFetch('/members/me', {
+        authToken: session.token,
+        method: 'DELETE',
+      });
+
+      await clearSession();
+
+      return true;
+    } catch (apiError) {
+      setError(apiError.message || 'Din konto kunne ikke slettes.');
       return false;
     } finally {
       setLoading(false);
@@ -2300,6 +2345,7 @@ export default function App() {
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
+                activeTab === 'classBattle' ? styles.appScreenClassBattleDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
               ]}>
@@ -2322,6 +2368,8 @@ export default function App() {
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
+                  onLogout={clearSession}
+                  onDeleteAccount={deleteCurrentAccount}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
@@ -2361,6 +2409,8 @@ export default function App() {
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
                   onProfilePhotoUpdate={updateCurrentProfilePhoto}
+                  onLogout={clearSession}
+                  onDeleteAccount={deleteCurrentAccount}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
@@ -2533,6 +2583,8 @@ function AppTabScreen({
   onBlockMember,
   onCapsBalanceChange,
   onProfilePhotoUpdate,
+  onLogout,
+  onDeleteAccount,
   onRequestScrollTop,
   onReportEvent,
   onRespondToEvent,
@@ -2575,6 +2627,8 @@ function AppTabScreen({
         profile={profile}
         schoolClass={schoolClass}
         onProfilePhotoUpdate={onProfilePhotoUpdate}
+        onLogout={onLogout}
+        onDeleteAccount={onDeleteAccount}
       />
     );
   }
@@ -2664,7 +2718,7 @@ function AppTabScreen({
       <ClassBattleScreen
         activeMember={activeMember}
         events={events}
-        onCapsBalanceChange={onCapsBalanceChange}
+        onOpenEarnCaps={() => onChangeTab?.('earnCaps')}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
       />
@@ -2707,26 +2761,14 @@ function AppTabScreen({
     );
   }
 
-  if (activeTab === 'leaderboard') {
-    return (
-      <FeatureScreen
-        icon="stats-chart"
-        kicker={schoolClass.className}
-        title="Leaderboard"
-        emptyTitle="Ingen point endnu"
-        emptyText="Point fra dyste, badges og udfordringer bliver samlet her."
-      />
-    );
-  }
-
   if (activeTab === 'randomizer') {
     return (
       <FeatureScreen
         icon="shuffle"
         kicker={schoolClass.className}
-        title="Randomizer"
+        title="Mini games"
         emptyTitle="Ingen challenges endnu"
-        emptyText="Træk en tilfældig challenge, person eller mission til klassen."
+        emptyText="Indholdet er på vej med små spil og spontane udfordringer for klassen."
       />
     );
   }
@@ -5946,7 +5988,8 @@ function CalendarScreen({
     const attendeeOverflowCount = Math.max(0, attendingCount - attendeePreview.length);
     const attendingLoading = respondingEventId === `${event.id}:attending`;
     const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
-    const responseLocked = Boolean(respondingEventId) || past;
+    const ownsEvent = memberOwnsEvent(event);
+    const canRespond = !past && !ownsEvent;
     const eventCoverTemplate = eventCoverTemplateFor(event.coverImageTemplateId);
     const hasEventCover = Boolean(event.coverImageUrl || eventCoverTemplate);
 
@@ -6119,62 +6162,60 @@ function CalendarScreen({
             </View>
           </Pressable>
 
-          {!past ? (
+          {canRespond ? (
             <View style={styles.calendarRsvpRow}>
               <Pressable
                 accessibilityRole="button"
-                disabled={responseLocked}
                 onPress={() => respondToEvent(event.id, 'attending')}
                 style={({ pressed }) => [
                   styles.calendarRsvpButton,
                   event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
-                  pressed && !responseLocked ? styles.footerItemPressed : null,
+                  pressed ? styles.footerItemPressed : null,
                 ]}
               >
                 {attendingLoading ? (
                   <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
                 ) : (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={17}
-                    color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
-                  />
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={17}
+                      color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
+                    />
                 )}
-                <Text
-                  style={[
-                    styles.calendarRsvpText,
-                    event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
-                  ]}
-                >
-                  Deltager
+                  <Text
+                    style={[
+                      styles.calendarRsvpText,
+                      event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                    ]}
+                  >
+                    Deltager
                 </Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
-                disabled={responseLocked}
                 onPress={() => respondToEvent(event.id, 'not_attending')}
                 style={({ pressed }) => [
                   styles.calendarRsvpButton,
                   event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
-                  pressed && !responseLocked ? styles.footerItemPressed : null,
+                  pressed ? styles.footerItemPressed : null,
                 ]}
               >
                 {notAttendingLoading ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
-                  <Ionicons
-                    name="close-circle"
-                    size={17}
-                    color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
-                  />
+                    <Ionicons
+                      name="close-circle"
+                      size={17}
+                      color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
+                    />
                 )}
-                <Text
-                  style={[
-                    styles.calendarRsvpText,
-                    event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
-                  ]}
-                >
-                  Deltager ikke
+                  <Text
+                    style={[
+                      styles.calendarRsvpText,
+                      event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
+                    ]}
+                  >
+                    Deltager ikke
                 </Text>
               </Pressable>
             </View>
@@ -6447,7 +6488,8 @@ function CalendarScreen({
                 const eventTime = formatCalendarTime(event.startsAt);
                 const attendingLoading = respondingEventId === `${event.id}:attending`;
                 const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
-                const responseLocked = Boolean(respondingEventId);
+                const ownsEvent = memberOwnsEvent(event);
+                const canRespond = !ownsEvent;
 
                 return (
                   <View key={event.id} style={styles.calendarPendingResponseRow}>
@@ -6470,42 +6512,42 @@ function CalendarScreen({
                         {dateParts.weekday}{eventTime ? ` kl. ${eventTime}` : ''}
                       </Text>
                     </View>
-                    <View style={styles.calendarPendingResponseActions}>
-                      <Pressable
-                        accessibilityLabel={`Deltager i ${event.title}`}
-                        accessibilityRole="button"
-                        disabled={responseLocked}
-                        onPress={() => respondToEvent(event.id, 'attending')}
-                        style={({ pressed }) => [
-                          styles.calendarPendingResponseActionButton,
-                          styles.calendarPendingResponseActionAccept,
-                          pressed && !responseLocked ? styles.footerItemPressed : null,
-                        ]}
-                      >
-                        {attendingLoading ? (
-                          <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
-                        ) : (
-                          <Ionicons name="checkmark" size={17} color={STUDOS_THEME.ink} />
-                        )}
-                      </Pressable>
-                      <Pressable
-                        accessibilityLabel={`Deltager ikke i ${event.title}`}
-                        accessibilityRole="button"
-                        disabled={responseLocked}
-                        onPress={() => respondToEvent(event.id, 'not_attending')}
-                        style={({ pressed }) => [
-                          styles.calendarPendingResponseActionButton,
-                          styles.calendarPendingResponseActionDecline,
-                          pressed && !responseLocked ? styles.footerItemPressed : null,
-                        ]}
-                      >
-                        {notAttendingLoading ? (
-                          <ActivityIndicator color="#FFFFFF" size="small" />
-                        ) : (
-                          <Ionicons name="close" size={17} color="#FFFFFF" />
-                        )}
-                      </Pressable>
-                    </View>
+                    {canRespond ? (
+                      <View style={styles.calendarPendingResponseActions}>
+                        <Pressable
+                          accessibilityLabel={`Deltager i ${event.title}`}
+                          accessibilityRole="button"
+                          onPress={() => respondToEvent(event.id, 'attending')}
+                          style={({ pressed }) => [
+                            styles.calendarPendingResponseActionButton,
+                            styles.calendarPendingResponseActionAccept,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          {attendingLoading ? (
+                            <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                          ) : (
+                            <Ionicons name="checkmark" size={17} color={STUDOS_THEME.ink} />
+                          )}
+                        </Pressable>
+                        <Pressable
+                          accessibilityLabel={`Deltager ikke i ${event.title}`}
+                          accessibilityRole="button"
+                          onPress={() => respondToEvent(event.id, 'not_attending')}
+                          style={({ pressed }) => [
+                            styles.calendarPendingResponseActionButton,
+                            styles.calendarPendingResponseActionDecline,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          {notAttendingLoading ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                          ) : (
+                            <Ionicons name="close" size={17} color="#FFFFFF" />
+                          )}
+                        </Pressable>
+                      </View>
+                    ) : null}
                   </View>
                 );
               })}
@@ -7288,8 +7330,8 @@ function CalendarScreen({
             const attendeeOverflowCount = Math.max(0, attendingCount - attendeePreview.length);
             const attendingLoading = respondingEventId === `${event.id}:attending`;
             const notAttendingLoading = respondingEventId === `${event.id}:not_attending`;
-            const responseLocked = Boolean(respondingEventId);
-            const manageable = memberOwnsEvent(event);
+            const ownsEvent = memberOwnsEvent(event);
+            const canRespond = !ownsEvent;
             const eventCoverTemplate = eventCoverTemplateFor(event.coverImageTemplateId);
             const hasEventCover = Boolean(event.coverImageUrl || eventCoverTemplate);
 
@@ -7453,64 +7495,64 @@ function CalendarScreen({
                     </View>
                   </Pressable>
 
-                  <View style={styles.calendarRsvpRow}>
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={responseLocked}
-                      onPress={() => respondToEvent(event.id, 'attending')}
-                      style={({ pressed }) => [
-                        styles.calendarRsvpButton,
-                        event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
-                        pressed && !responseLocked ? styles.footerItemPressed : null,
-                      ]}
-                    >
-                      {attendingLoading ? (
-                        <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
-                      ) : (
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={17}
-                          color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.calendarRsvpText,
-                          event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                  {!canRespond ? null : (
+                    <View style={styles.calendarRsvpRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => respondToEvent(event.id, 'attending')}
+                        style={({ pressed }) => [
+                          styles.calendarRsvpButton,
+                          event.myRsvp === 'attending' ? styles.calendarRsvpButtonAttending : null,
+                          pressed ? styles.footerItemPressed : null,
                         ]}
                       >
-                        Deltager
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={responseLocked}
-                      onPress={() => respondToEvent(event.id, 'not_attending')}
-                      style={({ pressed }) => [
-                        styles.calendarRsvpButton,
-                        event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
-                        pressed && !responseLocked ? styles.footerItemPressed : null,
-                      ]}
-                    >
-                      {notAttendingLoading ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : (
-                        <Ionicons
-                          name="close-circle"
-                          size={17}
-                          color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.calendarRsvpText,
-                          event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
+                        {attendingLoading ? (
+                          <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                        ) : (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={17}
+                            color={event.myRsvp === 'attending' ? STUDOS_THEME.ink : STUDOS_THEME.blue}
+                          />
+                        )}
+                        <Text
+                          style={[
+                            styles.calendarRsvpText,
+                            event.myRsvp === 'attending' ? styles.calendarRsvpTextActive : null,
+                          ]}
+                        >
+                          Deltager
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => respondToEvent(event.id, 'not_attending')}
+                        style={({ pressed }) => [
+                          styles.calendarRsvpButton,
+                          event.myRsvp === 'not_attending' ? styles.calendarRsvpButtonDeclined : null,
+                          pressed ? styles.footerItemPressed : null,
                         ]}
                       >
-                        Deltager ikke
-                      </Text>
-                    </Pressable>
-                  </View>
+                        {notAttendingLoading ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <Ionicons
+                            name="close-circle"
+                            size={17}
+                            color={event.myRsvp === 'not_attending' ? '#FFFFFF' : STUDOS_THEME.red}
+                          />
+                        )}
+                        <Text
+                          style={[
+                            styles.calendarRsvpText,
+                            event.myRsvp === 'not_attending' ? styles.calendarRsvpTextDeclined : null,
+                          ]}
+                        >
+                          Deltager ikke
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
                 </View>
               </View>
             );
@@ -7814,14 +7856,11 @@ function CalendarScreen({
   );
 }
 
-function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, schoolClass, sessionToken }) {
+function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolClass, sessionToken }) {
   const leaderboardScrollRef = useRef(null);
+  const [leaderboardScope, setLeaderboardScope] = useState('global');
   const [classBattleData, setClassBattleData] = useState(null);
   const [classBattleRowsScrolled, setClassBattleRowsScrolled] = useState(false);
-  const [goodDeedData, setGoodDeedData] = useState(null);
-  const [goodDeedLoading, setGoodDeedLoading] = useState(false);
-  const [goodDeedSubmitting, setGoodDeedSubmitting] = useState(false);
-  const [goodDeedError, setGoodDeedError] = useState('');
   const activeMembers = schoolClass?.members?.filter((member) => member.status === 'active') ?? [];
   const currentMember = activeMembers.find((member) => String(member.id) === String(activeMember?.id));
   const capsForMember = (member) => {
@@ -7872,8 +7911,30 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
       || String(left.className ?? '').localeCompare(String(right.className ?? ''), 'da')
     ))
     .map((row, index) => ({ ...row, rank: index + 1 }));
+  const memberNameFor = (member) => {
+    const fullName = [member?.firstName, member?.lastName].filter(Boolean).join(' ').trim();
+
+    return member?.displayName || fullName || member?.email || 'Ukendt elev';
+  };
+  const classRows = classScoreMembers
+    .map((member) => ({
+      id: member?.id ?? member?.email ?? memberNameFor(member),
+      className: memberNameFor(member),
+      schoolName: schoolClass?.className ?? 'Din klasse',
+      score: capsForMember(member),
+      current: String(member?.id) === String(activeMember?.id),
+      currentPillText: 'Dig',
+    }))
+    .sort((left, right) => (
+      (right.score - left.score)
+      || String(left.className ?? '').localeCompare(String(right.className ?? ''), 'da')
+    ))
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+  const isClassLeaderboard = leaderboardScope === 'class';
+  const visibleRows = isClassLeaderboard ? classRows : rows;
   const currentRow = rows.find((row) => row.current) ?? rows[0];
-  const currentRowIndex = rows.findIndex((row) => row.current);
+  const visibleCurrentRow = visibleRows.find((row) => row.current) ?? currentRow ?? visibleRows[0];
+  const visibleCurrentRowIndex = visibleRows.findIndex((row) => row.current);
   const currentClassTotalCaps = Number.isFinite(Number(currentRow?.totalCaps))
     ? Number(currentRow.totalCaps)
     : localClassTotalCaps;
@@ -7882,64 +7943,10 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
   const memberClassShare = currentClassTotalCaps > 0
     ? Math.min(100, Math.max(0, (memberCaps / currentClassTotalCaps) * 100))
     : 0;
-  const goodDeedsProgress = Math.min(
-    100,
-    Math.max(0, Math.round((currentClassTotalCaps / CLASS_BATTLE_GOOD_DEEDS_GOAL) * 100)),
-  );
-  const goodDeedsBubblePosition = Math.min(88, Math.max(12, goodDeedsProgress));
   const formatNumber = (value) => new Intl.NumberFormat('da-DK').format(value);
   const formatPercent = (value) => new Intl.NumberFormat('da-DK', {
     maximumFractionDigits: 1,
   }).format(value);
-  const goodDeedWeek = goodDeedData?.week ?? null;
-  const goodDeedClaim = goodDeedData?.myClaim ?? null;
-  const goodDeedBaseCaps = Number.isFinite(Number(goodDeedWeek?.baseCaps)) ? Number(goodDeedWeek.baseCaps) : 25;
-  const goodDeedClaimStatus = goodDeedClaim?.status ?? '';
-  const canClaimGoodDeed = Boolean(sessionToken)
-    && !goodDeedSubmitting
-    && !goodDeedClaim;
-  const goodDeedStatusText = goodDeedClaim
-    ? `Claimet +${formatNumber(goodDeedClaim?.totalCaps ?? goodDeedBaseCaps)}`
-    : '';
-  const refreshClassBattleData = useCallback(async () => {
-    if (!sessionToken) {
-      setClassBattleData(null);
-      return null;
-    }
-
-    try {
-      const data = await apiFetch('/class-battle', { authToken: sessionToken });
-
-      setClassBattleData(data);
-      return data;
-    } catch {
-      setClassBattleData(null);
-      return null;
-    }
-  }, [sessionToken]);
-  const refreshGoodDeedData = useCallback(async () => {
-    if (!sessionToken) {
-      setGoodDeedData(null);
-      return null;
-    }
-
-    setGoodDeedLoading(true);
-
-    try {
-      const data = await apiFetch('/good-deeds/current', { authToken: sessionToken });
-      const nextGoodDeed = data?.goodDeed ?? null;
-
-      setGoodDeedData(nextGoodDeed);
-      setGoodDeedError('');
-      return nextGoodDeed;
-    } catch (apiError) {
-      setGoodDeedData(null);
-      setGoodDeedError(apiError.message || 'Ugens gode gerning kunne ikke hentes.');
-      return null;
-    } finally {
-      setGoodDeedLoading(false);
-    }
-  }, [sessionToken]);
   useEffect(() => {
     if (!sessionToken) {
       setClassBattleData(null);
@@ -7964,42 +7971,18 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
       cancelled = true;
     };
   }, [sessionToken]);
-  useEffect(() => {
-    refreshGoodDeedData();
-  }, [refreshGoodDeedData]);
-  const submitGoodDeedClaim = async () => {
-    if (!canClaimGoodDeed) {
-      return;
-    }
-
-    setGoodDeedSubmitting(true);
-    setGoodDeedError('');
-
-    try {
-      const data = await apiFetch('/good-deeds/claims', {
-        authToken: sessionToken,
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-
-      setGoodDeedData(data?.goodDeed ?? null);
-      if (Number.isFinite(Number(data?.capsBalance))) {
-        onCapsBalanceChange?.(Number(data.capsBalance));
-      }
-      refreshClassBattleData();
-    } catch (apiError) {
-      setGoodDeedError(apiError.message || 'Den gode gerning kunne ikke claimes.');
-    } finally {
-      setGoodDeedSubmitting(false);
-    }
+  const changeLeaderboardScope = (nextScope) => {
+    setLeaderboardScope(nextScope);
+    setClassBattleRowsScrolled(false);
+    leaderboardScrollRef.current?.scrollTo({ y: 0, animated: false });
   };
-  const scrollToCurrentClass = () => {
-    if (currentRowIndex < 0) {
+  const scrollToCurrentLeaderboardRow = () => {
+    if (visibleCurrentRowIndex < 0) {
       return;
     }
 
     leaderboardScrollRef.current?.scrollTo({
-      y: Math.max(0, currentRowIndex * 72 - 8),
+      y: Math.max(0, visibleCurrentRowIndex * 72 - 8),
       animated: true,
     });
   };
@@ -8010,128 +7993,116 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
   }, []);
 
   return (
-    <View style={styles.flowStack}>
-      <View style={styles.classBattleHeroHeader}>
-        <View style={styles.classBattleHeroCopy}>
-          <ClassBattleTitle />
-          <Text style={styles.classBattleIntroText}>
-            Hvem har udført flest gode gerninger og vundet flest dueller?
-          </Text>
-          <View style={styles.classBattleGoodDeedCard}>
-            <View style={styles.classBattleGoodDeedCardTop}>
-              <View style={styles.classBattleGoodDeedIcon}>
-                <Ionicons name="sparkles" size={15} color={STUDOS_THEME.ink} />
-              </View>
-              <Text numberOfLines={1} style={styles.classBattleGoodDeedKicker}>
-                Ugens gode gerning
-              </Text>
-              <View style={styles.classBattleGoodDeedCapsPill}>
-                <Text style={styles.classBattleGoodDeedCapsText}>+{formatNumber(goodDeedBaseCaps)}</Text>
-                <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleGoodDeedCapsCoin} />
-              </View>
-            </View>
-            <Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.classBattleGoodDeedTitle}>
-              {goodDeedWeek?.title ?? (goodDeedLoading ? 'Henter mission...' : 'Gør én lille god ting for klassen')}
+    <View style={styles.classBattleScreen}>
+      <View>
+        <View style={styles.classBattleHeroHeader}>
+          <View style={styles.classBattleHeroCopy}>
+            <ClassBattleTitle />
+            <Text style={styles.classBattleIntroText}>
+              Hvem har udført flest gode gerninger og vundet flest dueller?
             </Text>
-            <View style={styles.classBattleGoodDeedFooter}>
-              {goodDeedStatusText ? (
-                <View style={[
-                  styles.classBattleGoodDeedStatusPill,
-                  goodDeedClaimStatus === 'approved' ? styles.classBattleGoodDeedStatusPillApproved : null,
-                  ['rejected', 'expired'].includes(goodDeedClaimStatus) ? styles.classBattleGoodDeedStatusPillMuted : null,
-                ]}>
-                  <Text numberOfLines={1} style={styles.classBattleGoodDeedStatusText}>
-                    {goodDeedStatusText}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
             <Pressable
               accessibilityRole="button"
-              disabled={!canClaimGoodDeed}
-              onPress={submitGoodDeedClaim}
+              onPress={onOpenEarnCaps}
               style={({ pressed }) => [
-                styles.classBattleGoodDeedButton,
-                !canClaimGoodDeed ? styles.classBattleGoodDeedButtonDisabled : null,
-                pressed && canClaimGoodDeed ? styles.footerItemPressed : null,
+                styles.classBattleGoodDeedCard,
+                pressed ? styles.footerItemPressed : null,
               ]}
             >
-              {goodDeedSubmitting ? (
-                <ActivityIndicator color={STUDOS_THEME.yellow} size="small" />
-              ) : (
-                <>
-                  <Ionicons
-                    name={goodDeedClaim ? 'checkmark-circle' : 'sparkles'}
-                    size={13}
-                    color={!canClaimGoodDeed ? '#65748b' : STUDOS_THEME.yellow}
-                  />
-                  <Text style={[
-                    styles.classBattleGoodDeedButtonText,
-                    !canClaimGoodDeed ? styles.classBattleGoodDeedButtonTextDisabled : null,
-                  ]}>
-                    {goodDeedClaim ? 'Claimet' : 'Claim'}
-                  </Text>
-                </>
-              )}
-            </Pressable>
-            {goodDeedError ? (
-              <Text numberOfLines={2} style={styles.classBattleGoodDeedInlineError}>
-                {goodDeedError}
+              <View style={styles.classBattleGoodDeedCardTop}>
+                <View style={styles.classBattleGoodDeedIcon}>
+                  <Ionicons name="sparkles" size={15} color={STUDOS_THEME.ink} />
+                </View>
+                <Text numberOfLines={1} style={styles.classBattleGoodDeedKicker}>
+                  OPTJEN FLERE CAPS
+                </Text>
+              </View>
+              <Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.classBattleGoodDeedTitle}>
+                Gode gerninger, streaks og check-ins
               </Text>
-            ) : null}
+              <View style={styles.classBattleGoodDeedFooter}>
+                <View style={[styles.classBattleGoodDeedButton, styles.classBattleGoodDeedButtonWide]}>
+                  <Ionicons name="sparkles" size={13} color={STUDOS_THEME.yellow} />
+                  <Text style={styles.classBattleGoodDeedButtonText}>Åbn Optjen Caps</Text>
+                </View>
+              </View>
+            </Pressable>
           </View>
-          <View style={styles.classBattleGoodDeedsProgress}>
-            <Text style={styles.classBattleGoodDeedsText}>
-              Årets gode gerninger er i hus
-            </Text>
-            <View style={styles.classBattleGoodDeedsTrack}>
-              <View style={[styles.classBattleGoodDeedsFill, { width: `${goodDeedsProgress}%` }]} />
-              <View style={[styles.classBattleGoodDeedsBubble, { left: `${goodDeedsBubblePosition}%` }]}>
-                <Text style={styles.classBattleGoodDeedsBubbleText}>{goodDeedsProgress}%</Text>
+
+          <View style={styles.classBattleHeroStats}>
+            <View style={styles.classBattleHeaderStatCard}>
+              <Text style={styles.classBattleStatLabel}>Placering</Text>
+              <Text style={styles.classBattleStatValue}>#{visibleCurrentRow?.rank ?? '-'}</Text>
+            </View>
+            <View style={styles.classBattleHeaderStatCard}>
+              <Text style={styles.classBattleStatLabel}>Dine Caps</Text>
+              <View style={styles.classBattleStatValueRow}>
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  numberOfLines={1}
+                  style={[styles.classBattleStatValue, styles.classBattleCapsStatValue]}
+                >
+                  {formatNumber(memberCaps)}
+                </Text>
+                <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleStatCoinImage} />
               </View>
             </View>
-          </View>
-          <View style={styles.classBattleHeroLeaderboardHeader}>
-            <Text style={styles.classBattleSectionTitle}>Global rangliste</Text>
-            <Text style={styles.classBattleSectionMeta}>Skoleåret {schoolYear}</Text>
+            <View style={styles.classBattleHeaderStatCard}>
+              <Text style={styles.classBattleStatLabel}>Klasseandel</Text>
+              <Text style={styles.classBattleStatValue}>{formatPercent(memberClassShare)}%</Text>
+            </View>
           </View>
         </View>
 
-        <View style={styles.classBattleHeroStats}>
-          <View style={styles.classBattleHeaderStatCard}>
-            <Text style={styles.classBattleStatLabel}>Placering</Text>
-            <Text style={styles.classBattleStatValue}>#{currentRow?.rank ?? '-'}</Text>
-          </View>
-          <View style={styles.classBattleHeaderStatCard}>
-            <Text style={styles.classBattleStatLabel}>Dine Caps</Text>
-            <View style={styles.classBattleStatValueRow}>
-              <Text
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                numberOfLines={1}
-                style={[styles.classBattleStatValue, styles.classBattleCapsStatValue]}
-              >
-                {formatNumber(memberCaps)}
-              </Text>
-              <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleStatCoinImage} />
-            </View>
-          </View>
-          <View style={styles.classBattleHeaderStatCard}>
-            <Text style={styles.classBattleStatLabel}>Klasseandel</Text>
-            <Text style={styles.classBattleStatValue}>{formatPercent(memberClassShare)}%</Text>
-          </View>
+        <View style={styles.classBattleHeroLeaderboardHeader}>
+          <Text style={styles.classBattleSectionTitle}>
+            {isClassLeaderboard ? 'Min klasse' : 'Alle klasser'}
+          </Text>
+          <Text style={styles.classBattleSectionMeta}>
+            {isClassLeaderboard ? (schoolClass?.className ?? 'Din klasse') : `Skoleåret ${schoolYear}`}
+          </Text>
         </View>
       </View>
 
       <View style={styles.classBattleLeaderboardCard}>
+        <View style={styles.classBattleScopeSwitch}>
+          {[
+            { id: 'global', label: 'Alle klasser' },
+            { id: 'class', label: 'Min klasse' },
+          ].map((scope) => {
+            const selected = leaderboardScope === scope.id;
+
+            return (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                key={scope.id}
+                onPress={() => changeLeaderboardScope(scope.id)}
+                style={({ pressed }) => [
+                  styles.classBattleScopeSwitchItem,
+                  selected ? styles.classBattleScopeSwitchItemActive : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={[
+                  styles.classBattleScopeSwitchText,
+                  selected ? styles.classBattleScopeSwitchTextActive : null,
+                ]}>
+                  {scope.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
         <View style={[
           styles.classBattleLeaderboardTopBar,
           classBattleRowsScrolled ? styles.classBattleLeaderboardTopBarScrolled : null,
         ]}>
           <Pressable
-            accessibilityLabel="Find min klasse i ranglisten"
+            accessibilityLabel={isClassLeaderboard ? 'Find mig i klassens rangliste' : 'Find min klasse i ranglisten'}
             accessibilityRole="button"
-            onPress={scrollToCurrentClass}
+            onPress={scrollToCurrentLeaderboardRow}
             style={({ pressed }) => [
               styles.classBattleJumpButton,
               pressed ? styles.footerItemPressed : null,
@@ -8139,13 +8110,13 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
           >
             <Ionicons name="locate" size={13} color={STUDOS_THEME.ink} />
             <Text numberOfLines={1} style={styles.classBattleJumpButtonText}>
-              Find min klasse
+              {isClassLeaderboard ? 'Find mig' : 'Find min klasse'}
             </Text>
           </Pressable>
           <View style={styles.classBattleResetInfo}>
             <Ionicons name="refresh" size={12} color="#65748b" />
             <Text numberOfLines={2} style={styles.classBattleResetInfoText}>
-              Rangliste nulstilles d. 1 august
+              {isClassLeaderboard ? 'Rangeret efter Caps' : 'Rangliste nulstilles d. 1 august'}
             </Text>
           </View>
         </View>
@@ -8158,9 +8129,9 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
           showsVerticalScrollIndicator={false}
           style={styles.classBattleRowsScroll}
         >
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <View
-              key={row.id}
+              key={`${leaderboardScope}-${row.id}`}
               style={[
                 styles.classBattleRow,
                 row.current ? styles.classBattleRowCurrent : null,
@@ -8187,7 +8158,9 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
                   <Text numberOfLines={1} style={styles.classBattleRowTitle}>{row.className}</Text>
                   {row.current ? (
                     <View style={styles.classBattleCurrentPill}>
-                      <Text style={styles.classBattleCurrentPillText}>Din klasse</Text>
+                      <Text style={styles.classBattleCurrentPillText}>
+                        {row.currentPillText ?? 'Din klasse'}
+                      </Text>
                     </View>
                   ) : null}
                 </View>
@@ -8199,8 +8172,10 @@ function ClassBattleScreen({ activeMember, events = [], onCapsBalanceChange, sch
                   <Text style={styles.classBattleScoreText}>{formatNumber(row.score)}</Text>
                   <Image source={CAPS_COIN} resizeMode="contain" style={styles.classBattleScoreCoinImage} />
                 </View>
-                <Text numberOfLines={1} style={styles.classBattleScoreMetricText}>pr. elev</Text>
-                {Number.isFinite(Number(row.totalCaps)) ? (
+                {isClassLeaderboard ? null : (
+                  <Text numberOfLines={1} style={styles.classBattleScoreMetricText}>pr. elev</Text>
+                )}
+                {!isClassLeaderboard && Number.isFinite(Number(row.totalCaps)) ? (
                   <Text numberOfLines={1} style={styles.classBattleScoreTotalText}>
                     {formatNumber(row.totalCaps)} samlet
                   </Text>
@@ -8265,6 +8240,7 @@ function EarnCapsScreen({
   const [checkInError, setCheckInError] = useState('');
   const [earnCapsGoodDeed, setEarnCapsGoodDeed] = useState(null);
   const [earnCapsGoodDeedError, setEarnCapsGoodDeedError] = useState('');
+  const [earnCapsGoodDeedReward, setEarnCapsGoodDeedReward] = useState(null);
   const [earnCapsGoodDeedSubmitting, setEarnCapsGoodDeedSubmitting] = useState(false);
   const normalizeCheckInState = useCallback((payload = {}) => ({
     completedWeeks: Math.max(0, Number(payload.completedWeeks) || 0),
@@ -8392,6 +8368,9 @@ function EarnCapsScreen({
       });
 
       setEarnCapsGoodDeed(data?.goodDeed ?? null);
+      setEarnCapsGoodDeedReward({
+        amount: Number(data?.awardedCaps ?? data?.goodDeed?.myClaim?.totalCaps ?? earnCapsGoodDeedBaseCaps) || earnCapsGoodDeedBaseCaps,
+      });
       if (Number.isFinite(Number(data?.capsBalance))) {
         onCapsBalanceChange?.(Number(data.capsBalance));
       }
@@ -8408,36 +8387,49 @@ function EarnCapsScreen({
       actionDone: Boolean(earnCapsGoodDeedClaim),
       actionLabel: earnCapsGoodDeedClaim ? 'Claimet' : 'Claim',
       actionLoading: earnCapsGoodDeedSubmitting,
+      actionVariant: 'claim',
       icon: 'heart',
+      missionLabel: 'Denne uges gerning',
       reward: `+${earnCapsGoodDeedBaseCaps}`,
       statusText: earnCapsGoodDeedError,
-      subtitle: 'Lav en god gerning og få point.',
+      subtitle: earnCapsGoodDeed?.week?.title ?? 'Henter ugens gerning...',
       title: 'Ugens gode gerning',
       onPress: claimEarnCapsGoodDeed,
     },
     {
       id: 'check-in',
-      actionLabel: 'Scan QR',
+      actionAlignRight: true,
+      actionDisabled: true,
+      actionIconRight: 'camera',
+      actionLabel: 'Kommer snart',
       icon: 'qr-code',
       reward: '+50',
-      subtitle: 'Tjek ind til fitness, klubber og events ved at scanne QR-koden.',
+      subtitle: 'Tjek ind ved fitness, klubber og events ved at scanne QR-koden.',
       title: 'Check-in',
       onPress: () => {},
     },
     {
       id: 'duels',
+      actionAlignRight: true,
+      actionIconRight: 'shield',
       actionLabel: 'Åbn dueller',
       icon: 'shield',
       reward: 'Indsats',
       subtitle: 'Udfordr dit crew i challenges. I bestemmer indsats og udfordring.',
-      title: 'Sæt point på højkant i dueller',
+      title: 'Dueller om Caps',
       onPress: onOpenPointDuel,
       swords: true,
     },
   ];
 
   return (
-    <View style={styles.earnCapsScreen}>
+    <>
+      <GoodDeedClaimRewardModal
+        reward={earnCapsGoodDeedReward}
+        visible={Boolean(earnCapsGoodDeedReward)}
+        onDismiss={() => setEarnCapsGoodDeedReward(null)}
+      />
+      <View style={styles.earnCapsScreen}>
       <View style={styles.earnCapsHeroHeader}>
         <View style={styles.earnCapsHeroCopy}>
           <EarnCapsTitle />
@@ -8541,7 +8533,23 @@ function EarnCapsScreen({
                     ) : null}
                   </View>
                 </View>
-                <Text style={styles.earnCapsMethodText}>{method.subtitle}</Text>
+                {method.missionLabel ? (
+                  <View style={styles.earnCapsWeeklyMission}>
+                    <Text numberOfLines={1} style={styles.earnCapsWeeklyMissionLabel}>
+                      {method.missionLabel}
+                    </Text>
+                    <Text
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.76}
+                      numberOfLines={1}
+                      style={styles.earnCapsWeeklyMissionText}
+                    >
+                      {method.subtitle}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.earnCapsMethodText}>{method.subtitle}</Text>
+                )}
                 {method.statusText ? (
                   <Text numberOfLines={2} style={styles.earnCapsMethodError}>
                     {method.statusText}
@@ -8553,21 +8561,60 @@ function EarnCapsScreen({
                     disabled={Boolean(method.actionDisabled)}
                     onPress={method.onPress}
                     style={({ pressed }) => [
-                      styles.earnCapsMethodAction,
-                      method.actionDisabled ? styles.earnCapsMethodActionDisabled : null,
+                      method.actionVariant === 'claim' ? styles.classBattleGoodDeedButton : styles.earnCapsMethodAction,
+                      method.actionVariant === 'claim' ? styles.earnCapsClaimAction : null,
+                      method.actionAlignRight ? styles.earnCapsMethodActionRight : null,
+                      method.actionDisabled
+                        ? method.actionVariant === 'claim'
+                          ? styles.classBattleGoodDeedButtonDisabled
+                          : styles.earnCapsMethodActionDisabled
+                        : null,
                       pressed && !method.actionDisabled ? styles.footerItemPressed : null,
                     ]}
                   >
                     {method.actionLoading ? (
-                      <ActivityIndicator color="#FFFFFF" size="small" />
+                      <ActivityIndicator
+                        color={method.actionVariant === 'claim' ? STUDOS_THEME.yellow : '#FFFFFF'}
+                        size="small"
+                      />
                     ) : (
                       <>
-                        <Text style={styles.earnCapsMethodActionText}>{method.actionLabel}</Text>
-                        <Ionicons
-                          name={method.actionDone ? 'checkmark' : 'chevron-forward'}
-                          size={15}
-                          color="#FFFFFF"
-                        />
+                        {method.actionVariant === 'claim' ? (
+                          <Ionicons
+                            name={method.actionDone ? 'checkmark-circle' : 'sparkles'}
+                            size={13}
+                            color={method.actionDisabled ? '#65748b' : STUDOS_THEME.yellow}
+                          />
+                        ) : null}
+                        <Text style={[
+                          method.actionVariant === 'claim'
+                            ? styles.classBattleGoodDeedButtonText
+                            : styles.earnCapsMethodActionText,
+                          method.actionVariant === 'claim' && method.actionDisabled
+                            ? styles.classBattleGoodDeedButtonTextDisabled
+                            : null,
+                        ]}>
+                          {method.actionLabel}
+                        </Text>
+                        {method.actionVariant === 'claim' ? null : (
+                          method.actionIconRight === 'shield' ? (
+                            <View style={styles.earnCapsActionDuelIcon}>
+                              <Ionicons name="shield" size={15} color="#FFFFFF" />
+                              <MaterialCommunityIcons
+                                name="sword-cross"
+                                size={11}
+                                color={STUDOS_THEME.red}
+                                style={styles.earnCapsActionDuelSwords}
+                              />
+                            </View>
+                          ) : (
+                            <Ionicons
+                              name={method.actionIconRight ?? (method.actionDone ? 'checkmark' : 'chevron-forward')}
+                              size={15}
+                              color="#FFFFFF"
+                            />
+                          )
+                        )}
                       </>
                     )}
                   </Pressable>
@@ -8577,7 +8624,8 @@ function EarnCapsScreen({
           ))}
         </ScrollView>
       </View>
-    </View>
+      </View>
+    </>
   );
 }
 
@@ -8965,29 +9013,6 @@ function SidebarMenuIcon({ active = false, item }) {
     );
   }
 
-  if (item.id === 'leaderboard') {
-    const bars = [
-      { height: 13, color: STUDOS_THEME.blue },
-      { height: 22, color: STUDOS_THEME.yellow },
-      { height: 17, color: STUDOS_THEME.red },
-      { height: 26, color: STUDOS_THEME.ink },
-    ];
-
-    return (
-      <View style={[styles.sidebarMenuIconWrap, styles.sidebarLeaderboardIcon]}>
-        {bars.map((bar, index) => (
-          <View
-            key={index}
-            style={[
-              styles.sidebarLeaderboardBar,
-              { height: bar.height, backgroundColor: bar.color },
-            ]}
-          />
-        ))}
-      </View>
-    );
-  }
-
   if (item.id === 'classBattle') {
     const podium = [
       { height: 15, color: STUDOS_THEME.blue },
@@ -9224,6 +9249,62 @@ function WeeklyCheckInRewardModal({ reward, visible, onDismiss }) {
   );
 }
 
+function GoodDeedClaimRewardModal({ reward, visible, onDismiss }) {
+  const amount = Number(reward?.amount) || 25;
+
+  return (
+    <Modal
+      animationType="fade"
+      onRequestClose={onDismiss}
+      transparent
+      visible={visible}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk claim reward"
+          style={styles.chatModalBackdrop}
+          onPress={onDismiss}
+        />
+        <View style={[styles.chatModalPanel, styles.weeklyCheckInRewardPanel]}>
+          <View style={styles.weeklyCheckInRewardIcon}>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.weeklyCheckInRewardCoin} />
+            <View style={styles.goodDeedClaimRewardPlus}>
+              <Ionicons name="sparkles" size={12} color="#FFFFFF" />
+            </View>
+          </View>
+          <View style={styles.notificationPromptCopy}>
+            <Text style={styles.chatModalKicker}>Ugens gode gerning</Text>
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              numberOfLines={1}
+              style={[styles.notificationPromptTitle, styles.goodDeedClaimRewardTitle]}
+            >
+              Tak fordi du gør en forskel ❤
+            </Text>
+            <View style={styles.goodDeedClaimRewardTextLine}>
+              <Text style={styles.notificationPromptText}>Der er tilføjet</Text>
+              <Text style={[styles.notificationPromptText, styles.goodDeedClaimRewardAmount]}>+{amount}</Text>
+              <Image source={CAPS_COIN} resizeMode="contain" style={styles.goodDeedClaimRewardInlineCoin} />
+              <Text style={styles.notificationPromptText}>til din konto.</Text>
+            </View>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onDismiss}
+            style={({ pressed }) => [
+              styles.weeklyCheckInRewardButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={styles.notificationPromptPrimaryText}>Fedt</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, visible }) {
   const [isRendered, setIsRendered] = useState(visible);
   const sidebarProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -9237,6 +9318,7 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
     ? `${crewCount} ${crewCount === 1 ? 'medlem' : 'medlemmer'}`
     : 'Medlemmer';
   const crewActive = activeRoute === 'classmates';
+  const emergencyActive = activeRoute === 'emergencyContacts';
   const fullProfileName = [activeMember?.firstName, activeMember?.lastName]
     .filter(Boolean)
     .join(' ');
@@ -9352,6 +9434,27 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
               <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.red} />
             </Pressable>
 
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onSelect('emergencyContacts')}
+              style={({ pressed }) => [
+                styles.sidebarMenuItem,
+                styles.sidebarEmergencyItem,
+                pressed ? styles.sidebarMenuItemPressed : null,
+              ]}
+            >
+              <SidebarMenuIcon
+                item={{ id: 'emergencyContacts', icon: 'call-outline', activeIcon: 'call', accentColor: STUDOS_THEME.red }}
+                active={emergencyActive}
+              />
+              <Text style={[
+                styles.sidebarMenuText,
+                emergencyActive ? styles.sidebarMenuTextActive : null,
+              ]}>
+                Nødkontakter
+              </Text>
+            </Pressable>
+
             {APP_DRAWER_SECTIONS.map((section) => (
               <View key={section.title} style={styles.sidebarNavSection}>
                 <View style={styles.sidebarNavSectionHeader}>
@@ -9390,18 +9493,6 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
           </View>
           <View style={styles.sidebarBottomNav}>
             <View style={styles.sidebarSectionDivider} />
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => onSelect('emergencyContacts')}
-              style={({ pressed }) => [
-                styles.sidebarMenuItem,
-                styles.sidebarEmergencyItem,
-                pressed ? styles.sidebarMenuItemPressed : null,
-              ]}
-            >
-              <SidebarMenuIcon item={{ id: 'emergencyContacts', icon: 'call-outline', activeIcon: 'call', accentColor: STUDOS_THEME.red }} />
-              <Text style={styles.sidebarMenuText}>Nødkontakter</Text>
-            </Pressable>
             <Pressable
               accessibilityRole="button"
               onPress={() => onSelect('settings')}
@@ -9786,19 +9877,35 @@ function AccountProfileScreen({
   profile,
   schoolClass,
   onProfilePhotoUpdate,
+  onLogout,
+  onDeleteAccount,
 }) {
   const [localPreview, setLocalPreview] = useState('');
   const [localError, setLocalError] = useState('');
+  const [deleteAccountError, setDeleteAccountError] = useState('');
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [deleteAccountConfirmOpen, setDeleteAccountConfirmOpen] = useState(false);
+  const [emailChangeNoticeOpen, setEmailChangeNoticeOpen] = useState(false);
+  const [profilePhotoMenuOpen, setProfilePhotoMenuOpen] = useState(false);
+  const profileNumberFormat = useMemo(() => new Intl.NumberFormat('da-DK'), []);
   const displayProfile = {
     ...profile,
     ...activeMember,
     profilePhotoUrl: localPreview || activeMember?.profilePhotoUrl || profile.profilePhotoUrl,
   };
+  const hasCurrentProfilePhoto = Boolean(localPreview || activeMember?.profilePhotoUrl || profile.profilePhotoUrl);
   const profileName = displayProfile.displayName
     || [displayProfile.firstName, displayProfile.lastName].filter(Boolean).join(' ')
     || 'Min profil';
+  const profileRole = PROFILE_ROLE_LABELS[displayProfile.role] || 'Elev';
+  const profileStatus = PROFILE_STATUS_LABELS[displayProfile.status] || 'Aktiv';
+  const capsBalance = Number.isFinite(Number(displayProfile.capsBalance ?? displayProfile.points))
+    ? Number(displayProfile.capsBalance ?? displayProfile.points)
+    : 0;
+  const formattedCapsBalance = profileNumberFormat.format(capsBalance);
 
   const pickAndUploadPhoto = async () => {
+    setProfilePhotoMenuOpen(false);
     setLocalError('');
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -9837,37 +9944,370 @@ function AccountProfileScreen({
     }
   };
 
+  const removeProfilePhoto = async () => {
+    setProfilePhotoMenuOpen(false);
+    setLocalError('');
+
+    const saved = await onProfilePhotoUpdate(null);
+
+    if (saved) {
+      setLocalPreview('');
+    }
+  };
+
+  const handleOpenDeleteAccount = () => {
+    setDeleteAccountError('');
+    setDeleteAccountConfirmOpen(true);
+  };
+
+  const handleLogout = () => {
+    if (loading || deleteAccountLoading) {
+      return;
+    }
+
+    onLogout?.();
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!onDeleteAccount || deleteAccountLoading) {
+      return;
+    }
+
+    setDeleteAccountLoading(true);
+    setDeleteAccountError('');
+
+    try {
+      const deleted = await onDeleteAccount();
+
+      if (!deleted) {
+        setDeleteAccountError('Kontoen kunne ikke blive slettet. Prøv igen.');
+        return;
+      }
+
+      setDeleteAccountConfirmOpen(false);
+    } finally {
+      setDeleteAccountLoading(false);
+    }
+  };
+
+  const profileRows = useMemo(() => ([
+    { key: 'class', label: 'Klasse', value: schoolClass.className || 'Ikke angivet' },
+    { key: 'school', label: 'Skole', value: schoolClass.schoolName || 'Ikke angivet' },
+    { key: 'email', label: 'Email', value: displayProfile.email || 'Ikke angivet' },
+    { key: 'phone', label: 'Telefon', value: displayProfile.phone || 'Ikke angivet' },
+    { key: 'birthday', label: 'Fødselsdag', value: formatProfileDate(displayProfile.birthday) },
+    { key: 'personalCode', label: 'Studos-kode', value: displayProfile.personalCode || 'Ikke angivet' },
+    { key: 'role', label: 'Rolle', value: profileRole },
+    { key: 'status', label: 'Status', value: profileStatus },
+    { key: 'joinedAt', label: 'Medlem siden', value: formatProfileDate(displayProfile.joinedAt) },
+  ]), [
+    displayProfile.birthday,
+    displayProfile.email,
+    displayProfile.joinedAt,
+    displayProfile.phone,
+    displayProfile.personalCode,
+    displayProfile.role,
+    displayProfile.status,
+    schoolClass.className,
+    schoolClass.schoolName,
+  ]);
+
   return (
     <View style={[styles.overviewBlank, styles.overviewSurface]}>
-      <View style={styles.overviewTopLine}>
+      <View style={styles.tabHeader}>
         <View>
           <Text style={styles.kicker}>{schoolClass.className}</Text>
-          <Text style={styles.compactTitle}>Min profil</Text>
+          <Text style={styles.title}>Min profil</Text>
+        </View>
+        <View style={styles.headerIcon}>
+          <Ionicons name="person" size={28} color="#f6d36d" />
         </View>
       </View>
 
       <View style={styles.accountProfilePanel}>
-        <View style={styles.accountProfilePhotoWrap}>
-          {displayProfile.profilePhotoUrl ? (
-            <Image source={{ uri: displayProfile.profilePhotoUrl }} style={styles.accountProfilePhoto} />
-          ) : (
-            <View style={styles.accountProfilePhotoFallback}>
-              <Text adjustsFontSizeToFit numberOfLines={1} style={styles.accountProfilePhotoInitials}>
-                {initialsFor(displayProfile)}
-              </Text>
+        <Pressable
+          accessibilityLabel="Profilbillede menu"
+          accessibilityRole="button"
+          disabled={loading}
+          onPress={() => setProfilePhotoMenuOpen(true)}
+          style={styles.accountProfilePhotoPressable}
+        >
+          <View style={styles.accountProfilePhotoWrap}>
+            {displayProfile.profilePhotoUrl ? (
+              <Image source={{ uri: displayProfile.profilePhotoUrl }} style={styles.accountProfilePhoto} />
+            ) : (
+              <View style={styles.accountProfilePhotoFallback}>
+                <Text adjustsFontSizeToFit numberOfLines={1} style={styles.accountProfilePhotoInitials}>
+                  {initialsFor(displayProfile)}
+                </Text>
+              </View>
+            )}
+            <View style={styles.accountProfilePhotoActionBadge}>
+              <Ionicons name="camera" size={14} color={STUDOS_THEME.ink} />
             </View>
-          )}
-        </View>
+          </View>
+        </Pressable>
         <Text numberOfLines={1} style={styles.accountProfileName}>{profileName}</Text>
-        <Text numberOfLines={1} style={styles.accountProfileMeta}>{schoolClass.schoolName}</Text>
+        <Text numberOfLines={1} style={styles.accountProfileMeta}>
+          {schoolClass.className}
+        </Text>
+      </View>
 
-        {localError || error ? <Text style={styles.errorText}>{localError || error}</Text> : null}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setProfilePhotoMenuOpen(false)}
+        transparent
+        visible={profilePhotoMenuOpen}
+      >
+        <View style={styles.chatModalRoot}>
+            <Pressable
+            accessibilityLabel="Luk profilbilledemenu"
+            onPress={() => setProfilePhotoMenuOpen(false)}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatConversationActionMenuHeading}>
+                <Text style={styles.chatModalKicker}>Profilbillede</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  {hasCurrentProfilePhoto ? 'Skift eller fjern billede' : 'Vælg profilbillede'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setProfilePhotoMenuOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
 
-        <Button
-          label={displayProfile.profilePhotoUrl ? 'Skift profilbillede' : 'Tilfoej profilbillede'}
-          loading={loading}
-          onPress={pickAndUploadPhoto}
-        />
+            <View style={styles.chatConversationActionMenuList}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={loading}
+                onPress={pickAndUploadPhoto}
+                style={({ pressed }) => [styles.chatConversationActionMenuItem, pressed ? styles.footerItemPressed : null]}
+              >
+                <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconCalm]}>
+                  <Ionicons name="image-outline" size={18} color={STUDOS_THEME.ink} />
+                </View>
+                <Text style={styles.chatConversationActionMenuText}>
+                  {hasCurrentProfilePhoto ? 'Ændre profilbillede' : 'Tilføj profilbillede'}
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+              </Pressable>
+              {hasCurrentProfilePhoto ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={loading}
+                  onPress={removeProfilePhoto}
+                  style={({ pressed }) => [styles.chatConversationActionMenuItem, pressed ? styles.footerItemPressed : null]}
+                >
+                  <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconDanger]}>
+                    <Ionicons name="trash" size={18} color="#FFFFFF" />
+                  </View>
+                  <Text style={styles.chatConversationActionMenuText}>Fjern profilbillede</Text>
+                  <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setProfilePhotoMenuOpen(false)}
+                style={({ pressed }) => [styles.chatConversationActionMenuItem, pressed ? styles.footerItemPressed : null]}
+              >
+                <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconWarning]}>
+                  <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+                </View>
+                <Text style={styles.chatConversationActionMenuText}>Annuller</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setEmailChangeNoticeOpen(false)}
+        transparent
+        visible={emailChangeNoticeOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk e-mail meddelelse"
+            onPress={() => setEmailChangeNoticeOpen(false)}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={styles.chatModalPanel}>
+            <View style={styles.chatModalHeader}>
+              <Text numberOfLines={1} style={styles.chatModalTitle}>Skift e-mail</Text>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setEmailChangeNoticeOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <Text style={styles.chatCodeModalText}>
+              E-mail er i øjeblikket låst til din konto. Når ændring bliver aktiveret, kommer der en rigtig
+              redigeringsknap her.
+            </Text>
+            <Button label="Forstået" onPress={() => setEmailChangeNoticeOpen(false)} />
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deleteAccountLoading) {
+            setDeleteAccountConfirmOpen(false);
+            setDeleteAccountError('');
+          }
+        }}
+        transparent
+        visible={deleteAccountConfirmOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk kontosletning"
+            disabled={deleteAccountLoading}
+            onPress={() => {
+              if (!deleteAccountLoading) {
+                setDeleteAccountConfirmOpen(false);
+                setDeleteAccountError('');
+              }
+            }}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <View style={[styles.chatActionConfirmIcon, styles.chatActionConfirmIconDanger]}>
+              <Ionicons name="trash" size={24} color="#FFFFFF" />
+            </View>
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>Slet konto?</Text>
+            <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+              Sletning af din konto er permanent. Vi anonymiserer dine personoplysninger og markerer
+              kontoen som slettet, så den ikke længere kan bruges. Login-sessioner og adgangskode
+              bliver slettet, og handlingen kan ikke fortrydes.
+            </Text>
+            {deleteAccountError ? <Text style={styles.errorText}>{deleteAccountError}</Text> : null}
+            <View style={styles.chatActionConfirmButtons}>
+              <Pressable
+                accessibilityLabel="Annuller slet konto"
+                accessibilityRole="button"
+                disabled={deleteAccountLoading}
+                onPress={() => {
+                  setDeleteAccountConfirmOpen(false);
+                  setDeleteAccountError('');
+                }}
+                style={({ pressed }) => [
+                  styles.chatActionCancelButton,
+                  styles.accountProfileActionButtonRow,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.chatActionCancelText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Bekræft slet konto"
+                accessibilityRole="button"
+                disabled={deleteAccountLoading}
+                onPress={handleDeleteAccount}
+                style={({ pressed }) => [
+                  styles.chatActionConfirmButton,
+                  styles.chatActionConfirmButtonDanger,
+                  styles.accountProfileActionButtonRow,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                {deleteAccountLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.chatActionConfirmButtonText}>Slet konto</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Profiloplysninger</Text>
+        <View style={styles.detailList}>
+          {profileRows.map((row) => (
+            <View key={row.label} style={styles.detailRow}>
+              <Text style={styles.detailLabel}>{row.label}</Text>
+              <View style={styles.accountProfileDetailValueWrap}>
+                <Text numberOfLines={1} style={styles.detailValue}>
+                  {row.value}
+                </Text>
+                {row.key === 'email' ? (
+                  <Pressable
+                    accessibilityLabel="Skift e-mail"
+                    accessibilityRole="button"
+                    onPress={() => setEmailChangeNoticeOpen(true)}
+                    style={({ pressed }) => [styles.accountProfileDetailAction, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <Ionicons name="create-outline" size={16} color={STUDOS_THEME.ink} />
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          ))}
+
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Caps</Text>
+            <View style={styles.accountProfileCapsValue}>
+              <Text numberOfLines={1} style={styles.accountProfileCapsAmount}>
+                {formattedCapsBalance}
+              </Text>
+              <Image source={CAPS_COIN} resizeMode="contain" style={styles.accountProfileCapsCoin} />
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {localError || error ? <Text style={styles.errorText}>{localError || error}</Text> : null}
+
+      <View style={styles.accountProfileBottomActions}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log ud"
+          disabled={loading || deleteAccountLoading}
+          onPress={handleLogout}
+          style={({ pressed }) => [
+            styles.chatActionCancelButton,
+            styles.accountProfileActionButtonRow,
+            pressed && !loading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="log-out-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.chatActionCancelText}>Log ud</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Slet konto"
+          disabled={loading || deleteAccountLoading}
+          onPress={handleOpenDeleteAccount}
+          style={({ pressed }) => [
+            styles.chatActionConfirmButton,
+            styles.chatActionConfirmButtonDanger,
+            styles.accountProfileActionButtonRow,
+            pressed && !loading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="trash" size={18} color="#FFFFFF" />
+          <Text style={styles.chatActionConfirmButtonText}>Slet konto</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -11035,8 +11475,8 @@ function ClassBattleTitleGraphic({ style }) {
 
 function ClassBattleTitle() {
   return (
-    <View accessible accessibilityLabel="Klassedyst" style={[styles.overviewPageTitleWrap, styles.classBattlePageTitleWrap]}>
-      <Text style={[styles.overviewPageTitleRest, styles.classBattlePageTitleText]}>Klassedyst</Text>
+    <View accessible accessibilityLabel="Leaderboard" style={[styles.overviewPageTitleWrap, styles.classBattlePageTitleWrap]}>
+      <Text style={[styles.overviewPageTitleRest, styles.classBattlePageTitleText]}>Leaderboard</Text>
       <ClassBattleTitleGraphic />
     </View>
   );
@@ -11268,6 +11708,10 @@ const styles = StyleSheet.create({
     marginBottom: -APP_FOOTER_HEIGHT,
     paddingBottom: 0,
   },
+  appScreenClassBattleDetached: {
+    flex: 1,
+    paddingBottom: 0,
+  },
   appScreenOverlayHost: {
     position: 'relative',
     paddingBottom: 0,
@@ -11436,7 +11880,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   sidebarNavSection: {
-    gap: 1,
+    gap: 12,
   },
   sidebarNavSectionHeader: {
     alignItems: 'center',
@@ -11588,17 +12032,6 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 6,
     backgroundColor: STUDOS_THEME.blue,
-  },
-  sidebarLeaderboardIcon: {
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    gap: 3,
-    justifyContent: 'center',
-    paddingBottom: 6,
-  },
-  sidebarLeaderboardBar: {
-    width: 5,
-    borderRadius: 5,
   },
   sidebarPodiumIcon: {
     alignItems: 'flex-end',
@@ -11942,8 +12375,12 @@ const styles = StyleSheet.create({
   flowStack: {
     gap: 16,
   },
+  classBattleScreen: {
+    flex: 1,
+    gap: 16,
+  },
   classBattleHeroHeader: {
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
     flexDirection: 'row',
     gap: 18,
     justifyContent: 'space-between',
@@ -11956,7 +12393,7 @@ const styles = StyleSheet.create({
   },
   classBattleHeroStats: {
     flexShrink: 0,
-    gap: 11,
+    justifyContent: 'space-between',
     paddingTop: 10,
   },
   classBattleIntroText: {
@@ -12069,6 +12506,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 12,
     elevation: 6,
+  },
+  classBattleGoodDeedButtonWide: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
   classBattleGoodDeedButtonDisabled: {
     borderColor: '#DDE3EA',
@@ -12245,12 +12686,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   classBattleLeaderboardCard: {
+    flex: 1,
     gap: 10,
     borderColor: '#E5E8EF',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
     padding: 10,
+  },
+  classBattleScopeSwitch: {
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 34,
+    borderRadius: 8,
+    backgroundColor: '#F0F5F3',
+    padding: 4,
+  },
+  classBattleScopeSwitchItem: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    borderRadius: 7,
+    paddingHorizontal: 8,
+  },
+  classBattleScopeSwitchItemActive: {
+    backgroundColor: STUDOS_THEME.ink,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  classBattleScopeSwitchText: {
+    color: '#65748b',
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 13,
+  },
+  classBattleScopeSwitchTextActive: {
+    color: '#FFFFFF',
   },
   classBattleLeaderboardTopBar: {
     alignItems: 'center',
@@ -12324,7 +12799,7 @@ const styles = StyleSheet.create({
     paddingBottom: 2,
   },
   classBattleRowsScroll: {
-    maxHeight: 356,
+    flex: 1,
   },
   classBattleRow: {
     alignItems: 'center',
@@ -15672,6 +16147,30 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 16,
   },
+  earnCapsWeeklyMission: {
+    gap: 3,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  earnCapsWeeklyMissionLabel: {
+    color: STUDOS_THEME.red,
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+    textTransform: 'uppercase',
+  },
+  earnCapsWeeklyMissionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
   earnCapsMethodError: {
     color: STUDOS_THEME.red,
     fontSize: 11,
@@ -15689,14 +16188,31 @@ const styles = StyleSheet.create({
     backgroundColor: STUDOS_THEME.ink,
     paddingHorizontal: 10,
   },
+  earnCapsMethodActionRight: {
+    alignSelf: 'flex-end',
+  },
   earnCapsMethodActionDisabled: {
     backgroundColor: '#8D96A8',
+  },
+  earnCapsClaimAction: {
+    alignSelf: 'flex-end',
   },
   earnCapsMethodActionText: {
     color: '#FFFFFF',
     fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  earnCapsActionDuelIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 18,
+    height: 17,
+  },
+  earnCapsActionDuelSwords: {
+    position: 'absolute',
+    top: 3,
   },
   overviewClipIconGrid: {
     alignItems: 'center',
@@ -15968,7 +16484,7 @@ const styles = StyleSheet.create({
     backgroundColor: STUDOS_THEME.blue,
   },
   classBattlePageTitleText: {
-    fontSize: 29,
+    fontSize: 28,
   },
   classBattlePageTitleWrap: {
     flex: 0,
@@ -16458,6 +16974,39 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     backgroundColor: '#1F9D55',
   },
+  goodDeedClaimRewardPlus: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    width: 22,
+    height: 22,
+    borderColor: '#FFFFFF',
+    borderRadius: 11,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  goodDeedClaimRewardAmount: {
+    color: '#1F9D55',
+    fontWeight: '900',
+  },
+  goodDeedClaimRewardInlineCoin: {
+    width: 19,
+    height: 19,
+    marginHorizontal: -1,
+  },
+  goodDeedClaimRewardTextLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    justifyContent: 'center',
+  },
+  goodDeedClaimRewardTitle: {
+    fontSize: 19,
+    lineHeight: 23,
+  },
   weeklyCheckInRewardButton: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -16624,6 +17173,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#F7FAFA',
     padding: 18,
   },
+  accountProfilePhotoPressable: {
+    alignItems: 'center',
+  },
   accountProfilePhotoWrap: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -16636,6 +17188,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 14,
     elevation: 4,
+  },
+  accountProfilePhotoActionBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF4D8',
+    borderColor: '#FFFFFF',
+    borderWidth: 2,
   },
   accountProfilePhoto: {
     width: 96,
@@ -16658,6 +17223,23 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  accountProfileCapsAmount: {
+    color: '#182446',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  accountProfileCapsCoin: {
+    width: 18,
+    height: 18,
+  },
+  accountProfileCapsValue: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    flexShrink: 1,
+    justifyContent: 'flex-end',
   },
   accountProfileName: {
     color: STUDOS_THEME.ink,
@@ -16732,10 +17314,36 @@ const styles = StyleSheet.create({
   },
   detailValue: {
     color: '#182446',
-    flex: 1,
+    flexShrink: 1,
     fontSize: 14,
     fontWeight: '900',
     textAlign: 'right',
+  },
+  accountProfileDetailValueWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    flex: 1,
+    gap: 8,
+    minHeight: 30,
+  },
+  accountProfileDetailAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F1FBF8',
+  },
+  accountProfileBottomActions: {
+    gap: 10,
+  },
+  accountProfileActionButtonRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
   },
   chatTitleActions: {
     alignItems: 'flex-end',

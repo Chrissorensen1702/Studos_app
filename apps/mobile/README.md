@@ -10,11 +10,19 @@ efternavn, email, foedselsdag, valgfri telefon og valgfrit profilbillede via
 klassen bag invitekoden. Email fungerer som login-navn, og adgangskoden gemmes
 hashet i Laravel.
 
-`Min profil` findes i sidebaren. Den kan pt. vise profilinfo og uploade/skifte
-profilbillede. Uploaden sendes til Laravel som base64-image, gemmes under
-`uploads/profile-photos` via Laravel `Storage`-disk, og storage-pathen gemmes
-paa medlemmet. API'et returnerer en lokal `/storage/...` URL i dev og en
+`Min profil` findes i sidebaren. Den kan vise profiloplysninger, håndtere
+avatar-skift via ikon i billedcirklen, logge ud og slette konto. Upload af
+profilbillede sendes til Laravel som base64-image og gemmes under
+`uploads/profile-photos` via Laravel `Storage`-disk, hvor stien ligger på
+medlemmet. API'et returnerer en lokal `/storage/...` URL i dev og en
 bucket/S3 URL i Cloud.
+
+`Slet konto` bruger en irreversibel delete-flow med bekræftelse i UI og
+`DELETE /api/members/me` i backend. Ved gennemført sletning bliver brugeren
+logget ud og data anonymiseret efter de interne regler.
+
+Der er ikke længere et separat profile-fane/ekstra profilbillede-container nederst på
+profil-skærmen; avatar-handlingen er samlet i selve profil-sektionen.
 
 Brugeren skal acceptere vilkaar og privatlivspolitik ved oprettelse. Backend
 gemmer samtykket med version, saa appen bygges med App Store-godkendelse for

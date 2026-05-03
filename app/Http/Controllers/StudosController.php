@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class StudosController extends Controller
@@ -1038,14 +1039,31 @@ class StudosController extends Controller
     {
         $member = $this->authenticatedMemberFromRequest($request);
         $data = $request->validate([
-            'profilePhotoData' => ['required', 'string', 'max:7000000'],
+            'profilePhotoData' => ['nullable', 'string', 'max:7000000'],
         ]);
 
-        $profilePhotoPath = UploadedImage::storeBase64(
-            $data['profilePhotoData'],
-            'profile-photos',
-            $member->id,
-        );
+        $currentProfilePhoto = DB::table('members')
+            ->where('id', $member->id)
+            ->value('profile_photo_url');
+        $newPhotoData = $data['profilePhotoData'] ?? null;
+
+        if (filled($newPhotoData)) {
+            $profilePhotoPath = UploadedImage::storeBase64(
+                $newPhotoData,
+                'profile-photos',
+                $member->id,
+            );
+        } else {
+            $profilePhotoPath = null;
+
+            if (! blank($currentProfilePhoto)) {
+                $oldPath = UploadedImage::storagePathFromValue($currentProfilePhoto);
+
+                if (! blank($oldPath)) {
+                    Storage::disk(UploadedImage::uploadDiskName())->delete($oldPath);
+                }
+            }
+        }
 
         DB::table('members')->where('id', $member->id)->update([
             'profile_photo_url' => $profilePhotoPath,
@@ -1061,6 +1079,92 @@ class StudosController extends Controller
                 'member' => $serializedMember,
             ],
             'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function deleteCurrentAccount(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        if (
+            $member->role === 'owner'
+            && ! $this->hasOtherActiveOwner($member->class_id, $member->id)
+        ) {
+            abort(409, 'Klassen skal have mindst en aktiv owner.');
+        }
+
+        $currentProfilePhoto = DB::table('members')
+            ->where('id', $member->id)
+            ->value('profile_photo_url');
+        $deletedAt = now()->format('Y-m-d H:i:s');
+
+        DB::transaction(function () use ($member, $currentProfilePhoto, $deletedAt): void {
+            if (! blank($currentProfilePhoto)) {
+                $oldPath = UploadedImage::storagePathFromValue($currentProfilePhoto);
+
+                if (! blank($oldPath)) {
+                    Storage::disk(UploadedImage::uploadDiskName())->delete($oldPath);
+                }
+            }
+
+            DB::table('events')
+                ->where('created_by_member_id', $member->id)
+                ->update([
+                    'created_by_member_id' => null,
+                ]);
+
+            DB::table('event_invites')
+                ->where('invited_by_member_id', $member->id)
+                ->update([
+                    'invited_by_member_id' => null,
+                ]);
+
+            DB::table('member_reports')
+                ->where('reporter_member_id', $member->id)
+                ->orWhere('reported_member_id', $member->id)
+                ->update([
+                    'reporter_member_id' => null,
+                    'reported_member_id' => null,
+                ]);
+
+            DB::table('moderation_violations')
+                ->where('member_id', $member->id)
+                ->update([
+                    'member_id' => null,
+                ]);
+
+            DB::table('chat_moderation_events')
+                ->where('actor_member_id', $member->id)
+                ->orWhere('target_member_id', $member->id)
+                ->update([
+                    'actor_member_id' => null,
+                    'target_member_id' => null,
+                ]);
+
+            DB::table('member_auth_tokens')->where('member_id', $member->id)->delete();
+            DB::table('member_push_tokens')->where('member_id', $member->id)->delete();
+            DB::table('members')->where('id', $member->id)->update([
+                'status' => 'removed',
+                'deletion_requested_at' => $deletedAt,
+                'deleted_at' => $deletedAt,
+                'display_name' => 'Slettet bruger '.$member->id,
+                'first_name' => null,
+                'last_name' => null,
+                'email' => null,
+                'phone' => null,
+                'birthday' => null,
+                'personal_code' => null,
+                'profile_photo_url' => null,
+                'password_hash' => null,
+                'terms_accepted_at' => null,
+                'privacy_accepted_at' => null,
+                'privacy_version' => null,
+            ]);
+        });
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'Kontoen er slettet permanent og personoplysninger er anonymiseret.',
         ]);
     }
 
