@@ -39,6 +39,9 @@ Se ogsaa:
 - Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
   afhaengige af lokal dev-server.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
+- Medlems-email er nu entydig på tværs af systemet; én email kan kun knyttes til
+  én klasse. Dette håndhæves i backend-validering og database-indekset
+  `members.email`.
 
 ## Struktur
 
@@ -127,6 +130,8 @@ Kernen er:
 
 - Klasser, skoler, medlemmer, roller og invitekode/KlasseID.
 - Medlemslogin med email/adgangskode og bearer-token.
+- Eksisterende profil kan nu logges ind uden invitekode (hvis emailen kun findes i
+  én klasse).
 - Profilbilleder, eventcovers og gruppechat-billeder via Laravel `Storage`.
 - Events med dato/tid, cover, invitationer, RSVP, rediger/slet og rapportering.
 - Chat med direkte samtaler, gruppechats, Reverb/polling, mute, hide, leave,
@@ -155,6 +160,8 @@ Vigtige API-endpoints:
 GET  /api/health
 POST /api/classes/join
 POST /api/session/login
+POST /api/session/request-code
+POST /api/session/verify-code
 GET  /api/session/me
 POST /api/profile/photo
 GET  /api/class-battle
@@ -396,7 +403,6 @@ Release-blokkere foer Apple/Google:
 - Blaa bog.
 - Walls/feed/galleri.
 - Klasseawards/afstemninger.
-- Noedkontakter.
 - Pointduel backend og duel-regler.
 - Backend-persistens for Dagens stemning og hueklip.
 - Kalender-push og daglig stemningsreminder.
@@ -426,7 +432,7 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-03 efter Caps/Klassedyst/Optjen Caps-arbejdet:
+Senest koert 2026-05-03 efter login/ email-regel/ Caps/Klassedyst/Optjen Caps-arbejdet:
 
 ```bash
 php -l app/Http/Controllers/StudosController.php
@@ -438,6 +444,8 @@ php artisan migrate
 php artisan test --filter test_class_battle_ranks_classes_by_caps_per_active_member
 php artisan test --filter test_weekly_good_deed_claim_awards_caps_once_without_buddy_or_photo
 php artisan test --filter test_weekly_check_in_awards_caps_after_seven_days
+php artisan test --filter test_existing_member_can_login_without_invite_code_when_email_is_unique
+php artisan test --filter test_join_rejects_email_already_used_in_another_class
 ```
 
 Resultat:
@@ -445,7 +453,7 @@ Resultat:
 - PHP lint: OK.
 - `App.js parse ok`.
 - Migration koert lokalt.
-- 3 maalrettede feature-tests passer.
+- 5 maalrettede feature-tests passer.
 
 ## Naeste Gode Skridt
 

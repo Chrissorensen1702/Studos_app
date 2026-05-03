@@ -1511,6 +1511,65 @@ class ExampleTest extends TestCase
         $this->assertTrue(Hash::check('hemmeligt123', $passwordHash));
     }
 
+    public function test_join_rejects_email_already_used_in_another_class(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        DB::table('classes')->insert([
+            'id' => 'other-class-for-join',
+            'public_id' => 'MG-3D-26',
+            'school_id' => $schoolId,
+            'school_name' => 'Midtby Gymnasium',
+            'class_name' => '3.D',
+            'graduation_year' => '2026',
+            'graduation_date' => '2026-06-28',
+            'owner_name' => 'Anden Eier',
+            'owner_email' => 'anden@example.test',
+            'invite_code' => 'STU-3D26',
+            'join_policy' => 'approval',
+            'allow_member_posts' => true,
+            'require_approval_for_photos' => false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->postJson('/api/classes/join', [
+            'inviteCode' => 'STU-3D26',
+            'schoolId' => $schoolId,
+            'firstName' => 'Maja',
+            'lastName' => 'Anden',
+            'email' => 'chris@skole.dk',
+            'birthday' => '2007-05-14',
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Denne email er allerede knyttet til en anden klasse.');
+
+        $this->assertDatabaseMissing('members', [
+            'class_id' => 'other-class-for-join',
+            'email' => 'chris@skole.dk',
+        ]);
+    }
+
+    public function test_api_class_creation_rejects_owner_email_that_is_used_in_another_class(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        $this->postJson('/api/classes', [
+            'schoolId' => $schoolId,
+            'className' => '3.D',
+            'graduationYear' => '2026',
+            'graduationDate' => '2026-06-28',
+            'ownerName' => 'Maja Test',
+            'ownerEmail' => 'chris@skole.dk',
+            'joinPolicy' => 'approval',
+        ])->assertStatus(422)
+            ->assertJsonPath('message', 'Denne email er allerede knyttet til en anden klasse.');
+    }
+
     public function test_join_rejects_school_that_does_not_match_invite_class(): void
     {
         DB::table('schools')->insert([
@@ -1580,6 +1639,21 @@ class ExampleTest extends TestCase
         ])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Email eller adgangskode er forkert.');
+    }
+
+    public function test_existing_member_can_login_without_invite_code_when_email_is_unique(): void
+    {
+        $loginResponse = $this->postJson('/api/session/login', [
+            'email' => 'chris@skole.dk',
+            'password' => 'studos123',
+        ]);
+
+        $loginResponse
+            ->assertStatus(200)
+            ->assertJsonPath('session.member.id', 'demo-owner')
+            ->assertJsonPath('session.member.email', 'chris@skole.dk')
+            ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt', 'member' => ['personalCode']]])
+            ->assertJsonPath('class.id', 'demo-class');
     }
 
     public function test_existing_member_can_request_and_verify_login_code(): void
@@ -1765,6 +1839,66 @@ class ExampleTest extends TestCase
             'status' => 'active',
         ]);
         $this->assertNotEmpty(DB::table('members')->where('email', 'cms.nybruger@example.test')->value('password_hash'));
+    }
+
+    public function test_cms_member_creation_rejects_email_used_in_another_class(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        $this->createActiveDemoMember('cms-existing', 'Cms Konflikt', 'cms.conflict@example.test');
+        User::factory()->create([
+            'name' => 'CMS Eier',
+            'email' => 'cms.eier@example.test',
+        ]);
+
+        DB::table('classes')->insert([
+            'id' => 'cms-conflict-class',
+            'public_id' => 'HG-3B-26',
+            'school_id' => $schoolId,
+            'school_name' => 'Midtby Gymnasium',
+            'class_name' => '3.Z',
+            'graduation_year' => '2026',
+            'graduation_date' => '2026-06-28',
+            'owner_name' => 'CMS Eier',
+            'owner_email' => 'cms.owner@example.test',
+            'invite_code' => 'CMS-CMS26',
+            'join_policy' => 'approval',
+            'allow_member_posts' => true,
+            'require_approval_for_photos' => false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::table('members')->insert([
+            'id' => 'cms-class-owner',
+            'class_id' => 'cms-conflict-class',
+            'school_id' => $schoolId,
+            'display_name' => 'CMS Eier',
+            'first_name' => 'CMS',
+            'last_name' => 'Eier',
+            'email' => 'cms.eier@example.test',
+            'role' => 'owner',
+            'status' => 'active',
+            'joined_at' => now(),
+            'personal_code' => 'CMSZ-OK',
+        ]);
+
+        $this->actingAs(User::where('email', 'cms.eier@example.test')->firstOrFail());
+
+        $this->from('/admin/classes/cms-conflict-class')
+            ->post('/admin/classes/cms-conflict-class/members', [
+                'displayName' => 'Cms Nybruger 2',
+                'email' => 'cms.conflict@example.test',
+                'role' => 'student',
+            ])
+            ->assertRedirect('/admin/classes/cms-conflict-class')
+            ->assertSessionHasErrors('email');
+
+        $this->assertDatabaseMissing('members', [
+            'class_id' => 'cms-conflict-class',
+            'display_name' => 'Cms Nybruger 2',
+            'email' => 'cms.conflict@example.test',
+        ]);
     }
 
     public function test_removed_members_are_archived_separately_in_cms(): void

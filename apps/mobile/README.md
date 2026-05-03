@@ -2,10 +2,12 @@
 
 Native app til eleverne. Foerste flow er invitekode, profiloprettelse med
 skolevalg, samtykke, adgangskode og overblik med klasseinfo, nedtaelling og
-elevdata.
+elevdata. Hvis brugeren allerede har en profil, kan vedkommende logge ind direkte
+med email og adgangskode uden at skulle kende invitekoden.
 
 Profiloprettelse indeholder skole fra API-dropdown, fornavn/mellemnavne,
-efternavn, email, foedselsdag, valgfri telefon og valgfrit profilbillede via
+efternavn, email, foedselsdag, valgfri telefon, valgfri nødkontakt (navn +
+nummer) og valgfrit profilbillede via
 `expo-image-picker`. Backend afviser join, hvis den valgte skole ikke matcher
 klassen bag invitekoden. Email fungerer som login-navn, og adgangskoden gemmes
 hashet i Laravel.
@@ -35,8 +37,9 @@ og acceptere/afvise indgaaende requests.
 
 Appen gemmer en sikker bearer-token session i `expo-secure-store`, saa en
 oprettet profil aabner direkte paa overblik naeste gang. Ny telefon/ny
-installation kan bruge eksisterende profil-flowet med invitekode, email og
-adgangskode. Backend finder brugeren ud fra tokenet og maa ikke stole paa
+installation kan bruge eksisterende profil-flowet med email og adgangskode.
+For både nye og gamle brugere valideres klassetilknytning robust i backend efter
+det samme mønster. Backend finder brugeren ud fra tokenet og maa ikke stole paa
 `memberId` fra klienten til private handlinger.
 
 Efter login har appen en topbar med skole/klasse, side-menu med sektionerne

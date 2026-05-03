@@ -8,6 +8,7 @@ use App\Support\ContentModeration;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -131,7 +132,18 @@ class StudosWebController extends Controller
         ]);
 
         $user = $request->user();
-        $classId = $this->createClassForOwner($data, $user->name, $user->email);
+        try {
+            $classId = $this->createClassForOwner($data, $user->name, $user->email);
+        } catch (QueryException $exception) {
+            if ($this->isDuplicateEmailConstraintError($exception)) {
+                return redirect()
+                    ->back()
+                    ->withErrors(['class' => 'Denne email er allerede knyttet til en anden klasse.'])
+                    ->withInput();
+            }
+
+            throw $exception;
+        }
 
         return redirect()
             ->route('classes.show', $classId)
@@ -167,7 +179,21 @@ class StudosWebController extends Controller
             'email' => Str::lower(trim($data['ownerEmail'])),
             'password' => $data['password'],
         ]);
-        $classId = $this->createClassForOwner($data, $user->name, $user->email);
+
+        try {
+            $classId = $this->createClassForOwner($data, $user->name, $user->email);
+        } catch (QueryException $exception) {
+            $user->delete();
+
+            if ($this->isDuplicateEmailConstraintError($exception)) {
+                return redirect()
+                    ->route('classes.create')
+                    ->withErrors(['ownerEmail' => 'Denne email er allerede knyttet til en anden klasse.'])
+                    ->withInput();
+            }
+
+            throw $exception;
+        }
 
         Auth::login($user);
         $request->session()->regenerate();
@@ -188,6 +214,18 @@ class StudosWebController extends Controller
         $ownerId = (string) Str::uuid();
         $now = now()->format('Y-m-d H:i:s');
         $graduationDate = blank($data['graduationDate'] ?? null) ? null : $data['graduationDate'];
+        $normalizedOwnerEmail = Str::lower(trim($ownerEmail));
+
+        $emailUsedInAnyClass = DB::table('members')
+            ->whereRaw('LOWER(email) = ?', [$normalizedOwnerEmail])
+            ->exists();
+
+        abort_if(
+            $emailUsedInAnyClass,
+            422,
+            'Denne email er allerede knyttet til en anden klasse.',
+        );
+
         $ownerName = ContentModeration::cleanName($ownerName, 'ownerName', 'Navnet', [
             'source' => 'web_class_owner_name',
             'member_id' => $ownerId,
@@ -204,7 +242,7 @@ class StudosWebController extends Controller
         $schoolName = $school->name;
         $publicId = $this->generateClassPublicId($schoolName, $className, $data['graduationYear']);
 
-        DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerEmail, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
+        DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $normalizedOwnerEmail, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
             DB::table('classes')->insert([
                 'id' => $classId,
                 'public_id' => $publicId,
@@ -214,7 +252,7 @@ class StudosWebController extends Controller
                 'graduation_year' => trim($data['graduationYear']),
                 'graduation_date' => $graduationDate,
                 'owner_name' => $ownerName,
-                'owner_email' => Str::lower(trim($ownerEmail)),
+                'owner_email' => $normalizedOwnerEmail,
                 'invite_code' => $this->generateInviteCode($data['graduationYear']),
                 'join_policy' => $data['joinPolicy'],
                 'allow_member_posts' => true,
@@ -223,7 +261,7 @@ class StudosWebController extends Controller
                 'updated_at' => $now,
             ]);
 
-            DB::table('members')->insert([
+            $memberData = [
                 'id' => $ownerId,
                 'personal_code' => $this->generatePersonalCode($ownerParts[0] ?? $ownerName),
                 'class_id' => $classId,
@@ -231,11 +269,13 @@ class StudosWebController extends Controller
                 'display_name' => $ownerName,
                 'first_name' => $ownerParts[0] ?? null,
                 'last_name' => $ownerParts[1] ?? null,
-                'email' => Str::lower(trim($ownerEmail)),
+                'email' => $normalizedOwnerEmail,
                 'role' => 'owner',
                 'status' => 'active',
                 'joined_at' => $now,
-            ]);
+            ];
+
+            DB::table('members')->insert($memberData);
 
             if ($graduationDate) {
                 DB::table('events')->insert([
@@ -300,11 +340,25 @@ class StudosWebController extends Controller
             'displayName' => ['required', 'string', 'max:190'],
             'email' => ['required', 'email', 'max:190'],
             'role' => ['required', Rule::in(array_keys(self::ROLES))],
+            'emergencyContactName' => ['nullable', 'string', 'max:190'],
+            'emergencyContactPhone' => ['nullable', 'string', 'max:40'],
         ]);
 
         $displayName = trim($data['displayName']);
         $email = Str::lower(trim($data['email']));
         $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
+        $emergencyContactName = blank($data['emergencyContactName'] ?? null) ? null : trim($data['emergencyContactName']);
+        $emergencyContactPhone = blank($data['emergencyContactPhone'] ?? null) ? null : trim($data['emergencyContactPhone']);
+        $emailUsedInAnyClass = DB::table('members')
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->exists();
+
+        if ($emailUsedInAnyClass) {
+            return back()
+                ->withErrors(['email' => 'Denne email er allerede knyttet til en anden klasse.'])
+                ->withInput();
+        }
+
         $nameTaken = DB::table('members')
             ->where('class_id', $class)
             ->whereRaw('LOWER(display_name) = ?', [Str::lower($displayName)])
@@ -318,7 +372,7 @@ class StudosWebController extends Controller
 
         $schoolClass = DB::table('classes')->where('id', $class)->first();
 
-        DB::table('members')->insert([
+        $memberData = [
             'id' => (string) Str::uuid(),
             'personal_code' => $this->generatePersonalCode($nameParts[0] ?? $displayName),
             'class_id' => $class,
@@ -326,11 +380,31 @@ class StudosWebController extends Controller
             'display_name' => $displayName,
             'first_name' => $nameParts[0] ?? null,
             'last_name' => $nameParts[1] ?? null,
-            'email' => $email,
             'role' => $data['role'],
             'status' => 'pending',
             'joined_at' => now(),
-        ]);
+            'email' => $email,
+        ];
+
+        if (Schema::hasColumn('members', 'emergency_contact_name')) {
+            $memberData['emergency_contact_name'] = $emergencyContactName;
+        }
+
+        if (Schema::hasColumn('members', 'emergency_contact_phone')) {
+            $memberData['emergency_contact_phone'] = $emergencyContactPhone;
+        }
+
+        try {
+            DB::table('members')->insert($memberData);
+        } catch (QueryException $exception) {
+            if ($this->isDuplicateEmailConstraintError($exception)) {
+                return back()
+                    ->withErrors(['email' => 'Denne email er allerede knyttet til en anden klasse.'])
+                    ->withInput();
+            }
+
+            throw $exception;
+        }
 
         Mail::to($email)->send(new MemberInvitationMail(
             displayName: $displayName,
@@ -923,5 +997,22 @@ class StudosWebController extends Controller
     private function codePart(string $value): string
     {
         return preg_replace('/[^A-Z0-9]/', '', Str::upper(Str::ascii($value))) ?? '';
+    }
+
+    private function isDuplicateEmailConstraintError(QueryException $exception): bool
+    {
+        $message = strtolower((string) $exception->getMessage());
+        $sqlState = $exception->errorInfo[0] ?? null;
+        $driverCode = (string) ($exception->errorInfo[1] ?? '');
+
+        if (str_contains($message, 'members_email_unique') || str_contains($message, 'members.email')) {
+            return true;
+        }
+
+        if ($sqlState === '23000' && in_array($driverCode, ['1062', '2627', '2601', '19'], true)) {
+            return str_contains($message, 'members') && str_contains($message, 'email');
+        }
+
+        return false;
     }
 }

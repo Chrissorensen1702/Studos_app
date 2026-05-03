@@ -198,7 +198,7 @@
         id="add-member-dialog"
         class="modal"
         aria-labelledby="add-member-title"
-        @if ($errors->has('displayName') || $errors->has('email')) data-open-on-load data-focus-target="member-display-name" @endif
+        @if ($errors->has('displayName') || $errors->has('email') || $errors->has('emergencyContactName') || $errors->has('emergencyContactPhone')) data-open-on-load data-focus-target="member-display-name" @endif
       >
         <div class="modal-panel">
           <div class="modal-heading">
@@ -234,6 +234,22 @@
                   <option value="{{ $value }}" @selected(old('role', 'student') === $value)>{{ $label }}</option>
                 @endforeach
               </select>
+            </label>
+
+            <label>
+              Fulde navn
+              <input name="emergencyContactName" value="{{ old('emergencyContactName') }}">
+              @error('emergencyContactName')
+                <span class="field-error">{{ $message }}</span>
+              @enderror
+            </label>
+
+            <label>
+              Mobilnummer
+              <input name="emergencyContactPhone" value="{{ old('emergencyContactPhone') }}" inputmode="tel">
+              @error('emergencyContactPhone')
+                <span class="field-error">{{ $message }}</span>
+              @enderror
             </label>
 
             <div class="form-actions">

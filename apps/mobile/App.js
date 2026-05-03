@@ -17,6 +17,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -314,6 +315,13 @@ const CREATE_CLASS_URL =
   process.env.EXPO_PUBLIC_CREATE_CLASS_URL
   ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/opret-klasse');
 const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'support@studos.dk';
+const WEB_SITE_URL =
+  process.env.EXPO_PUBLIC_WEBSITE_URL
+  ?? (WEB_PUBLIC_BASE_URL
+    ? WEB_PUBLIC_BASE_URL
+    : CREATE_CLASS_URL.replace(/\/opret-klasse\/?$/, '').replace(/\/$/, ''));
+const STUDOS_TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
+const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
 const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const LOCAL_API_BASE_URLS = [
   'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
@@ -322,12 +330,14 @@ const LOCAL_API_BASE_URLS = [
   'http://127.0.0.1/studenter-app/public/api',
 ];
 const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/api` : null;
+const FALLBACK_CLOUD_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'https://studos.laravel.cloud/api';
 const API_BASE_URLS = (EXPLICIT_API_BASE_URL
   ? [EXPLICIT_API_BASE_URL]
   : IS_WEB
     ? [WEB_API_BASE_URL]
-    : LOCAL_API_BASE_URLS
+    : [...LOCAL_API_BASE_URLS, FALLBACK_CLOUD_API_BASE_URL]
 ).filter(Boolean);
+const UNIQUE_API_BASE_URLS = Array.from(new Set(API_BASE_URLS));
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
 const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'MacBook-Air-tilhrende-Chris.local';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
@@ -366,7 +376,7 @@ const APP_DRAWER_SECTIONS = [
 ];
 
 const GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES = [
-  { id: 'preview-3a', className: '3.A', schoolName: 'Aarhus Gymnasium', score: 18420, movement: '+2' },
+  { id: 'preview-3a', className: '3.A', schoolName: 'Århus Gymnasium', score: 18420, movement: '+2' },
   { id: 'preview-2b', className: '2.B', schoolName: 'Nørre Campus', score: 16880, movement: '+1' },
   { id: 'preview-3x', className: '3.X', schoolName: 'Køge HHX', score: 15460, movement: '-1' },
   { id: 'preview-2g', className: '2.G', schoolName: 'Roskilde Gymnasium', score: 13990, movement: 'ny' },
@@ -379,6 +389,8 @@ const emptyProfile = {
   lastName: '',
   email: '',
   phone: '',
+  emergencyContactName: '',
+  emergencyContactPhone: '',
   birthday: '',
   profilePhotoUrl: '',
   profilePhotoData: '',
@@ -590,6 +602,7 @@ const monthTitle = (date) => new Intl.DateTimeFormat('da-DK', {
 }).format(date);
 
 const addCalendarMonths = (date, count) => new Date(date.getFullYear(), date.getMonth() + count, 1, 12);
+const addCalendarYears = (date, count) => new Date(date.getFullYear() + count, date.getMonth(), 1, 12);
 
 const calendarDayKeysForMonth = (date) => {
   const year = date.getFullYear();
@@ -1162,14 +1175,20 @@ const fetchWithTimeout = (url, options) =>
 const parseApiError = (payload) => {
   const errors = payload?.errors ? Object.values(payload.errors).flat() : [];
 
-  return errors[0] || payload?.message || 'Noget gik galt. Proev igen.';
+  return errors[0] || payload?.message || 'Noget gik galt. Prøv igen.';
 };
+
+const shouldRetryInviteErrorOnNextApi = (path, error) =>
+  path === '/session/login'
+  && String(error?.message ?? '').toLowerCase().includes('invite code field is required');
 
 const apiFetch = async (path, options = {}) => {
   const { authToken, headers: optionHeaders, ...fetchOptions } = options;
   let lastError = null;
 
-  for (const baseUrl of API_BASE_URLS) {
+  for (let index = 0; index < UNIQUE_API_BASE_URLS.length; index += 1) {
+    const baseUrl = UNIQUE_API_BASE_URLS[index];
+
     try {
       const response = await fetchWithTimeout(`${baseUrl}${path}`, {
         headers: {
@@ -1201,13 +1220,17 @@ const apiFetch = async (path, options = {}) => {
     } catch (error) {
       lastError = error;
 
-      if (error.status) {
+      if (error.status && !shouldRetryInviteErrorOnNextApi(path, error)) {
+        throw error;
+      }
+
+      if (error.status && index === UNIQUE_API_BASE_URLS.length - 1) {
         throw error;
       }
     }
   }
 
-  throw lastError ?? new Error('API kunne ikke naas.');
+  throw lastError ?? new Error('API kunne ikke nås.');
 };
 
 const androidNotificationProjectId = (constants) =>
@@ -1383,18 +1406,20 @@ const profileFromMember = (member) => ({
   lastName: member?.lastName ?? '',
   email: member?.email ?? '',
   phone: member?.phone ?? '',
+  emergencyContactName: member?.emergencyContactName ?? '',
+  emergencyContactPhone: member?.emergencyContactPhone ?? '',
   birthday: member?.birthday ?? '',
   profilePhotoUrl: member?.profilePhotoUrl ?? '',
 });
 
 export default function App() {
+  const { height: viewportHeight } = useWindowDimensions();
   const [step, setStep] = useState('invite');
   const [inviteCode, setInviteCode] = useState('');
   const [schoolClass, setSchoolClass] = useState(null);
-  const [availableSchools, setAvailableSchools] = useState([]);
   const [profile, setProfile] = useState(emptyProfile);
   const [session, setSession] = useState(null);
-  const [existingLogin, setExistingLogin] = useState({ inviteCode: '', email: '', password: '' });
+  const [existingLogin, setExistingLogin] = useState({ email: '', password: '' });
   const [activeTab, setActiveTab] = useState('overview');
   const [calendarFocusTarget, setCalendarFocusTarget] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1803,10 +1828,9 @@ export default function App() {
     await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
     setSession(null);
     setSchoolClass(null);
-    setAvailableSchools([]);
     setProfile(emptyProfile);
     setInviteCode('');
-    setExistingLogin({ inviteCode: '', email: '', password: '' });
+    setExistingLogin({ email: '', password: '' });
     setActiveTab('overview');
     setSidebarOpen(false);
     setChatUnreadCount(0);
@@ -1940,7 +1964,7 @@ export default function App() {
     const code = inviteCode.trim().toUpperCase();
 
     if (!code) {
-      setError('Indtast invitekode for at fortsaette.');
+      setError('Indtast invitekode for at fortsætte.');
       return;
     }
 
@@ -1954,11 +1978,22 @@ export default function App() {
         : data.class?.schoolId
           ? [{ id: data.class.schoolId, name: data.class.schoolName }]
           : [];
+      const normalizedClassSchoolName = String(data.class?.schoolName ?? '').trim().toLocaleLowerCase('da-DK');
+      const inferredSchoolId = data.class?.schoolId
+        || schools.find((school) => String(school.name ?? '').trim().toLocaleLowerCase('da-DK') === normalizedClassSchoolName)?.id
+        || '';
+      const resolvedSchoolName = !!data.class?.schoolName;
+
+      if (!inferredSchoolId) {
+        setError(resolvedSchoolName
+          ? 'Skolen for denne invitekode kunne ikke matches automatisk. Prøv igen eller kontakt support.'
+          : 'Invitekoden mangler skoleoplysninger.');
+        return;
+      }
 
       setInviteCode(code);
       setSchoolClass(data.class);
-      setAvailableSchools(schools);
-      setProfile((current) => ({ ...current, schoolId: '' }));
+      setProfile((current) => ({ ...current, schoolId: inferredSchoolId }));
       setStep('profile');
     } catch (apiError) {
       setError(apiError.message || 'Invitekoden kunne ikke findes.');
@@ -1973,28 +2008,29 @@ export default function App() {
     try {
       await Linking.openURL(CREATE_CLASS_URL);
     } catch {
-      setError('Kunne ikke aabne klasseoprettelsen.');
+      setError('Kunne ikke åbne klasseoprettelsen.');
     }
   };
 
   const showExistingLogin = () => {
-    setExistingLogin((current) => ({
-      ...current,
-      inviteCode: current.inviteCode || inviteCode.trim().toUpperCase(),
-    }));
+    setExistingLogin({ email: '', password: '' });
     setError('');
     setStep('existingLogin');
   };
 
   const loginExistingProfile = async () => {
     const nextLogin = {
-      inviteCode: existingLogin.inviteCode.trim().toUpperCase(),
       email: existingLogin.email.trim().toLowerCase(),
       password: existingLogin.password,
     };
+    const normalizedInviteCode = inviteCode.trim().toUpperCase();
 
-    if (!nextLogin.inviteCode || !nextLogin.email || !nextLogin.password) {
-      setError('Indtast invitekode, email og adgangskode.');
+    if (normalizedInviteCode) {
+      nextLogin.inviteCode = normalizedInviteCode;
+    }
+
+    if (!nextLogin.email || !nextLogin.password) {
+      setError('Indtast email og adgangskode.');
       return;
     }
 
@@ -2008,18 +2044,17 @@ export default function App() {
       });
 
       await storeSession(data);
-      setExistingLogin({
-        inviteCode: nextLogin.inviteCode,
-        email: nextLogin.email,
-        password: '',
-      });
+      setExistingLogin({ email: nextLogin.email, password: '' });
       setSession(data.session);
       setSchoolClass(data.class);
       setProfile(profileFromMember(data.session.member));
       setActiveTab('overview');
       setStep('overview');
     } catch (apiError) {
-      setError(apiError.message || 'Login mislykkedes.');
+      const message = apiError?.message || 'Login mislykkedes.';
+      setError(message.includes('invite code field is required')
+        ? 'Denne cloud-udgave kræver endnu invitekode. Prøv at skrive din invitekode, ellers brug en nyere App/Cloud-version.'
+        : message);
     } finally {
       setLoading(false);
     }
@@ -2031,7 +2066,7 @@ export default function App() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permission.granted) {
-      setError('Studos skal have adgang til billeder for at vaelge profilbillede.');
+      setError('Studos skal have adgang til billeder for at vælge profilbillede.');
       return;
     }
 
@@ -2244,6 +2279,8 @@ export default function App() {
       lastName: profile.lastName.trim(),
       email: profile.email.trim().toLowerCase(),
       phone: profile.phone.trim(),
+      emergencyContactName: profile.emergencyContactName.trim(),
+      emergencyContactPhone: profile.emergencyContactPhone.trim(),
       birthday: profile.birthday.trim(),
       profilePhotoData: profile.profilePhotoData,
       password: profile.password,
@@ -2263,22 +2300,22 @@ export default function App() {
     const missingField = requiredFields.find((key) => !nextProfile[key]);
 
     if (missingField) {
-      setError('Udfyld navn, skole, email, foedselsdag og adgangskode.');
+      setError('Udfyld navn, skole, email, fødselsdag og adgangskode.');
       return;
     }
 
     if (!nextProfile.termsAccepted || !nextProfile.privacyAccepted) {
-      setError('Accepter vilkaar og privatlivspolitik for at oprette profilen.');
+      setError('Accepter vilkår og privatlivspolitik for at oprette profilen.');
       return;
     }
 
     if (nextProfile.password !== nextProfile.passwordConfirmation) {
-      setError('Adgangskoderne skal vaere ens.');
+      setError('Adgangskoderne skal være ens.');
       return;
     }
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(nextProfile.birthday)) {
-      setError('Skriv foedselsdag som YYYY-MM-DD.');
+      setError('Skriv fødselsdag som YYYY-MM-DD.');
       return;
     }
 
@@ -2459,15 +2496,17 @@ export default function App() {
     );
   }
 
+  const isAuthEntryStep = step === 'invite' || step === 'existingLogin';
+
   return (
-    <View style={styles.safeArea}>
+    <View style={isAuthEntryStep ? styles.safeAreaWhite : styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.keyboardView}
+        style={isAuthEntryStep ? styles.keyboardViewWhite : styles.keyboardView}
       >
-        <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
-          {step === 'invite' && (
+        {step === 'invite' ? (
+          <View style={[styles.inviteScreenContainer, { height: viewportHeight, paddingHorizontal: 0 }]}>
             <InviteScreen
               error={error}
               inviteCode={inviteCode}
@@ -2477,39 +2516,43 @@ export default function App() {
               onExistingLogin={showExistingLogin}
               onSubmit={submitInviteCode}
             />
-          )}
+          </View>
+        ) : (
+          <ScrollView
+            contentContainerStyle={step === 'existingLogin' ? [styles.screen, styles.loginScreen] : styles.screen}
+            keyboardShouldPersistTaps="handled"
+          >
+            {step === 'existingLogin' && (
+              <ExistingLoginScreen
+                error={error}
+                login={existingLogin}
+                loading={loading}
+                onBack={() => {
+                  setStep('invite');
+                  setError('');
+                }}
+                onChangeLogin={updateExistingLogin}
+                onLogin={loginExistingProfile}
+              />
+            )}
 
-          {step === 'existingLogin' && (
-            <ExistingLoginScreen
-              error={error}
-              login={existingLogin}
-              loading={loading}
-              onBack={() => {
-                setStep('invite');
-                setError('');
-              }}
-              onChangeLogin={updateExistingLogin}
-              onLogin={loginExistingProfile}
-            />
-          )}
-
-          {step === 'profile' && schoolClass && (
-            <ProfileScreen
-              error={error}
-              loading={loading}
-              profile={profile}
-              schools={availableSchools}
-              schoolClass={schoolClass}
-              onBack={() => {
-                setStep('invite');
-                setError('');
-              }}
-              onChangeProfile={updateProfile}
-              onPickPhoto={pickProfilePhoto}
-              onSubmit={submitProfile}
-            />
-          )}
-        </ScrollView>
+            {step === 'profile' && schoolClass && (
+              <ProfileScreen
+                error={error}
+                loading={loading}
+                profile={profile}
+                schoolClass={schoolClass}
+                onBack={() => {
+                  setStep('invite');
+                  setError('');
+                }}
+                onChangeProfile={updateProfile}
+                onPickPhoto={pickProfilePhoto}
+                onSubmit={submitProfile}
+              />
+            )}
+          </ScrollView>
+        )}
       </KeyboardAvoidingView>
     </View>
   );
@@ -2524,42 +2567,73 @@ function InviteScreen({
   onExistingLogin,
   onSubmit,
 }) {
-  return (
-    <View style={styles.inviteShell}>
-      <Pressable hitSlop={12} onPress={onExistingLogin} style={styles.topLoginButton}>
-        <Text style={styles.topLoginText}>Jeg har allerede en profil</Text>
-      </Pressable>
+  const { height } = useWindowDimensions();
+  const shellPadding = Math.max(12, Math.min(height * 0.08, 38));
+  const contentOffset = Math.max(42, Math.min(height * 0.12, 92));
 
-      <View style={styles.inviteMain}>
+  return (
+    <View style={[styles.inviteShell, { height, paddingTop: shellPadding, paddingBottom: shellPadding }]}>
+      <View style={[styles.inviteMain, { marginTop: contentOffset }]}>
         <View style={styles.logoLockup}>
-          <Image source={STUDOS_LOGO} style={styles.logoMark} />
-          <Text style={styles.logoWord}>Studos</Text>
+          <View style={styles.inviteLogoWrap}>
+            <Image source={STUDOS_LOGO} style={styles.logoMark} />
+          </View>
+          <View style={styles.inviteWordmark}>
+            <View style={styles.inviteWordmarkTextRow}>
+              <Text numberOfLines={1} style={[styles.inviteWordmarkText, styles.inviteWordmarkTextLight]}>Stu</Text>
+              <Text numberOfLines={1} style={styles.inviteWordmarkText}>dos</Text>
+            </View>
+            <View style={styles.inviteWordmarkUnderline} />
+            <View style={styles.inviteWordmarkDot} />
+          </View>
+          <Text style={styles.inviteHeroText}>
+            Indtast din invitekode, og kom i gang med din klasse på få sekunder.
+          </Text>
         </View>
 
-        <View style={styles.inviteForm}>
-          <Text style={styles.label}>Invitekode</Text>
-          <TextInput
-            autoCapitalize="characters"
-            autoCorrect={false}
-            onChangeText={onChangeInviteCode}
-            onSubmitEditing={onSubmit}
-            placeholder="STU-DEMO26"
-            placeholderTextColor="#8b93a1"
-            returnKeyType="go"
-            style={styles.inviteInput}
-            value={inviteCode}
-          />
+        <View style={styles.inviteFormCard}>
+          <View style={styles.inviteForm}>
+            <Text style={styles.inviteInputLabel}>Indtast invitekode</Text>
+            <View style={styles.inviteInputWithIcon}>
+              <View style={styles.inviteInputIconWrap}>
+                <Ionicons name="key" size={18} color={STUDOS_THEME.red} />
+              </View>
+              <TextInput
+                autoCapitalize="characters"
+                autoCorrect={false}
+                onChangeText={onChangeInviteCode}
+                onSubmitEditing={onSubmit}
+                placeholder="STU-DEMO26"
+                placeholderTextColor="#8b93a1"
+                returnKeyType="go"
+                style={styles.inviteInput}
+                value={inviteCode}
+              />
+            </View>
+          </View>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-          <Button label="Fortsaet" loading={loading} onPress={onSubmit} />
+          <View style={styles.inviteActionRow}>
+            <Button label="Fortsæt til din klasse" loading={loading} onPress={onSubmit} />
+          </View>
+
+          <Pressable hitSlop={12} onPress={onExistingLogin} style={[styles.topLoginButton, { marginTop: 8 }]}>
+            <Ionicons name="log-in-outline" size={14} color="#182446" />
+            <Text style={styles.topLoginText}>Jeg har allerede en profil</Text>
+          </Pressable>
         </View>
       </View>
 
-      <Pressable hitSlop={12} onPress={onCreateClass} style={styles.createClassLink}>
-        <Text style={styles.createClassText}>Mangler din klasse Studos?</Text>
-        <Text style={styles.createClassAction}>Opret klassen her</Text>
-      </Pressable>
+      <View style={styles.createClassFooter}>
+        <Pressable hitSlop={12} onPress={onCreateClass} style={styles.createClassLink}>
+          <Text style={styles.createClassText}>Mangler din klasse?</Text>
+          <View style={styles.createClassActionRow}>
+            <Text style={styles.createClassAction}>Opret klassen her</Text>
+            <Ionicons name="arrow-forward-outline" size={16} color="#ef5b3f" />
+          </View>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -8947,7 +9021,7 @@ function AppTopBar({ className, menuOpen, onToggleMenu, schoolName }) {
     <View style={styles.topBar}>
       <View style={styles.topBarSide}>
         <Pressable
-          accessibilityLabel={menuOpen ? 'Luk menu' : 'Aabn menu'}
+          accessibilityLabel={menuOpen ? 'Luk menu' : 'Åbn menu'}
           accessibilityRole="button"
           hitSlop={12}
           onPress={onToggleMenu}
@@ -9694,35 +9768,43 @@ function ExistingLoginScreen({
   onChangeLogin,
   onLogin,
 }) {
+  const { height } = useWindowDimensions();
+  const flowTopPadding = Math.max(36, Math.min(height * 0.07, 56));
+
   return (
-    <View style={styles.flowStack}>
-      <View style={styles.compactHeader}>
-        <Pressable hitSlop={12} onPress={onBack}>
-          <Text style={styles.backText}>Tilbage</Text>
-        </Pressable>
-        <View>
-          <Text style={styles.kicker}>Studos</Text>
-          <Text style={styles.compactTitle}>Log ind</Text>
+    <View style={[styles.loginFlow, { paddingTop: flowTopPadding }]}>
+      <Pressable hitSlop={12} onPress={onBack} style={styles.loginBackRow}>
+        <Ionicons name="chevron-back" size={16} color="#ef5b3f" />
+        <Text style={styles.backText}>Tilbage</Text>
+      </Pressable>
+
+      <View style={styles.loginBrandSection}>
+        <View style={styles.loginLogoWrap}>
+          <Image source={STUDOS_LOGO} style={styles.loginLogo} />
         </View>
+        <View style={styles.loginWordmark}>
+          <View style={styles.loginWordmarkTextRow}>
+            <Text numberOfLines={1} style={[styles.loginWordmarkText, styles.loginWordmarkTextLight]}>Stu</Text>
+            <Text numberOfLines={1} style={styles.loginWordmarkText}>dos</Text>
+          </View>
+          <View style={styles.loginWordmarkUnderline} />
+          <View style={styles.loginWordmarkDot} />
+        </View>
+        <Text style={styles.loginHeadline}>Log ind på din profil</Text>
+        <Text style={styles.loginLead}>
+          Brug din email og adgangskode for at komme sikkert ind.
+        </Text>
       </View>
 
-      <View style={styles.panel}>
+      <View style={styles.loginCard}>
         <Text style={styles.sectionTitle}>Eksisterende profil</Text>
-        <Text style={styles.feedText}>
-          Brug din invitekode, email og adgangskode.
-        </Text>
-
+        <Text style={styles.loginCardHelp}>Indtast dine oplysninger for at logge ind sikkert.</Text>
         <View style={styles.formGrid}>
-          <Field
-            autoCapitalize="characters"
-            label="Invitekode"
-            onChangeText={(value) => onChangeLogin('inviteCode', value.toUpperCase())}
-            value={login.inviteCode}
-          />
           <Field
             autoCapitalize="none"
             keyboardType="email-address"
             label="Email"
+            placeholder="navn@eksempel.dk"
             onChangeText={(value) => onChangeLogin('email', value)}
             textContentType="emailAddress"
             value={login.email}
@@ -9730,6 +9812,7 @@ function ExistingLoginScreen({
           <Field
             autoCapitalize="none"
             label="Adgangskode"
+            placeholder="••••••••"
             onChangeText={(value) => onChangeLogin('password', value)}
             secureTextEntry
             textContentType="password"
@@ -9753,13 +9836,43 @@ function ProfileScreen({
   error,
   loading,
   profile,
-  schools,
   schoolClass,
   onBack,
   onChangeProfile,
   onPickPhoto,
   onSubmit,
 }) {
+  const [birthdayPickerOpen, setBirthdayPickerOpen] = useState(false);
+  const [birthdayVisibleMonth, setBirthdayVisibleMonth] = useState(() => dateFromInput(profile.birthday || formatInputDate(new Date())));
+  const visibleBirthdayDays = useMemo(() => calendarDaysForMonth(birthdayVisibleMonth), [birthdayVisibleMonth]);
+  const birthdayDisplayValue = profile.birthday ? formatProfileDate(profile.birthday) : 'Vælg fødselsdag';
+  const birthdayVisibleMonthLabel = new Intl.DateTimeFormat('da-DK', { month: 'long' }).format(birthdayVisibleMonth);
+
+  const selectBirthday = (value) => {
+    onChangeProfile('birthday', value);
+    setBirthdayVisibleMonth(dateFromInput(value));
+    setBirthdayPickerOpen(false);
+  };
+
+  const toggleBirthdayPicker = () => setBirthdayPickerOpen((current) => {
+    if (!current) {
+      const nextVisibleMonth = dateFromInput(profile.birthday || formatInputDate(new Date()));
+
+      setBirthdayVisibleMonth(nextVisibleMonth);
+    }
+
+    return !current;
+  });
+  const jumpBirthdayYear = (years) => {
+    setBirthdayVisibleMonth((current) => addCalendarYears(current, years));
+  };
+  const openTerms = () => {
+    Linking.openURL(STUDOS_TERMS_URL).catch(() => {});
+  };
+  const openPrivacy = () => {
+    Linking.openURL(STUDOS_PRIVACY_URL).catch(() => {});
+  };
+
   return (
     <View style={styles.flowStack}>
       <View style={styles.compactHeader}>
@@ -9787,24 +9900,29 @@ function ProfileScreen({
           )}
           <View style={styles.photoCopy}>
             <Text style={styles.photoTitle}>Profilbillede</Text>
-            <Text style={styles.photoText}>Valgfrit - du kan altid tilfoeje et senere</Text>
+            <Text style={styles.photoText}>Valgfrit - du kan altid tilføje et senere</Text>
           </View>
         </Pressable>
 
         <View style={styles.formGrid}>
-          <SchoolSelect
-            onChange={(schoolId) => onChangeProfile('schoolId', schoolId)}
-            schools={schools}
-            value={profile.schoolId}
-          />
+          <View style={styles.field}>
+            <Text style={styles.label}>Skole</Text>
+            <View style={styles.staticField}>
+              <Text style={[styles.selectValue, !schoolClass?.schoolName ? styles.selectPlaceholder : null]}>
+                {schoolClass?.schoolName || 'Skole ikke angivet'}
+              </Text>
+            </View>
+          </View>
           <Field
             label="Fornavn og mellemnavne"
+            placeholder="Mette A."
             onChangeText={(value) => onChangeProfile('firstName', value)}
             textContentType="givenName"
             value={profile.firstName}
           />
           <Field
             label="Efternavn"
+            placeholder="Jensen"
             onChangeText={(value) => onChangeProfile('lastName', value)}
             textContentType="familyName"
             value={profile.lastName}
@@ -9813,6 +9931,7 @@ function ProfileScreen({
             autoCapitalize="none"
             keyboardType="email-address"
             label="Email"
+            placeholder="din.email@eksempel.dk"
             onChangeText={(value) => onChangeProfile('email', value)}
             textContentType="emailAddress"
             value={profile.email}
@@ -9820,20 +9939,135 @@ function ProfileScreen({
           <Field
             keyboardType="phone-pad"
             label="Telefon (valgfri)"
+            placeholder="+45 20 12 34 56"
             onChangeText={(value) => onChangeProfile('phone', value)}
             textContentType="telephoneNumber"
             value={profile.phone}
           />
-          <Field
-            keyboardType="numbers-and-punctuation"
-            label="Foedselsdag"
-            onChangeText={(value) => onChangeProfile('birthday', value)}
-            placeholder="YYYY-MM-DD"
-            value={profile.birthday}
-          />
+          <View style={styles.field}>
+            <Text style={styles.label}>Fødselsdag</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={toggleBirthdayPicker}
+              style={({ pressed }) => [
+                styles.calendarDateSelect,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.calendarDateSelectValue}>
+                <View style={styles.calendarDateSelectIcon}>
+                  <Ionicons name="calendar" size={16} color={STUDOS_THEME.ink} />
+                </View>
+                <Text numberOfLines={1} style={styles.calendarDateSelectText}>
+                  {birthdayDisplayValue}
+                </Text>
+              </View>
+              <Ionicons
+                name={birthdayPickerOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#65748b"
+              />
+            </Pressable>
+            {birthdayPickerOpen ? (
+              <View style={styles.calendarPickerBlock}>
+                <View style={styles.calendarPickerHeader}>
+                  <View style={styles.calendarYearControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige år"
+                      accessibilityRole="button"
+                      onPress={() => jumpBirthdayYear(-1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {birthdayVisibleMonth.getFullYear()}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste år"
+                      accessibilityRole="button"
+                      onPress={() => jumpBirthdayYear(1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                  <View style={styles.calendarMonthControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige måned"
+                      accessibilityRole="button"
+                      onPress={() => setBirthdayVisibleMonth((current) => addCalendarMonths(current, -1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {birthdayVisibleMonthLabel}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste måned"
+                      accessibilityRole="button"
+                      onPress={() => setBirthdayVisibleMonth((current) => addCalendarMonths(current, 1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.calendarWeekdayRow}>
+                  {CALENDAR_WEEKDAYS.map((weekday) => (
+                    <Text key={weekday} style={styles.calendarWeekdayText}>{weekday}</Text>
+                  ))}
+                </View>
+                <View style={styles.calendarDayGrid}>
+                  {visibleBirthdayDays.map((day) => {
+                    if (day.empty) {
+                      return <View key={day.id} style={styles.calendarDayCell} />;
+                    }
+
+                    const active = profile.birthday === day.value;
+
+                    return (
+                      <View key={day.id} style={styles.calendarDayCell}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => selectBirthday(day.value)}
+                          style={({ pressed }) => [
+                            styles.calendarDayButton,
+                            active ? styles.calendarDayButtonActive : null,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text style={[
+                            styles.calendarDayText,
+                            active ? styles.calendarDayTextActive : null,
+                          ]}>
+                            {day.day}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+          </View>
           <Field
             autoCapitalize="none"
             label="Adgangskode"
+            placeholder="Mindst 6 tegn"
             onChangeText={(value) => onChangeProfile('password', value)}
             secureTextEntry
             textContentType="newPassword"
@@ -9842,24 +10076,56 @@ function ProfileScreen({
           <Field
             autoCapitalize="none"
             label="Gentag adgangskode"
+            placeholder="••••••••"
             onChangeText={(value) => onChangeProfile('passwordConfirmation', value)}
             secureTextEntry
             textContentType="newPassword"
             value={profile.passwordConfirmation}
           />
         </View>
+        <View style={styles.emergencyContactContainer}>
+          <Text style={styles.emergencyContactTitle}>Nødkontakt (valgfri)</Text>
+          <Text style={styles.emergencyContactBody}>
+            Vi anbefaler, at du angiver en nødkontakt, så din klasse kan hjælpe dig i en vanskelig situation.
+            {'\n'}
+            {'\n'}
+            I appen kan du selv styre, hvem der kan se din nødkontakt.
+          </Text>
+          <Field
+            label="Fulde navn"
+            placeholder="Mette Nielsen"
+            onChangeText={(value) => onChangeProfile('emergencyContactName', value)}
+            value={profile.emergencyContactName}
+          />
+          <Field
+            keyboardType="phone-pad"
+            label="Mobilnummer"
+            placeholder="+45 30 40 50 60"
+            onChangeText={(value) => onChangeProfile('emergencyContactPhone', value)}
+            textContentType="telephoneNumber"
+            value={profile.emergencyContactPhone}
+          />
+        </View>
 
         <View style={styles.consentList}>
           <ConsentRow
             active={profile.termsAccepted}
-            label="Jeg accepterer vilkaarene"
             onPress={() => onChangeProfile('termsAccepted', !profile.termsAccepted)}
-          />
+          >
+            Jeg accepterer{' '}
+            <Text style={styles.consentLinkText} onPress={openTerms}>
+              vilkårene
+            </Text>
+          </ConsentRow>
           <ConsentRow
             active={profile.privacyAccepted}
-            label="Jeg accepterer privatlivspolitikken"
             onPress={() => onChangeProfile('privacyAccepted', !profile.privacyAccepted)}
-          />
+          >
+            Jeg accepterer{' '}
+            <Text style={styles.consentLinkText} onPress={openPrivacy}>
+              privatlivspolitikken
+            </Text>
+          </ConsentRow>
         </View>
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -9911,7 +10177,7 @@ function AccountProfileScreen({
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permission.granted) {
-      setLocalError('Studos skal have adgang til billeder for at vaelge profilbillede.');
+      setLocalError('Studos skal have adgang til billeder for at vælge profilbillede.');
       return;
     }
 
@@ -9930,7 +10196,7 @@ function AccountProfileScreen({
     const asset = result.assets[0];
 
     if (!asset.base64) {
-      setLocalError('Billedet kunne ikke laeses.');
+      setLocalError('Billedet kunne ikke læses.');
       return;
     }
 
@@ -11521,7 +11787,7 @@ function SchoolSelect({ onChange, schools, value }) {
         ]}
       >
         <Text style={[styles.selectValue, !selectedSchool ? styles.selectPlaceholder : null]}>
-          {selectedSchool?.name ?? 'Vaelg skole'}
+          {selectedSchool?.name ?? 'Vælg skole'}
         </Text>
         <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#172143" />
       </Pressable>
@@ -11561,14 +11827,25 @@ function SchoolSelect({ onChange, schools, value }) {
   );
 }
 
-function ConsentRow({ active, label, onPress }) {
+function ConsentRow({ active, children, label, onPress }) {
   return (
-    <Pressable onPress={onPress} style={styles.consentRow}>
-      <View style={[styles.consentBox, active ? styles.consentBoxActive : null]}>
-        {active ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}
-      </View>
-      <Text style={styles.consentText}>{label}</Text>
-    </Pressable>
+    <View style={styles.consentRow}>
+      <Pressable
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: active }}
+        onPress={onPress}
+        style={({ pressed }) => [
+          pressed ? styles.footerItemPressed : null,
+        ]}
+      >
+        <View style={[styles.consentBox, active ? styles.consentBoxActive : null]}>
+          {active ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}
+        </View>
+      </Pressable>
+      <Text onPress={onPress} style={styles.consentText}>
+        {children ?? label}
+      </Text>
+    </View>
   );
 }
 
@@ -11578,7 +11855,7 @@ function Field({ label, placeholder, ...props }) {
       <Text style={styles.label}>{label}</Text>
       <TextInput
         autoCorrect={false}
-        placeholder={placeholder ?? label}
+        placeholder={placeholder}
         placeholderTextColor="#8b93a1"
         style={styles.input}
         {...props}
@@ -11678,6 +11955,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F7F8F2',
   },
+  safeAreaWhite: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
   appRoot: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -11686,10 +11967,26 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F1FBF8',
   },
+  keyboardViewWhite: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
   screen: {
     flexGrow: 1,
     padding: 20,
     paddingBottom: 36,
+  },
+  loginScreen: {
+    alignItems: 'stretch',
+    minHeight: '100%',
+    paddingTop: 6,
+  },
+  inviteScreenContainer: {
+    flex: 1,
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingHorizontal: 20,
+    backgroundColor: '#FFFFFF',
   },
   appShell: {
     flex: 1,
@@ -12305,59 +12602,183 @@ const styles = StyleSheet.create({
   },
   inviteShell: {
     flex: 1,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'space-between',
-    gap: 28,
-    minHeight: 700,
     paddingTop: 10,
+    paddingBottom: 4,
+    position: 'relative',
+    overflow: 'hidden',
   },
   topLoginButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'center',
-    minHeight: 38,
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    minHeight: 38,
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 244, 216, 0.7)',
+    shadowColor: '#0f1629',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   topLoginText: {
     color: '#182446',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
+    letterSpacing: 0.1,
     textAlign: 'center',
   },
   inviteMain: {
     alignItems: 'center',
-    gap: 28,
+    alignSelf: 'center',
+    gap: 18,
+    width: '92%',
+    maxWidth: 420,
+    zIndex: 2,
   },
   logoLockup: {
     alignItems: 'center',
     gap: 10,
+    maxWidth: 300,
+  },
+  inviteLogoWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 114,
+    height: 114,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E6ECF8',
+    borderWidth: 1,
+    shadowColor: '#0f1d3f',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 5,
   },
   logoMark: {
-    width: 96,
-    height: 96,
+    width: 84,
+    height: 84,
     borderRadius: 8,
   },
-  logoWord: {
-    color: '#182446',
-    fontSize: 42,
+  inviteWordmark: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  inviteWordmarkTextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+  },
+  inviteWordmarkText: {
+    color: '#172143',
+    fontSize: 40,
     fontWeight: '900',
     letterSpacing: 0,
+    lineHeight: 42,
+  },
+  inviteWordmarkTextLight: {
+    color: STUDOS_THEME.blue,
+  },
+  inviteWordmarkUnderline: {
+    width: 44,
+    height: 3,
+    borderRadius: 3,
+    backgroundColor: STUDOS_THEME.red,
+    marginTop: -2,
+    transform: [{ rotate: '-3deg' }],
+  },
+  inviteWordmarkDot: {
+    position: 'absolute',
+    right: 2,
+    top: -4,
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  inviteTitle: {
+    color: '#172143',
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 31,
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  inviteHeroText: {
+    color: '#5F6A7B',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    textAlign: 'center',
+    paddingHorizontal: 10,
+  },
+  inviteFormCard: {
+    width: '100%',
+    gap: 14,
+    marginTop: 2,
+    borderColor: 'rgba(255, 111, 115, 0.2)',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+    paddingTop: 16,
+    shadowColor: '#0f1a39',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+    zIndex: 2,
   },
   inviteForm: {
     alignSelf: 'stretch',
-    gap: 12,
+    gap: 10,
+  },
+  inviteInputLabel: {
+    color: '#2C3D58',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  inviteInputWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderColor: '#cfc8b8',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#fbfaf6',
+    paddingHorizontal: 12,
+    minHeight: 56,
+  },
+  inviteInputIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 111, 115, 0.14)',
+  },
+  inviteActionRow: {
+    marginTop: 2,
+  },
+  createClassFooter: {
+    alignSelf: 'center',
+    paddingBottom: 2,
   },
   createClassLink: {
     alignItems: 'center',
     alignSelf: 'center',
-    gap: 3,
-    minHeight: 52,
-    justifyContent: 'center',
-    paddingHorizontal: 18,
+    gap: 0,
   },
   createClassText: {
-    color: '#65748b',
+    color: '#6F7684',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
     textAlign: 'center',
   },
   createClassAction: {
@@ -12366,11 +12787,24 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textAlign: 'center',
   },
+  createClassActionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
   centeredFlow: {
     flex: 1,
     justifyContent: 'center',
     gap: 22,
     minHeight: 680,
+  },
+  loginFlow: {
+    flex: 1,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 420,
+    gap: 16,
+    alignItems: 'stretch',
   },
   flowStack: {
     gap: 16,
@@ -14273,6 +14707,12 @@ const styles = StyleSheet.create({
     gap: 8,
     justifyContent: 'space-between',
   },
+  calendarYearControls: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
   calendarMonthButton: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -14665,7 +15105,113 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 16,
-    paddingTop: 10,
+    paddingTop: Math.max(16, APP_TOP_BAR_PADDING_TOP),
+  },
+  loginBackRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 2,
+  },
+  loginBrandSection: {
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 4,
+  },
+  loginLogoWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 74,
+    height: 74,
+    borderRadius: 20,
+    backgroundColor: '#FFFCF2',
+    borderColor: '#E6ECF8',
+    borderWidth: 1,
+    shadowColor: '#0f1d3f',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  loginLogo: {
+    width: 46,
+    height: 46,
+    borderRadius: 7,
+  },
+  loginWordmark: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginTop: -2,
+  },
+  loginWordmarkTextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+  },
+  loginWordmarkText: {
+    color: '#172143',
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 34,
+  },
+  loginWordmarkTextLight: {
+    color: STUDOS_THEME.blue,
+  },
+  loginWordmarkUnderline: {
+    width: 34,
+    height: 3,
+    borderRadius: 3,
+    backgroundColor: STUDOS_THEME.red,
+    marginTop: -1,
+    transform: [{ rotate: '-3deg' }],
+  },
+  loginWordmarkDot: {
+    position: 'absolute',
+    right: 2,
+    top: -4,
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  loginHeadline: {
+    color: '#172143',
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+    lineHeight: 30,
+  },
+  loginLead: {
+    color: '#5F6A7B',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    textAlign: 'center',
+    maxWidth: 300,
+  },
+  loginCard: {
+    gap: 14,
+    width: '100%',
+    borderColor: 'rgba(255, 111, 115, 0.28)',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    shadowColor: '#0f1a39',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  loginCardHelp: {
+    color: '#6F7684',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
   },
   backText: {
     color: '#ef5b3f',
@@ -17022,22 +17568,43 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  emergencyContactContainer: {
+    gap: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.28)',
+    backgroundColor: 'rgba(255, 111, 115, 0.1)',
+    padding: 12,
+    marginTop: 8,
+  },
+  emergencyContactTitle: {
+    color: '#7e242f',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  emergencyContactBody: {
+    color: '#7e5d65',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
   label: {
     color: '#48566d',
     fontSize: 13,
     fontWeight: '900',
   },
   inviteInput: {
-    minHeight: 58,
-    borderColor: '#cfc8b8',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#fbfaf6',
+    flex: 1,
+    minHeight: 52,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
     color: '#182446',
     fontSize: 24,
     fontWeight: '900',
     letterSpacing: 0,
-    paddingHorizontal: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 0,
   },
   formGrid: {
     gap: 12,
@@ -17077,6 +17644,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 0,
+  },
+  staticField: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    borderColor: '#cfc8b8',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#fbfaf6',
+    paddingHorizontal: 12,
   },
   selectPlaceholder: {
     color: '#8b93a1',
@@ -17283,6 +17861,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  consentLinkText: {
+    color: '#1f64cc',
+    textDecorationLine: 'underline',
   },
   emptyFeatureIcon: {
     alignItems: 'center',

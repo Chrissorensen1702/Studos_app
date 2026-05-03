@@ -6,6 +6,7 @@ use App\Support\ContentModeration;
 use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -386,53 +387,61 @@ class StudosController extends Controller
             $data['graduationYear'] ?? (string) now()->year,
         );
 
-        DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
-            DB::table('classes')->insert([
-                'id' => $classId,
-                'public_id' => $publicId,
-                'school_id' => $schoolId,
-                'school_name' => $schoolName,
-                'class_name' => $className,
-                'graduation_year' => trim($data['graduationYear'] ?? (string) now()->year),
-                'graduation_date' => $graduationDate,
-                'owner_name' => $ownerName,
-                'owner_email' => Str::lower(trim($data['ownerEmail'])),
-                'invite_code' => $this->generateInviteCode($data['graduationYear'] ?? null),
-                'join_policy' => $data['joinPolicy'] ?? 'approval',
-                'allow_member_posts' => true,
-                'require_approval_for_photos' => false,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-
-            DB::table('members')->insert([
-                'id' => $ownerId,
-                'personal_code' => $this->generatePersonalCode($ownerParts[0] ?? $ownerName),
-                'class_id' => $classId,
-                'school_id' => $schoolId,
-                'display_name' => $ownerName,
-                'first_name' => $ownerParts[0] ?? null,
-                'last_name' => $ownerParts[1] ?? null,
-                'email' => Str::lower(trim($data['ownerEmail'])),
-                'role' => 'owner',
-                'status' => 'active',
-                'joined_at' => $now,
-            ]);
-
-            if ($graduationDate) {
-                DB::table('events')->insert([
-                    'id' => (string) Str::uuid(),
-                    'class_id' => $classId,
-                    'title' => 'Dimission',
-                    'event_date' => $graduationDate,
-                    'location' => null,
-                    'description' => null,
-                    'rsvp_count' => 1,
+        try {
+            DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
+                DB::table('classes')->insert([
+                    'id' => $classId,
+                    'public_id' => $publicId,
+                    'school_id' => $schoolId,
+                    'school_name' => $schoolName,
+                    'class_name' => $className,
+                    'graduation_year' => trim($data['graduationYear'] ?? (string) now()->year),
+                    'graduation_date' => $graduationDate,
+                    'owner_name' => $ownerName,
+                    'owner_email' => Str::lower(trim($data['ownerEmail'])),
+                    'invite_code' => $this->generateInviteCode($data['graduationYear'] ?? null),
+                    'join_policy' => $data['joinPolicy'] ?? 'approval',
+                    'allow_member_posts' => true,
+                    'require_approval_for_photos' => false,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
+
+                DB::table('members')->insert([
+                    'id' => $ownerId,
+                    'personal_code' => $this->generatePersonalCode($ownerParts[0] ?? $ownerName),
+                    'class_id' => $classId,
+                    'school_id' => $schoolId,
+                    'display_name' => $ownerName,
+                    'first_name' => $ownerParts[0] ?? null,
+                    'last_name' => $ownerParts[1] ?? null,
+                    'email' => Str::lower(trim($data['ownerEmail'])),
+                    'role' => 'owner',
+                    'status' => 'active',
+                    'joined_at' => $now,
+                ]);
+
+                if ($graduationDate) {
+                    DB::table('events')->insert([
+                        'id' => (string) Str::uuid(),
+                        'class_id' => $classId,
+                        'title' => 'Dimission',
+                        'event_date' => $graduationDate,
+                        'location' => null,
+                        'description' => null,
+                        'rsvp_count' => 1,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            });
+        } catch (QueryException $exception) {
+            if ($this->isDuplicateEmailConstraintError($exception)) {
+                abort(422, 'Denne email er allerede knyttet til en anden klasse.');
             }
-        });
+
+            throw $exception;
+        }
 
         return response()->json([
             'class' => $this->loadClassById($classId),
@@ -662,6 +671,8 @@ class StudosController extends Controller
             'lastName' => ['required', 'string', 'max:100'],
             'email' => ['required', 'email', 'max:190'],
             'phone' => ['nullable', 'string', 'max:40'],
+            'emergencyContactName' => ['nullable', 'string', 'max:190'],
+            'emergencyContactPhone' => ['nullable', 'string', 'max:40'],
             'birthday' => ['required', 'date'],
             'profilePhotoUrl' => ['nullable', 'string', 'max:2000'],
             'profilePhotoData' => ['nullable', 'string', 'max:7000000'],
@@ -685,12 +696,28 @@ class StudosController extends Controller
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
         ]);
+        $emergencyContactName = blank($data['emergencyContactName'] ?? null) ? null : trim($data['emergencyContactName']);
+        $emergencyContactPhone = blank($data['emergencyContactPhone'] ?? null) ? null : trim($data['emergencyContactPhone']);
         $displayName = trim($firstName.' '.$lastName);
         $email = Str::lower(trim($data['email']));
         $classId = null;
         $member = null;
 
-        DB::transaction(function () use ($request, $data, $inviteCode, $schoolId, $firstName, $lastName, $displayName, $email, &$classId, &$member): void {
+        try {
+            DB::transaction(function () use (
+            $request,
+            $data,
+            $inviteCode,
+            $schoolId,
+            $firstName,
+            $lastName,
+            $displayName,
+            $email,
+            $emergencyContactName,
+            $emergencyContactPhone,
+            &$classId,
+            &$member
+        ): void {
             $schoolClass = DB::table('classes')
                 ->where('invite_code', $inviteCode)
                 ->first();
@@ -716,12 +743,24 @@ class StudosController extends Controller
             );
 
             $classId = $schoolClass->id;
+            $emailUsedInOtherClass = DB::table('members')
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->where('class_id', '!=', $classId)
+                ->exists();
+
+            abort_if(
+                $emailUsedInOtherClass,
+                422,
+                'Denne email er allerede knyttet til en anden klasse.',
+            );
+
             $status = ($schoolClass->join_policy ?? 'approval') === 'open' ? 'active' : 'pending';
             $phone = blank($data['phone'] ?? null) ? null : trim($data['phone']);
             $acceptedAt = now()->format('Y-m-d H:i:s');
             $existingMember = DB::table('members')
                 ->where('class_id', $classId)
                 ->whereRaw('LOWER(email) = ?', [$email])
+                ->where('status', '!=', 'removed')
                 ->first();
 
             if ($existingMember) {
@@ -755,6 +794,14 @@ class StudosController extends Controller
                     'status' => $isPendingPlaceholder ? 'active' : $status,
                 ];
 
+                if (Schema::hasColumn('members', 'emergency_contact_name')) {
+                    $updates['emergency_contact_name'] = $emergencyContactName;
+                }
+
+                if (Schema::hasColumn('members', 'emergency_contact_phone')) {
+                    $updates['emergency_contact_phone'] = $emergencyContactPhone;
+                }
+
                 DB::table('members')->where('id', $existingMember->id)->update($updates);
 
                 $member = $this->serializeMember(DB::table('members')->where('id', $existingMember->id)->first(), true, true);
@@ -774,8 +821,7 @@ class StudosController extends Controller
             $memberId = (string) Str::uuid();
             $profilePhotoPath = $this->profilePhotoPathForSignup($data, $memberId);
             $joinedAt = now()->format('Y-m-d H:i:s');
-
-            DB::table('members')->insert([
+            $memberData = [
                 'id' => $memberId,
                 'personal_code' => $this->generatePersonalCode($firstName),
                 'class_id' => $classId,
@@ -794,10 +840,26 @@ class StudosController extends Controller
                 'role' => 'student',
                 'status' => $status,
                 'joined_at' => $joinedAt,
-            ]);
+            ];
 
+            if (Schema::hasColumn('members', 'emergency_contact_name')) {
+                $memberData['emergency_contact_name'] = $emergencyContactName;
+            }
+
+            if (Schema::hasColumn('members', 'emergency_contact_phone')) {
+                $memberData['emergency_contact_phone'] = $emergencyContactPhone;
+            }
+
+            DB::table('members')->insert($memberData);
             $member = $this->serializeMember(DB::table('members')->where('id', $memberId)->first(), true, true);
         });
+        } catch (QueryException $exception) {
+            if ($this->isDuplicateEmailConstraintError($exception)) {
+                abort(422, 'Denne email er allerede knyttet til en anden klasse.');
+            }
+
+            throw $exception;
+        }
 
         return response()->json([
             'session' => $this->sessionForMember($member, $this->issueMemberToken($member['id'])),
@@ -808,28 +870,33 @@ class StudosController extends Controller
     public function loginWithPassword(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'inviteCode' => ['required', 'string', 'max:32'],
             'email' => ['required', 'email', 'max:190'],
             'password' => ['required', 'string'],
         ]);
 
-        $inviteCode = Str::upper(trim($data['inviteCode']));
         $email = Str::lower(trim($data['email']));
-        $schoolClass = DB::table('classes')->where('invite_code', $inviteCode)->first();
-
-        abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
-
-        $member = DB::table('members')
-            ->where('class_id', $schoolClass->id)
+        $password = $data['password'];
+        $members = DB::table('members')
             ->whereRaw('LOWER(email) = ?', [$email])
             ->where('status', '!=', 'removed')
-            ->first();
+            ->whereNotNull('password_hash')
+            ->get();
+
+        $memberCandidates = $members
+            ->filter(fn (object $member) => Hash::check($password, $member->password_hash))
+            ->values();
 
         abort_if(
-            ! $member || blank($member->password_hash ?? null) || ! Hash::check($data['password'], $member->password_hash),
+            $memberCandidates->count() > 1,
             422,
-            'Email eller adgangskode er forkert.',
+            'Emailen er koblet til flere klasser. Kontakt support for hjælp.',
         );
+
+        $member = $memberCandidates->first();
+        abort_if(! $member, 422, 'Email eller adgangskode er forkert.');
+
+        $schoolClass = DB::table('classes')->where('id', $member->class_id)->first();
+        abort_if(! $schoolClass, 404, 'Klassen kunne ikke findes.');
 
         $serializedMember = $this->serializeMember($member, true, true);
 
@@ -2690,5 +2757,22 @@ class StudosController extends Controller
         $text = (string) $value;
 
         return str_contains($text, 'T') ? $text : str_replace(' ', 'T', $text).'.000Z';
+    }
+
+    private function isDuplicateEmailConstraintError(QueryException $exception): bool
+    {
+        $message = strtolower((string) $exception->getMessage());
+        $sqlState = $exception->errorInfo[0] ?? null;
+        $driverCode = (string) ($exception->errorInfo[1] ?? '');
+
+        if (str_contains($message, 'members_email_unique') || str_contains($message, 'members.email')) {
+            return true;
+        }
+
+        if ($sqlState === '23000' && in_array($driverCode, ['1062', '2627', '2601', '19'], true)) {
+            return str_contains($message, 'members') && str_contains($message, 'email');
+        }
+
+        return false;
     }
 }
