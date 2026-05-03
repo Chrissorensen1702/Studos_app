@@ -369,7 +369,7 @@ const APP_DRAWER_SECTIONS = [
       { id: 'classBattle', label: 'Leaderboard', icon: 'podium-outline', activeIcon: 'podium', accentColor: STUDOS_THEME.yellow },
       { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
       { id: 'badges', label: 'Klasseawards', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
-      { id: 'randomizer', label: 'Mini games', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
+      { id: 'randomizer', label: 'Arcade Hub', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
       { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
     ],
   },
@@ -1178,9 +1178,20 @@ const parseApiError = (payload) => {
   return errors[0] || payload?.message || 'Noget gik galt. Prøv igen.';
 };
 
+const isInviteCodeRequiredError = (message) => {
+  const normalized = String(message ?? '').toLowerCase();
+
+  return /invite\s*code/.test(normalized) && (
+    normalized.includes('field is required')
+    || normalized.includes('is required')
+    || normalized.includes('skal angives')
+    || normalized.includes('er påkrævet')
+  );
+};
+
 const shouldRetryInviteErrorOnNextApi = (path, error) =>
   path === '/session/login'
-  && String(error?.message ?? '').toLowerCase().includes('invite code field is required');
+  && isInviteCodeRequiredError(error?.message);
 
 const apiFetch = async (path, options = {}) => {
   const { authToken, headers: optionHeaders, ...fetchOptions } = options;
@@ -1427,6 +1438,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [pendingDirectChatMemberId, setPendingDirectChatMemberId] = useState('');
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
   const [weeklyCheckInReward, setWeeklyCheckInReward] = useState(null);
   const [weeklyCheckInSnapshot, setWeeklyCheckInSnapshot] = useState(null);
@@ -1459,7 +1471,8 @@ export default function App() {
     || activeTab === 'calendar'
     || activeTab === 'overview'
     || activeTab === 'earnCaps'
-    || activeTab === 'classBattle';
+    || activeTab === 'classBattle'
+    || activeTab === 'classmates';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1480,6 +1493,21 @@ export default function App() {
     }
 
     setActiveTab('calendar');
+  }, []);
+
+  const openDirectChatForMember = useCallback((memberId) => {
+    const normalizedMemberId = String(memberId ?? '').trim();
+
+    if (!normalizedMemberId || !session?.token) {
+      return;
+    }
+
+    setPendingDirectChatMemberId(normalizedMemberId);
+    setActiveTab('chat');
+  }, [session?.token]);
+
+  const clearPendingDirectChatMemberId = useCallback(() => {
+    setPendingDirectChatMemberId('');
   }, []);
 
   const updateActiveMemberCapsBalance = useCallback((capsBalance) => {
@@ -2052,7 +2080,7 @@ export default function App() {
       setStep('overview');
     } catch (apiError) {
       const message = apiError?.message || 'Login mislykkedes.';
-      setError(message.includes('invite code field is required')
+      setError(isInviteCodeRequiredError(message)
         ? 'Denne cloud-udgave kræver endnu invitekode. Prøv at skrive din invitekode, ellers brug en nyere App/Cloud-version.'
         : message);
     } finally {
@@ -2382,6 +2410,7 @@ export default function App() {
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
+                activeTab === 'classmates' ? styles.appScreenCrewDetached : null,
                 activeTab === 'classBattle' ? styles.appScreenClassBattleDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
@@ -2397,7 +2426,10 @@ export default function App() {
                   loading={loading}
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
+                  onDirectChatHandled={clearPendingDirectChatMemberId}
+                  initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
+                  onOpenDirectChat={openDirectChatForMember}
                   onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
@@ -2438,7 +2470,10 @@ export default function App() {
                   loading={loading}
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
+                  onDirectChatHandled={clearPendingDirectChatMemberId}
+                  initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
+                  onOpenDirectChat={openDirectChatForMember}
                   onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
@@ -2648,7 +2683,9 @@ function AppTabScreen({
   events,
   loading,
   nextEvent,
+  initialDirectChatMemberId,
   onChatUnreadCountChange,
+  onDirectChatHandled,
   onChangeTab,
   onOpenCalendar,
   onCreateEvent,
@@ -2656,6 +2693,7 @@ function AppTabScreen({
   onEnableAndroidNotifications,
   onBlockMember,
   onCapsBalanceChange,
+  onOpenDirectChat,
   onProfilePhotoUpdate,
   onLogout,
   onDeleteAccount,
@@ -2671,6 +2709,7 @@ function AppTabScreen({
   notificationState,
   weeklyCheckInSnapshot,
 }) {
+  const [selectedMiniGame, setSelectedMiniGame] = useState(null);
   const openCalendarTab = (target) => {
     if (onOpenCalendar) {
       onOpenCalendar(target);
@@ -2680,6 +2719,12 @@ function AppTabScreen({
     onChangeTab?.('calendar');
   };
 
+  useEffect(() => {
+    if (activeTab !== 'randomizer') {
+      setSelectedMiniGame(null);
+    }
+  }, [activeTab]);
+
   if (activeTab === 'chat') {
     return (
       <ChatScreen
@@ -2687,6 +2732,8 @@ function AppTabScreen({
         activeMembers={activeMembers}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
+        initialDirectChatMemberId={initialDirectChatMemberId}
+        onDirectChatHandled={onDirectChatHandled}
         onUnreadCountChange={onChatUnreadCountChange}
       />
     );
@@ -2825,22 +2872,24 @@ function AppTabScreen({
 
   if (activeTab === 'classmates') {
     return (
-      <FeatureScreen
-        icon="people"
-        kicker={schoolClass.className}
-        title="Mit crew"
-        emptyTitle="Crewet er tomt endnu"
-        emptyText="Klassen, profiler og små facts bliver samlet her."
+      <CrewScreen
+        activeMember={activeMember}
+        activeMembers={activeMembers}
+        onOpenDirectChat={onOpenDirectChat}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
       />
     );
   }
 
   if (activeTab === 'randomizer') {
+    if (selectedMiniGame === 'bottle-pointer') {
+      return <BottlePointerScreen onBack={() => setSelectedMiniGame(null)} />;
+    }
+
     return (
-      <FeatureScreen
-        icon="shuffle"
-        kicker={schoolClass.className}
-        title="Mini games"
+      <MiniGamesScreen
+        onOpenGame={setSelectedMiniGame}
         emptyTitle="Ingen challenges endnu"
         emptyText="Indholdet er på vej med små spil og spontane udfordringer for klassen."
       />
@@ -2927,6 +2976,8 @@ function ChatScreen({
   activeMembers,
   schoolClass,
   sessionToken,
+  initialDirectChatMemberId,
+  onDirectChatHandled,
   onUnreadCountChange,
 }) {
   const [conversations, setConversations] = useState([]);
@@ -3539,6 +3590,27 @@ function ChatScreen({
     setDirectPickerQuery('');
     await startDirectChat(memberId);
   };
+
+  const pendingDirectChatMemberId = String(initialDirectChatMemberId ?? '').trim();
+
+  useEffect(() => {
+    if (!pendingDirectChatMemberId || !sessionToken) {
+      return undefined;
+    }
+
+    let active = true;
+
+    startDirectChat(pendingDirectChatMemberId)
+      .finally(() => {
+        if (active) {
+          onDirectChatHandled?.();
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [pendingDirectChatMemberId, onDirectChatHandled, sessionToken]);
 
   const closeExternalAddModal = () => {
     setExternalAddOpen(false);
@@ -4536,7 +4608,7 @@ function ChatScreen({
         transparent
         visible={Boolean(chatConversationActionMenu)}
       >
-        <View style={styles.chatModalRoot}>
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
           <Pressable
             accessibilityLabel="Luk chatindstillinger"
             style={styles.chatModalBackdrop}
@@ -4607,7 +4679,7 @@ function ChatScreen({
         transparent
         visible={directPickerOpen}
       >
-        <View style={styles.chatModalRoot}>
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
           <Pressable
             accessibilityLabel="Luk vælger"
             style={styles.chatModalBackdrop}
@@ -8294,6 +8366,392 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, ti
   );
 }
 
+function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
+  const miniGames = [
+    {
+      id: 'bottle-pointer',
+      title: 'Flaskehalsen peger på',
+      description: 'Vælg random, og lad flaskens retning afgøre dagens sjove opgave. Klar til at tage imod udfordringen?',
+    },
+    {
+      id: 'lie-truth',
+      title: 'Snyd (terninger)',
+      description: 'Spillere siger sandheder eller løgne, og gruppen skal gennemskue, hvem der sniger med. Hvem tager pointet for det skarpeste bluff?',
+    },
+  ];
+
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.tabHeader}>
+        <View style={styles.miniGamesScreenHeader}>
+          <View style={styles.miniGamesTitleWithLogoRow}>
+            <Text style={[styles.title, styles.titleSmallHeader, styles.miniGamesHeaderTitle]} numberOfLines={1}>
+              Arcade Hub
+            </Text>
+            <MiniGamesHeaderLogo style={styles.miniGamesHeaderLogoInTitle} />
+          </View>
+          <Text style={[styles.miniGamesHeaderBody, styles.miniGamesHeaderBodySmall]}>
+            Spil, konkurrér og grin — og find ud af, hvem i din gruppe der leverer det skarpeste comeback i hver mini-game-runde.
+          </Text>
+        </View>
+      </View>
+      <View style={styles.miniGamesGameList}>
+        {miniGames.map((game) => (
+          <Pressable
+            key={game.id}
+            onPress={() => onOpenGame?.(game.id)}
+            style={({ pressed }) => [
+              styles.panel,
+              styles.miniGamesCardPanel,
+              styles.miniGamesCardRow,
+              pressed ? styles.miniGamesCardPressed : null,
+            ]}
+          >
+            <View style={styles.miniGamesCardTextWrap}>
+              <View style={styles.miniGamesCardTitleRow}>
+                <Text style={[styles.sectionTitle, styles.miniGamesCardTitle]}>{game.title}</Text>
+                {game.id === 'bottle-pointer' ? (
+                  <MiniGamesBottleIcon style={styles.miniGamesBottleIconInTitle} />
+                ) : null}
+              </View>
+              <Text style={[styles.feedText, styles.miniGamesCardBody]}>{game.description}</Text>
+            </View>
+            <View style={styles.miniGamesCardChevronWrap}>
+              <Ionicons name="chevron-forward-outline" size={20} color={STUDOS_THEME.red} style={styles.miniGamesCardChevronIcon} />
+            </View>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function BottlePointerScreen({ onBack }) {
+  const [players, setPlayers] = useState(['Sara', 'Jonas', 'Mia', 'Mikkel']);
+  const [draftPlayer, setDraftPlayer] = useState('');
+  const [spinResult, setSpinResult] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [addPlayerModalOpen, setAddPlayerModalOpen] = useState(false);
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const spinOffsetRef = useRef(0);
+  const wheelSize = 296;
+  const halfWheel = wheelSize / 2;
+
+  useEffect(() => {
+    const spinListener = spinValue.addListener(({ value }) => {
+      spinOffsetRef.current = value;
+    });
+
+    return () => {
+      spinValue.removeListener(spinListener);
+      spinValue.stopAnimation();
+    };
+  }, [spinValue]);
+
+  const playerCount = players.length;
+  const canSpin = playerCount > 1 && !spinning;
+  const canAddPlayer = draftPlayer.trim().length > 0;
+  const segmentAngle = playerCount > 0 ? 360 / playerCount : 0;
+  const labelRadius = halfWheel - 30;
+
+  const spinAngle = useMemo(() => spinValue.interpolate({
+    inputRange: [0, 360],
+    outputRange: ['0deg', '360deg'],
+    extrapolate: 'extend',
+  }), [spinValue]);
+
+  const addPlayer = () => {
+    const nextPlayer = draftPlayer.trim();
+
+    if (!nextPlayer) {
+      return;
+    }
+
+    setPlayers((currentPlayers) => [...currentPlayers, nextPlayer]);
+    setDraftPlayer('');
+    setSpinResult(null);
+    setAddPlayerModalOpen(false);
+  };
+
+  const removePlayer = (indexToRemove) => {
+    setPlayers((currentPlayers) => currentPlayers.filter((_, index) => index !== indexToRemove));
+    setSpinResult(null);
+  };
+
+  const closeAddPlayerModal = () => {
+    setAddPlayerModalOpen(false);
+    setDraftPlayer('');
+  };
+
+  const spinWheel = () => {
+    if (!canSpin) {
+      return;
+    }
+
+    const winnerIndex = Math.floor(Math.random() * playerCount);
+    const winnerName = players[winnerIndex];
+    const fullTurns = 3 + Math.floor(Math.random() * 3);
+    const jitter = playerCount > 1 ? (Math.random() - 0.5) * segmentAngle * 0.12 : 0;
+    const winnerAngle = winnerIndex * segmentAngle + segmentAngle / 2;
+    const targetAngle = spinOffsetRef.current + fullTurns * 360 - winnerAngle + jitter;
+
+    setSpinning(true);
+    setSpinResult({ name: winnerName, index: winnerIndex });
+
+    Animated.timing(spinValue, {
+      toValue: targetAngle,
+      duration: 3400,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setSpinning(false);
+      }
+    });
+  };
+
+  return (
+    <View style={styles.flowStack}>
+        <View style={styles.tabHeader}>
+        <View style={styles.miniGamesScreenHeader}>
+          <View style={[styles.miniGamesTitleWithLogoRow, styles.miniGamesPointerHeaderRow]}>
+            <Pressable onPress={onBack} hitSlop={10} style={styles.miniGamesBackButton}>
+              <Ionicons name="arrow-back" size={20} color={STUDOS_THEME.ink} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setAddPlayerModalOpen(true)}
+              style={({ pressed }) => [
+                styles.luckyTopAddButton,
+                pressed ? styles.luckyTopAddButtonPressed : null,
+              ]}
+            >
+              <Ionicons name="add" size={24} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        </View>
+      </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeAddPlayerModal}
+        transparent
+        visible={addPlayerModalOpen}
+      >
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
+          <Pressable
+            accessibilityLabel="Luk tilføj spiller"
+            style={styles.chatModalBackdrop}
+            onPress={closeAddPlayerModal}
+          />
+          <View style={[styles.chatModalPanel, styles.luckyAddPlayerModal]}>
+            <Text style={styles.sectionTitle}>Tilføj spiller</Text>
+            <Text style={[styles.feedText, styles.luckyAddModalDesc]}>
+              Skriv navnet på spilleren, og tryk derefter “Tilføj”.
+            </Text>
+            <TextInput
+              autoCapitalize="words"
+              placeholder="Navn på spiller"
+              value={draftPlayer}
+              onChangeText={setDraftPlayer}
+                onSubmitEditing={addPlayer}
+                returnKeyType="done"
+                style={[styles.input, styles.luckyAddModalInput]}
+              />
+            <View style={styles.luckyModalPlayerSection}>
+              <Text style={styles.luckyModalPlayerTitle}>
+                Tilføjede spillere ({players.length})
+              </Text>
+              {players.length ? (
+                <View style={styles.luckyPlayerListWrap}>
+                  {players.map((player, index) => (
+                    <View key={`pill-${player}-${index}`} style={styles.luckyPlayerPill}>
+                      <Text numberOfLines={1} style={styles.luckyPlayerPillText}>{player}</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => removePlayer(index)}
+                        disabled={spinning}
+                        style={styles.luckyPlayerPillRemove}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="close-circle" size={18} color={spinning ? '#aeb4c3' : '#A94D53'} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.feedText, styles.luckyEmptyText]}>Ingen spillere endnu.</Text>
+              )}
+            </View>
+            <View style={styles.luckyAddModalActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={closeAddPlayerModal}
+                style={({ pressed }) => [
+                  styles.luckyAddModalGhostButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.luckyAddModalGhostButtonText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={!canAddPlayer}
+                onPress={addPlayer}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.luckyAddModalPrimaryButton,
+                  pressed && canAddPlayer ? styles.primaryButtonPressed : null,
+                  !canAddPlayer ? styles.primaryButtonDisabled : null,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>Tilføj</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <View style={styles.luckyWheelContainer}>
+        <View style={styles.luckyPointer} />
+        <View
+          style={[
+            styles.luckyWheelShell,
+            {
+              width: wheelSize,
+              height: wheelSize,
+              borderRadius: halfWheel,
+            },
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.luckyWheel,
+              {
+                width: wheelSize,
+                height: wheelSize,
+                borderRadius: halfWheel,
+                transform: [{ rotate: spinAngle }],
+              },
+            ]}
+          >
+            <View style={styles.luckyWheelPatternLayer}>
+              <View style={styles.luckyWheelPatternBandOne} />
+              <View style={styles.luckyWheelPatternBandTwo} />
+              <View style={styles.luckyWheelPatternBandThree} />
+            </View>
+            {playerCount > 1 ? players.map((_, index) => (
+              <View
+                key={`marker-${index}`}
+                style={[
+                  styles.luckyWheelMarker,
+                  { transform: [{ rotate: `${index * segmentAngle}deg` }]},
+                ]}
+              >
+                <View style={styles.luckyWheelMarkerLine} />
+              </View>
+            )) : null}
+            {players.map((player, index) => {
+              const markerAngle = segmentAngle * index - 90 + segmentAngle / 2;
+
+              return (
+                <View
+                  key={`player-${index}-${player}`}
+                  style={[
+                    styles.luckyWheelPlayerWrap,
+                    {
+                      left: halfWheel - 62,
+                      top: halfWheel - 12,
+                      transform: [
+                        { rotate: `${markerAngle}deg` },
+                        { translateY: -labelRadius },
+                        { rotate: `${-markerAngle}deg` },
+                      ],
+                    },
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.luckyWheelPlayerLabel}>
+                    {player}
+                  </Text>
+                </View>
+              );
+            })}
+            <View style={styles.luckyWheelCenterLogoWrap}>
+              <Image
+                resizeMode="contain"
+                source={STUDOS_LOGO}
+                style={styles.luckyWheelCenterLogo}
+              />
+            </View>
+          </Animated.View>
+        </View>
+      </View>
+
+      <View style={styles.luckyContent}>
+        <View style={styles.luckyActionBlock}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={spinWheel}
+            disabled={!canSpin}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              styles.luckySpinButton,
+              pressed && canSpin ? styles.luckySpinButtonPressed : null,
+              pressed && canSpin ? styles.primaryButtonPressed : null,
+              !canSpin ? styles.primaryButtonDisabled : null,
+            ]}
+          >
+            <View style={styles.luckySpinButtonLabel}>
+              <Text style={[styles.primaryButtonText, styles.luckySpinButtonText]}>Spin</Text>
+              <View style={styles.luckySpinWordmark}>
+                <View style={styles.luckySpinWordmarkTextRow}>
+                  <Text numberOfLines={1} style={[styles.luckySpinWordmarkText, styles.loginWordmarkTextLight]}>Stu</Text>
+                  <Text numberOfLines={1} style={[styles.luckySpinWordmarkText, styles.luckySpinWordmarkTextWhite]}>dos</Text>
+                </View>
+                <View style={styles.luckySpinWordmarkUnderline} />
+                <View style={styles.luckySpinWordmarkDot} />
+              </View>
+              <Text style={[styles.primaryButtonText, styles.luckySpinButtonText]}>hjulet</Text>
+            </View>
+          </Pressable>
+
+          <Text style={styles.luckyWheelHint}>
+            {canSpin ? `Spillere: ${playerCount}` : 'Tilføj mindst 2 spillere, så vi kan spinne.'}
+          </Text>
+        </View>
+
+      </View>
+    </View>
+  );
+}
+
+function MiniGamesHeaderLogo({ style }) {
+  return (
+    <View style={[styles.miniGamesHeaderLogo, style]}>
+      <View style={styles.miniGamesHeaderLogoDice}>
+        <View style={styles.sidebarDiceIcon}>
+          <View style={[styles.sidebarDicePip, styles.sidebarDicePipTopLeft]} />
+          <View style={[styles.sidebarDicePip, styles.sidebarDicePipTopRight]} />
+          <View style={[styles.sidebarDicePip, styles.sidebarDicePipCenter]} />
+          <View style={[styles.sidebarDicePip, styles.sidebarDicePipBottomLeft]} />
+          <View style={[styles.sidebarDicePip, styles.sidebarDicePipBottomRight]} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function MiniGamesBottleIcon({ style }) {
+  return (
+    <View style={[styles.miniGamesBottleIcon, style]}>
+      <Ionicons name="wine-outline" size={16} color={STUDOS_THEME.red} />
+      <View style={styles.miniGamesBottleBadge}>
+        <Text style={styles.miniGamesBottleLogoText}>S</Text>
+      </View>
+    </View>
+  );
+}
+
 function EarnCapsScreen({
   activeMember,
   onCapsBalanceChange,
@@ -9016,6 +9474,277 @@ function ConnectionsScreen({ activeMember, schoolClass, sessionToken }) {
   );
 }
 
+function CrewScreen({
+  activeMember,
+  activeMembers = [],
+  onOpenDirectChat,
+  schoolClass,
+  sessionToken,
+}) {
+  const rawMembers = Array.isArray(activeMembers) ? activeMembers : [];
+  const activeMemberId = String(activeMember?.id ?? '');
+  const [crewSource, setCrewSource] = useState('class');
+  const [connections, setConnections] = useState([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState('');
+  const [phoneModalVisible, setPhoneModalVisible] = useState(false);
+  const [phoneModalName, setPhoneModalName] = useState('');
+  const [phoneModalNumber, setPhoneModalNumber] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!activeMember?.id || !sessionToken) {
+      if (isMounted) {
+        setConnections([]);
+        setConnectionsError('');
+        setConnectionsLoading(false);
+      }
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setConnectionsLoading(true);
+    setConnectionsError('');
+
+    apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
+      authToken: sessionToken,
+    })
+      .then((data) => {
+        if (isMounted) {
+          setConnections(data.connections ?? []);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setConnectionsError(error.message || 'Kunne ikke hente venner.');
+          setConnections([]);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setConnectionsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeMember?.id, sessionToken]);
+
+  const crewMembers = useMemo(() => {
+    const normalizedMembers = uniqueById(rawMembers);
+    const withoutSelf = activeMemberId
+      ? normalizedMembers.filter((member) => String(member.id ?? '') !== activeMemberId)
+      : normalizedMembers;
+
+    return withoutSelf.sort((left, right) => {
+      const leftRoleOrder = left.role === 'owner' ? 0 : (left.role === 'moderator' ? 1 : 2);
+      const rightRoleOrder = right.role === 'owner' ? 0 : (right.role === 'moderator' ? 1 : 2);
+
+      if (leftRoleOrder !== rightRoleOrder) {
+        return leftRoleOrder - rightRoleOrder;
+      }
+
+      const leftName = String(left.displayName || `${left.firstName ?? ''} ${left.lastName ?? ''}` || '').trim();
+      const rightName = String(right.displayName || `${right.firstName ?? ''} ${right.lastName ?? ''}` || '').trim();
+
+      return leftName.localeCompare(rightName, 'da');
+    });
+  }, [rawMembers, activeMemberId]);
+
+  const classRows = useMemo(() => crewMembers.map((member) => {
+    const displayName = member.displayName
+      || `${member.firstName ?? ''} ${member.lastName ?? ''}`.trim()
+      || 'Ukendt medlem';
+
+    return {
+      displayName,
+      meta: PROFILE_ROLE_LABELS[member.role] || 'Elev',
+      profile: member,
+    };
+  }), [crewMembers]);
+
+  const friendRows = useMemo(() => {
+    const acceptedFriends = (Array.isArray(connections) ? connections : [])
+      .filter((connection) => connection?.status === 'accepted')
+      .map((connection) => connection?.otherMember ?? connection?.member)
+      .filter(Boolean);
+
+    return uniqueById(acceptedFriends)
+      .map((member) => {
+        const displayName = member.displayName
+          || `${member.firstName ?? ''} ${member.lastName ?? ''}`.trim()
+          || 'Ukendt medlem';
+        const connectionClassName = member?.class?.className;
+
+        return {
+          displayName,
+          meta: connectionClassName ? `Klasse: ${connectionClassName}` : 'Ven',
+          profile: member,
+        };
+      })
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'da'));
+  }, [connections]);
+
+  const showClassCrew = crewSource === 'class';
+  const currentRows = showClassCrew ? classRows : friendRows;
+  return (
+    <View style={[styles.flowStack, styles.crewScreen]}>
+      <View style={styles.tabHeader}>
+        <View style={styles.titleWithLogoRow}>
+          <Text style={[styles.title, styles.titleSmallHeader]}>Mit crew</Text>
+          <CrewTitleGraphic />
+        </View>
+      </View>
+      <Text style={styles.feedText}>
+        Her kan du se hele dit crew, både fra klassen og eksterne connections
+      </Text>
+
+      <View style={[styles.panel, styles.crewPanel]}>
+        <View style={styles.crewSourceTabs}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setCrewSource('class')}
+            style={({ pressed }) => [
+              styles.crewSourceTab,
+              showClassCrew ? styles.crewSourceTabActive : null,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={[
+              styles.crewSourceTabText,
+              showClassCrew ? styles.crewSourceTabTextActive : null,
+            ]}>
+              Min klasse
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setCrewSource('friends')}
+            style={({ pressed }) => [
+              styles.crewSourceTab,
+              !showClassCrew ? styles.crewSourceTabActive : null,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={[
+              styles.crewSourceTabText,
+              !showClassCrew ? styles.crewSourceTabTextActive : null,
+            ]}>
+              Andre venner
+            </Text>
+          </Pressable>
+        </View>
+        {connectionsError && !showClassCrew ? <Text style={styles.errorText}>{connectionsError}</Text> : null}
+        {connectionsLoading && !showClassCrew ? <ActivityIndicator color={STUDOS_THEME.ink} /> : null}
+        {currentRows.length ? (
+          <ScrollView
+            contentContainerStyle={styles.crewMemberList}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+            style={styles.crewMemberListScroll}
+          >
+            {currentRows.map((entry) => {
+              const displayName = entry.displayName;
+              const metaText = entry.meta;
+              const profile = entry.profile;
+              const rawPhone = String(profile?.phone ?? '').trim();
+              const normalizedPhone = rawPhone.replace(/[^\d+]/g, '');
+              const canCall = Boolean(normalizedPhone.length);
+              return (
+                <View
+                  key={profile.id || profile.email || displayName}
+                  style={styles.connectionRow}
+                >
+                  <Avatar profile={profile} variant="smallCircle" />
+                  <View style={styles.connectionCopy}>
+                    <Text numberOfLines={1} style={styles.connectionName}>
+                      {displayName}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.connectionMeta}>
+                      {metaText}
+                    </Text>
+                  </View>
+                  <View style={styles.crewMemberActionIcons}>
+                    {onOpenDirectChat && profile?.id ? (
+                      <Pressable
+                        accessibilityLabel={`Åbn chat med ${displayName}`}
+                        accessibilityRole="button"
+                        onPress={() => onOpenDirectChat(profile.id)}
+                        style={({ pressed }) => [
+                          styles.crewMemberChatIconButton,
+                          pressed ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <Ionicons name="chatbubble-ellipses-outline" size={21} color={STUDOS_THEME.red} />
+                        <View style={styles.crewMemberChatIconBadge}>
+                          <Ionicons name="add" size={9} color={STUDOS_THEME.ink} />
+                        </View>
+                      </Pressable>
+                    ) : null}
+                  <Pressable
+                    accessibilityLabel={`Ring til ${displayName}`}
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setPhoneModalName(displayName);
+                      setPhoneModalNumber(rawPhone || 'Ikke angivet');
+                      setPhoneModalVisible(true);
+                    }}
+                    style={({ pressed }) => [
+                      styles.crewMemberMobileIconButton,
+                      pressed && canCall ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <Ionicons
+                        name="call"
+                        size={18}
+                        color="#75DED0"
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <Text style={styles.emptyText}>
+            {showClassCrew ? 'Der er ingen aktive crew-medlemmer at vise.' : 'Du har ingen venner på Studos endnu.'}
+          </Text>
+        )}
+        {phoneModalVisible ? (
+          <View style={styles.crewPhoneModalOverlay}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setPhoneModalVisible(false)}
+              style={styles.crewPhoneModalBackdrop}
+            >
+              <View style={styles.crewPhoneModalPanel}>
+                <Text style={styles.crewPhoneModalTitle}>Mobilnummer</Text>
+                <Text style={styles.crewPhoneModalName} numberOfLines={1}>
+                  {phoneModalName}
+                </Text>
+                <Text style={styles.crewPhoneModalNumber} numberOfLines={1}>
+                  {phoneModalNumber}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPhoneModalVisible(false)}
+                  style={styles.crewPhoneModalCloseButton}
+                >
+                  <Text style={styles.crewPhoneModalCloseText}>Luk</Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function AppTopBar({ className, menuOpen, onToggleMenu, schoolName }) {
   return (
     <View style={styles.topBar}>
@@ -9056,15 +9785,37 @@ function AppTopBar({ className, menuOpen, onToggleMenu, schoolName }) {
   );
 }
 
-function StudosWordmark() {
+function StudosWordmark({ compact = false, showDot = true, tone = 'dark' }) {
+  const wordmarkTextColor = tone === 'light' ? styles.wordmarkTextDark : null;
+
   return (
-    <View style={styles.wordmark}>
+    <View style={[styles.wordmark, compact ? styles.wordmarkCompact : null]}>
       <View style={styles.wordmarkTextRow}>
-        <Text numberOfLines={1} style={[styles.wordmarkText, styles.wordmarkTextLight]}>Stu</Text>
-        <Text numberOfLines={1} style={styles.wordmarkText}>dos</Text>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.wordmarkText,
+            compact ? styles.wordmarkTextCompact : null,
+            styles.wordmarkTextLight,
+          ]}
+        >
+          Stu
+        </Text>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.wordmarkText,
+            compact ? styles.wordmarkTextCompact : null,
+            wordmarkTextColor,
+          ]}
+        >
+          dos
+        </Text>
       </View>
-      <View style={styles.wordmarkUnderline} />
-      <View style={styles.wordmarkDot} />
+      <View style={[styles.wordmarkUnderline, compact ? styles.wordmarkUnderlineCompact : null]} />
+      {showDot ? (
+        <View style={[styles.wordmarkDot, compact ? styles.wordmarkDotCompact : null]} />
+      ) : null}
     </View>
   );
 }
@@ -9547,18 +10298,40 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
                       style={({ pressed }) => [
                         styles.sidebarMenuItem,
                         pressed ? styles.sidebarMenuItemPressed : null,
-                    ]}
-                  >
+                      ]}
+                    >
                       <SidebarMenuIcon item={item} active={isActive} />
-                      <Text
-                        style={[
-                          styles.sidebarMenuText,
-                          item.locked ? styles.lockedNavigationText : null,
-                          isActive ? styles.sidebarMenuTextActive : null,
-                        ]}
-                      >
-                        {item.label}
-                      </Text>
+                      {item.id === 'randomizer' ? (
+                        <View style={[
+                          styles.sidebarArcadeHubTextWrap,
+                          isActive ? styles.sidebarArcadeHubTextWrapActive : null,
+                        ]}>
+                          <Text
+                            style={[
+                              styles.sidebarMenuText,
+                              styles.sidebarMenuTextArcadeHub,
+                              isActive ? styles.sidebarMenuTextArcadeHubActive : null,
+                              item.locked ? styles.lockedNavigationText : null,
+                            ]}
+                          >
+                            {item.label.toUpperCase()}
+                          </Text>
+                          <View style={[
+                            styles.sidebarArcadeHubMarker,
+                            isActive ? styles.sidebarArcadeHubMarkerActive : null,
+                          ]} />
+                        </View>
+                      ) : (
+                        <Text
+                          style={[
+                            styles.sidebarMenuText,
+                            item.locked ? styles.lockedNavigationText : null,
+                            isActive ? styles.sidebarMenuTextActive : null,
+                          ]}
+                        >
+                          {item.label}
+                        </Text>
+                      )}
                     </Pressable>
                   );
                 })}
@@ -11700,6 +12473,25 @@ function CalendarTitle() {
   );
 }
 
+function CrewTitleGraphic() {
+  return (
+    <View style={styles.crewTitleGraphic} pointerEvents="none">
+      <View style={styles.crewTitleGraphicBack} />
+      <View style={styles.crewTitleGraphicFace}>
+        <View style={styles.crewTitleGraphicPeople}>
+          <Ionicons name="person-circle" size={16} color={STUDOS_THEME.ink} />
+          <View style={styles.crewTitleGraphicDotRow}>
+            <View style={[styles.crewTitleGraphicDot, styles.crewTitleGraphicDotBlue]} />
+            <View style={[styles.crewTitleGraphicDot, styles.crewTitleGraphicDotYellow]} />
+            <View style={[styles.crewTitleGraphicDot, styles.crewTitleGraphicDotRed]} />
+          </View>
+        </View>
+      </View>
+      <View style={[styles.crewTitleGraphicDot, styles.crewTitleGraphicOuterDot]} />
+    </View>
+  );
+}
+
 function EarnCapsTitleGraphic({ style }) {
   return (
     <View style={[styles.earnCapsTitleGraphic, style]} pointerEvents="none">
@@ -12009,6 +12801,9 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingBottom: 0,
   },
+  appScreenCrewDetached: {
+    paddingBottom: 0,
+  },
   appScreenOverlayHost: {
     position: 'relative',
     paddingBottom: 0,
@@ -12117,6 +12912,13 @@ const styles = StyleSheet.create({
   wordmarkTextLight: {
     color: STUDOS_THEME.blue,
   },
+  wordmarkTextDark: {
+    color: STUDOS_THEME.ink,
+  },
+  wordmarkTextCompact: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
   wordmarkUnderline: {
     width: 40,
     height: 3,
@@ -12124,6 +12926,16 @@ const styles = StyleSheet.create({
     backgroundColor: STUDOS_THEME.red,
     marginTop: -1,
     transform: [{ rotate: '-3deg' }],
+  },
+  wordmarkCompact: {
+    width: 52,
+    minHeight: 28,
+  },
+  wordmarkUnderlineCompact: {
+    width: 28,
+    height: 2,
+    marginTop: -1,
+    transform: [{ rotate: '-2.5deg' }],
   },
   wordmarkDot: {
     position: 'absolute',
@@ -12133,6 +12945,13 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 7,
     backgroundColor: STUDOS_THEME.yellow,
+  },
+  wordmarkDotCompact: {
+    right: 3,
+    top: -2,
+    width: 5,
+    height: 5,
+    borderRadius: 5,
   },
   sidebarRoot: {
     position: 'absolute',
@@ -12578,6 +13397,35 @@ const styles = StyleSheet.create({
   sidebarMenuTextActive: {
     color: '#FF6F73',
     fontWeight: '700',
+  },
+  sidebarMenuTextArcadeHub: {
+    color: '#172143',
+    fontWeight: '900',
+    fontSize: 14,
+    letterSpacing: 0.4,
+    textShadowColor: 'rgba(255, 111, 115, 0.33)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  sidebarMenuTextArcadeHubActive: {
+    color: '#FF6F73',
+    fontWeight: '900',
+  },
+  sidebarArcadeHubTextWrap: {
+    flex: 1,
+    gap: 6,
+  },
+  sidebarArcadeHubTextWrapActive: {
+    transform: [{ translateX: 2 }],
+  },
+  sidebarArcadeHubMarker: {
+    width: 58,
+    height: 2,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 111, 115, 0.32)',
+  },
+  sidebarArcadeHubMarkerActive: {
+    backgroundColor: STUDOS_THEME.red,
   },
   lockedNavigationText: {
     opacity: 0.68,
@@ -14678,9 +15526,9 @@ const styles = StyleSheet.create({
   calendarDateSelectIcon: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: STUDOS_THEME.yellow,
   },
   calendarDateSelectText: {
@@ -16958,6 +17806,76 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: STUDOS_THEME.blue,
   },
+  crewTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 47,
+    height: 40,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  crewTitleGraphicBack: {
+    position: 'absolute',
+    right: 0,
+    bottom: 1,
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  crewTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 35,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  crewTitleGraphicPeople: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 31,
+  },
+  crewTitleGraphicDotRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    marginTop: -3,
+  },
+  crewTitleGraphicDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 8,
+  },
+  crewTitleGraphicDotBlue: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  crewTitleGraphicDotYellow: {
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  crewTitleGraphicDotRed: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  crewTitleGraphicOuterDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
   earnCapsPageTitleText: {
     fontSize: 29,
   },
@@ -17338,6 +18256,563 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
     lineHeight: 48,
+  },
+  titleSmallHeader: {
+    fontSize: 30,
+    lineHeight: 34,
+  },
+  miniGamesHeaderLogo: {
+    position: 'relative',
+    width: 38,
+    height: 38,
+    marginLeft: 8,
+    marginBottom: -1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  miniGamesHeaderLogoDice: {
+    transform: [{ scale: 1.35 }],
+  },
+  miniGamesScreenHeader: {
+    gap: 0,
+  },
+  miniGamesHeaderBody: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 18,
+    letterSpacing: 0,
+    marginTop: 10,
+  },
+  miniGamesHeaderTitle: {
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+  },
+  miniGamesHeaderBodySmall: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  miniGamesTitleWithLogoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: '100%',
+    gap: 8,
+  },
+  miniGamesPointerHeaderRow: {
+    justifyContent: 'space-between',
+  },
+  miniGamesHeaderLogoInTitle: {
+    marginLeft: 8,
+  },
+  miniGamesCardTitle: {
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  miniGamesCardBody: {
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  miniGamesCardPanel: {
+    gap: 0,
+    padding: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd6c7',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  miniGamesCardPressed: {
+    opacity: 0.94,
+    transform: [{ scale: 0.996 }],
+  },
+  miniGamesCardTextWrap: {
+    flex: 1,
+    marginRight: 8,
+    gap: 6,
+  },
+  miniGamesCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  miniGamesBottleIcon: {
+    position: 'relative',
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniGamesBottleIconInTitle: {
+    marginBottom: 2,
+    marginLeft: 2,
+  },
+  miniGamesBottleBadge: {
+    position: 'absolute',
+    right: -3,
+    top: -3,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: STUDOS_THEME.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniGamesBottleLogoText: {
+    color: STUDOS_THEME.red,
+    fontSize: 7,
+    lineHeight: 8,
+    fontWeight: '900',
+  },
+  miniGamesCardRow: {
+    alignItems: 'center',
+  },
+  miniGamesCardChevronWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF3E6',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.35)',
+    shadowColor: '#172143',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  miniGamesCardChevronIcon: {
+    transform: [{ translateX: 1 }],
+  },
+  miniGamesBackButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+    backgroundColor: '#fff7ee',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.35)',
+  },
+  luckyTopAddButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1f9d55',
+    borderWidth: 1,
+    borderColor: '#1f9d55',
+    shadowColor: '#1f9d55',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  luckyTopAddButtonPressed: {
+    transform: [{ scale: 0.96 }],
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  luckyWheelContainer: {
+    marginTop: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    transform: [{ translateY: 46 }],
+    width: '100%',
+    minHeight: 320,
+  },
+  luckyPointer: {
+    position: 'absolute',
+    top: -20,
+    left: '50%',
+    transform: [{ translateX: -12 }],
+    width: 0,
+    height: 0,
+    borderLeftWidth: 12,
+    borderRightWidth: 12,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopWidth: 24,
+    borderTopColor: STUDOS_THEME.ink,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.32,
+    shadowRadius: 6,
+    elevation: 6,
+    zIndex: 3,
+  },
+  luckyWheel: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: '#FFFAF0',
+    overflow: 'hidden',
+  },
+  luckyWheelShell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.52,
+    shadowRadius: 16,
+    elevation: 14,
+    backgroundColor: 'transparent',
+  },
+  luckyWheelPatternLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  luckyWheelPatternBandOne: {
+    position: 'absolute',
+    width: '190%',
+    height: '32%',
+    borderRadius: 999,
+    top: '8%',
+    backgroundColor: 'rgba(117, 222, 208, 0.22)',
+    transform: [{ rotate: '18deg' }],
+  },
+  luckyWheelPatternBandTwo: {
+    position: 'absolute',
+    width: '180%',
+    height: '30%',
+    borderRadius: 999,
+    top: '42%',
+    backgroundColor: 'rgba(255, 212, 109, 0.22)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  luckyWheelPatternBandThree: {
+    position: 'absolute',
+    width: '200%',
+    height: '28%',
+    borderRadius: 999,
+    top: '70%',
+    backgroundColor: 'rgba(255, 111, 115, 0.20)',
+    transform: [{ rotate: '36deg' }],
+  },
+  luckyWheelMarker: {
+    position: 'absolute',
+    inset: 0,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  luckyWheelMarkerLine: {
+    width: 1,
+    height: '48%',
+    backgroundColor: 'rgba(23, 33, 67, 0.16)',
+  },
+  luckyWheelPlayerWrap: {
+    position: 'absolute',
+    width: 124,
+    alignItems: 'center',
+  },
+  luckyWheelPlayerLabel: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.76)',
+    borderColor: 'rgba(255, 111, 115, 0.25)',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  luckyWheelCenterLogoWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: STUDOS_THEME.ink,
+    shadowColor: STUDOS_THEME.blue,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 7,
+    elevation: 6,
+  },
+  luckyWheelCenterLogo: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  luckyContent: {
+    marginTop: 16,
+    gap: 10,
+  },
+  luckyLead: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  luckyAddPlayerModal: {
+    width: '92%',
+    maxWidth: 420,
+    gap: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ddd6c7',
+    backgroundColor: '#ffffff',
+    padding: 16,
+  },
+  luckyAddPlayerModalRoot: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 64,
+    paddingHorizontal: 20,
+  },
+  luckyAddModalDesc: {
+    color: '#65748b',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  luckyModalPlayerSection: {
+    marginTop: 2,
+    gap: 8,
+  },
+  luckyModalPlayerTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  luckyAddModalInput: {
+    fontSize: 16,
+  },
+  luckyAddModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  luckyAddModalGhostButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cfc8b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#faf9f5',
+  },
+  luckyAddModalGhostButtonText: {
+    color: '#172143',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  luckyAddModalPrimaryButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 10,
+  },
+  luckyPlayerListWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  luckyPlayerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e4d8c4',
+    backgroundColor: '#ffffff',
+  },
+  luckyPlayerPillText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  luckyPlayerPillRemove: {
+    marginLeft: -2,
+    marginTop: -1,
+  },
+  luckyEmptyText: {
+    color: '#8a93a4',
+    fontStyle: 'italic',
+  },
+  luckyActionBlock: {
+    gap: 8,
+    marginTop: 96,
+    alignItems: 'center',
+  },
+  luckySpinButton: {
+    width: '100%',
+    minHeight: 48,
+    borderRadius: 10,
+    marginTop: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+    borderWidth: 1.5,
+    borderColor: STUDOS_THEME.red,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.32,
+    shadowRadius: 10,
+    elevation: 7,
+  },
+  luckySpinButtonPressed: {
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  luckySpinButtonText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  luckySpinButtonLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  luckySpinWordmark: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  luckySpinWordmarkTextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+  },
+  luckySpinWordmarkText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  luckySpinWordmarkTextWhite: {
+    color: '#ffffff',
+  },
+  luckySpinWordmarkUnderline: {
+    width: 20,
+    height: 2,
+    borderRadius: 2,
+    backgroundColor: STUDOS_THEME.red,
+    marginTop: -1,
+    transform: [{ rotate: '-3deg' }],
+  },
+  luckySpinWordmarkDot: {
+    position: 'absolute',
+    right: 0,
+    top: -4,
+    width: 5,
+    height: 5,
+    borderRadius: 5,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  luckyWheelHint: {
+    color: '#8a93a4',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  luckyResultPanel: {
+    marginTop: 10,
+    alignItems: 'center',
+    gap: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.35)',
+    backgroundColor: '#fff4ea',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  luckyResultLabel: {
+    color: '#7a5b2a',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  luckyResultName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  miniGamesGameList: {
+    gap: 12,
+    marginTop: 6,
+  },
+  titleWithLogoRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  crewScreen: {
+    flex: 1,
+    gap: 16,
+    minHeight: 0,
+  },
+  crewPanel: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 2,
+  },
+  crewSourceTabs: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 10,
+    padding: 2,
+    borderRadius: 10,
+    backgroundColor: '#f5f6f8',
+    borderWidth: 1,
+    borderColor: '#e2e6ee',
+  },
+  crewSourceTab: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  crewSourceTabActive: {
+    backgroundColor: '#172143',
+  },
+  crewSourceTabText: {
+    color: '#65748b',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  crewSourceTabTextActive: {
+    color: '#ffffff',
+  },
+  crewMemberListScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  crewHeaderWordmark: {
+    marginBottom: 2,
   },
   subtitle: {
     color: '#65748b',
@@ -19346,13 +20821,22 @@ const styles = StyleSheet.create({
   connectionList: {
     gap: 12,
   },
+  crewMemberList: {
+    gap: 10,
+  },
   connectionRow: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
     borderBottomColor: '#E5E8EF',
     borderBottomWidth: 1,
     paddingBottom: 12,
+  },
+  crewSelfMember: {
+    backgroundColor: '#FFF7EF',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   connectionAvatar: {
     alignItems: 'center',
@@ -19412,6 +20896,112 @@ const styles = StyleSheet.create({
     color: '#172143',
     fontSize: 12,
     fontWeight: '800',
+  },
+  crewMemberChatIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    flexDirection: 'row',
+    marginTop: 0,
+    marginLeft: 0,
+    padding: 0,
+    position: 'relative',
+  },
+  crewMemberActionIcons: {
+    flexDirection: 'row',
+    gap: 1,
+    marginLeft: -4,
+    alignItems: 'center',
+  },
+  crewMemberMobileIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginLeft: 0,
+    padding: 0,
+  },
+  crewMemberMobileIconButtonDisabled: {
+    opacity: 0.5,
+  },
+  crewMemberChatIconBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.yellow,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.16,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  crewPhoneModalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 30,
+  },
+  crewPhoneModalBackdrop: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '100%',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(23, 33, 67, 0.42)',
+  },
+  crewPhoneModalPanel: {
+    width: '100%',
+    maxWidth: 330,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+  },
+  crewPhoneModalTitle: {
+    color: '#172143',
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  crewPhoneModalName: {
+    color: '#172143',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  crewPhoneModalNumber: {
+    color: '#FF6F73',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  crewPhoneModalCloseButton: {
+    marginTop: 6,
+    minHeight: 36,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.blue,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    paddingVertical: 8,
+  },
+  crewPhoneModalCloseText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   primaryButton: {
     alignItems: 'center',
