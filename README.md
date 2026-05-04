@@ -38,6 +38,9 @@ Se ogsaa:
   Metro.
 - Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
   afhaengige af lokal dev-server.
+- Duel-siden i mobilappen har en færdig UI (oprettelse, modstander-søgning,
+  challenge/indsats/deadline, filtre, status og actions), men mangler backend-
+  integration.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 - Medlems-email er nu entydig på tværs af systemet; én email kan kun knyttes til
   én klasse. Dette håndhæves i backend-validering og database-indekset
@@ -311,6 +314,18 @@ Klassedyst:
 - Topkort viser klassens placering, brugerens Caps og brugerens klasseandel.
 - Ugens gode gerning kan claimes direkte paa kortet og opdaterer Caps.
 
+Duel:
+
+- `DuelScreen` er bygget i `apps/mobile/App.js` med:
+  - header med titel/logo og “Ny duel”-flow
+  - modstander-søgning
+  - challenge-tekst + indsats (Caps) + deadline
+  - filtre på status (`Aktive`, `Afventer`, `Afsluttede`, `Alle`)
+  - handlinger: accepter, afvis, annuller, bekræft, markér gennemført
+- Denne funktion er i dag lokal-state og er ikke server-synkroniseret.
+- Der findes ingen backend-kobling til duels endnu (persistens, notifikationer,
+  validering, escrow eller caps-udførelse).
+
 Optjen Caps:
 
 - Siden bruger samme headerstil som de andre app-sider.
@@ -403,7 +418,8 @@ Release-blokkere foer Apple/Google:
 - Blaa bog.
 - Walls/feed/galleri.
 - Klasseawards/afstemninger.
-- Pointduel backend og duel-regler.
+- Pointduel backend og regler (status-flow, validering, persistens, escrow,
+  modstander-sync).
 - Backend-persistens for Dagens stemning og hueklip.
 - Kalender-push og daglig stemningsreminder.
 - Glemt adgangskode/email reset.

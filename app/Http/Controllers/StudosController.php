@@ -68,6 +68,8 @@ class StudosController extends Controller
         ],
     ];
 
+    private const EMERGENCY_CONTACT_VISIBILITIES = ['class', 'crew', 'specific'];
+
     private const PERSONAL_CODE_WORDS = [
         'KAOS',
         'DISCO',
@@ -1145,6 +1147,136 @@ class StudosController extends Controller
                 'expiresAt' => $this->apiDateTime($member->authTokenExpiresAt ?? null),
                 'member' => $serializedMember,
             ],
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'phone' => ['nullable', 'string', 'max:40'],
+            'birthday' => ['nullable', 'string', 'max:10'],
+        ]);
+
+        $phone = blank($data['phone'] ?? null) ? null : trim($data['phone']);
+        $birthday = blank($data['birthday'] ?? null) ? null : trim($data['birthday']);
+
+        if ($birthday !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthday)) {
+            abort(422, 'Fødselsdag skal være i format YYYY-MM-DD.');
+        }
+
+        if ($birthday !== null) {
+            $parsedBirthday = Carbon::createFromFormat('Y-m-d', $birthday);
+
+            if (! $parsedBirthday || $parsedBirthday->format('Y-m-d') !== $birthday) {
+                abort(422, 'Fødselsdag skal være en gyldig dato i format YYYY-MM-DD.');
+            }
+        }
+
+        $updates = [];
+
+        if (Schema::hasColumn('members', 'phone')) {
+            $updates['phone'] = $phone;
+        }
+
+        if (Schema::hasColumn('members', 'birthday')) {
+            $updates['birthday'] = $birthday;
+        }
+
+        if ($updates) {
+            DB::table('members')->where('id', $member->id)->update($updates);
+        }
+
+        $updatedMember = DB::table('members')->where('id', $member->id)->first();
+        $serializedMember = $this->serializeMember($updatedMember, true, true, $member->id);
+
+        return response()->json([
+            'member' => $serializedMember,
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function updateEmergencyContactVisibility(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'visibility' => ['required', 'string', Rule::in(self::EMERGENCY_CONTACT_VISIBILITIES)],
+            'visibleMemberIds' => ['nullable', 'array', 'max:250'],
+            'visibleMemberIds.*' => ['string', 'max:36'],
+        ]);
+
+        $visibility = $this->normalizeEmergencyContactVisibility($data['visibility']);
+        $visibleMemberIds = $visibility === 'specific'
+            ? $this->normalizeEmergencyContactMemberIds($data['visibleMemberIds'] ?? [])
+            : [];
+        $visibleMemberIds = array_values(array_unique(array_filter(
+            $visibleMemberIds,
+            fn (string $visibleMemberId): bool => (string) $visibleMemberId !== (string) $member->id,
+        )));
+
+        if ($visibility === 'specific') {
+            $classMembers = DB::table('members')
+                ->where('class_id', $member->class_id)
+                ->where('status', 'active')
+                ->whereIn('id', $visibleMemberIds)
+                ->pluck('id')
+                ->all();
+
+            abort_if(
+                count($classMembers) !== count($visibleMemberIds),
+                422,
+                'Et eller flere valgte personer findes ikke længere.',
+            );
+        }
+
+        DB::table('members')->where('id', $member->id)->update([
+            'emergency_contact_visibility' => $visibility,
+            'emergency_contact_visible_member_ids' => $visibility === 'specific'
+                ? json_encode($visibleMemberIds, JSON_UNESCAPED_UNICODE)
+                : null,
+        ]);
+
+        $updatedMember = DB::table('members')->where('id', $member->id)->first();
+        $serializedMember = $this->serializeMember($updatedMember, true, true, $member->id);
+
+        return response()->json([
+            'member' => $serializedMember,
+            'class' => $this->loadClassById($member->class_id, $member->id),
+        ]);
+    }
+
+    public function updateEmergencyContact(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'emergencyContactName' => ['nullable', 'string', 'max:190'],
+            'emergencyContactPhone' => ['nullable', 'string', 'max:40'],
+        ]);
+
+        $emergencyContactName = blank($data['emergencyContactName'] ?? null) ? null : trim($data['emergencyContactName']);
+        $emergencyContactPhone = blank($data['emergencyContactPhone'] ?? null)
+            ? null
+            : trim($data['emergencyContactPhone']);
+
+        $updates = [];
+        if (Schema::hasColumn('members', 'emergency_contact_name')) {
+            $updates['emergency_contact_name'] = $emergencyContactName;
+        }
+
+        if (Schema::hasColumn('members', 'emergency_contact_phone')) {
+            $updates['emergency_contact_phone'] = $emergencyContactPhone;
+        }
+
+        if ($updates) {
+            DB::table('members')->where('id', $member->id)->update($updates);
+        }
+
+        $updatedMember = DB::table('members')->where('id', $member->id)->first();
+        $serializedMember = $this->serializeMember($updatedMember, true, true, $member->id);
+
+        return response()->json([
+            'member' => $serializedMember,
             'class' => $this->loadClassById($member->class_id, $member->id),
         ]);
     }
@@ -2242,6 +2374,7 @@ class StudosController extends Controller
                 $member,
                 $member->id === $currentMemberId,
                 $member->id === $currentMemberId,
+                $currentMemberId,
             ))
             ->values();
 
@@ -2384,10 +2517,17 @@ class StudosController extends Controller
         ];
     }
 
-    private function serializeMember(object $member, bool $includePersonalCode = false, bool $includePrivate = false): array
-    {
+    private function serializeMember(
+        object $member,
+        bool $includePersonalCode = false,
+        bool $includePrivate = false,
+        ?string $viewerMemberId = null,
+    ): array {
         $firstName = $member->first_name ?? null;
         $lastName = $member->last_name ?? null;
+        $isOwnProfile = (string) $member->id === (string) $viewerMemberId;
+        $canSeeEmergencyContact = $includePrivate || $isOwnProfile
+            || $this->canViewerSeeEmergencyContact($member, $viewerMemberId);
 
         $serialized = [
             'id' => $member->id,
@@ -2401,7 +2541,18 @@ class StudosController extends Controller
             'joinedAt' => $this->apiDateTime($member->joined_at),
             'lastSeenAt' => $this->apiDateTime($member->last_seen_at ?? null),
             'isOnline' => $this->memberIsOnline($member->last_seen_at ?? null),
+            'emergencyContactVisibility' => $this->normalizeEmergencyContactVisibility(
+                $member->emergency_contact_visibility ?? null,
+            ),
+            'emergencyContactVisibleMemberIds' => $this->normalizeEmergencyContactMemberIdsFromColumn(
+                $member->emergency_contact_visible_member_ids ?? null,
+            ),
         ];
+
+        if ($canSeeEmergencyContact) {
+            $serialized['emergencyContactName'] = $member->emergency_contact_name ?? null;
+            $serialized['emergencyContactPhone'] = $member->emergency_contact_phone ?? null;
+        }
 
         if ($includePrivate) {
             $serialized['schoolId'] = $member->school_id ?? null;
@@ -2415,6 +2566,72 @@ class StudosController extends Controller
         }
 
         return $serialized;
+    }
+
+    private function normalizeEmergencyContactVisibility(?string $visibility): string
+    {
+        $normalized = is_string($visibility) ? strtolower(trim($visibility)) : '';
+
+        return in_array($normalized, self::EMERGENCY_CONTACT_VISIBILITIES, true)
+            ? $normalized
+            : 'class';
+    }
+
+    private function normalizeEmergencyContactMemberIdsFromColumn($rawMemberIds): array
+    {
+        if ($rawMemberIds === null || $rawMemberIds === '') {
+            return [];
+        }
+
+        if (! is_array($rawMemberIds)) {
+            $decoded = is_string($rawMemberIds)
+                ? json_decode($rawMemberIds, true)
+                : null;
+
+            if (! is_array($decoded)) {
+                return [];
+            }
+
+            $rawMemberIds = $decoded;
+        }
+
+        return $this->normalizeEmergencyContactMemberIds($rawMemberIds);
+    }
+
+    private function normalizeEmergencyContactMemberIds(array $memberIds): array
+    {
+        $normalized = array_map(
+            static fn ($memberId): string => trim((string) $memberId),
+            $memberIds,
+        );
+        $filtered = array_filter($normalized, static fn ($memberId): bool => $memberId !== '');
+
+        return array_values(array_unique($filtered));
+    }
+
+    private function canViewerSeeEmergencyContact(object $member, ?string $viewerMemberId = null): bool
+    {
+        if (! $viewerMemberId) {
+            return false;
+        }
+
+        if ((string) $member->id === (string) $viewerMemberId) {
+            return true;
+        }
+
+        $visibility = $this->normalizeEmergencyContactVisibility(
+            $member->emergency_contact_visibility ?? null,
+        );
+
+        if ($visibility === 'specific') {
+            $allowedMemberIds = $this->normalizeEmergencyContactMemberIdsFromColumn(
+                $member->emergency_contact_visible_member_ids ?? null,
+            );
+
+            return in_array((string) $viewerMemberId, $allowedMemberIds, true);
+        }
+
+        return true;
     }
 
     private function sessionForMember(array $member, ?array $token = null): array

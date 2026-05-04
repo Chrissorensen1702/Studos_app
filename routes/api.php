@@ -28,7 +28,10 @@ Route::post('/check-ins/weekly', [StudosController::class, 'storeWeeklyCheckIn']
 Route::post('/notifications/push-token', [StudosController::class, 'registerPushToken'])->middleware('throttle:20,1');
 Route::post('/notifications/test', [StudosController::class, 'sendTestNotification'])->middleware('throttle:6,1');
 Route::post('/profile/photo', [StudosController::class, 'updateProfilePhoto'])->middleware('throttle:12,1');
+Route::post('/members/me/profile', [StudosController::class, 'updateProfile'])->middleware('throttle:20,1');
 Route::delete('/members/me', [StudosController::class, 'deleteCurrentAccount'])->middleware('throttle:6,1');
+Route::post('/members/me/emergency-contact-visibility', [StudosController::class, 'updateEmergencyContactVisibility'])->middleware('throttle:20,1');
+Route::post('/members/me/emergency-contact', [StudosController::class, 'updateEmergencyContact'])->middleware('throttle:20,1');
 Route::post('/members/{member}/block', [StudosController::class, 'blockMember'])->middleware('throttle:20,1');
 Route::post('/classes/{class}/members/{member}/access', [StudosController::class, 'updateMemberAccess']);
 Route::post('/events', [StudosController::class, 'storeEvent'])->middleware('throttle:12,1');

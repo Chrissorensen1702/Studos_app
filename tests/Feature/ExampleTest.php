@@ -122,12 +122,14 @@ class ExampleTest extends TestCase
     public function test_personal_code_lookup_returns_safe_member_preview(): void
     {
         $personalCode = DB::table('members')->where('id', 'demo-owner')->value('personal_code');
+        $displayName = DB::table('members')->where('id', 'demo-owner')->value('display_name');
 
         $this->assertNotEmpty($personalCode);
+        $this->assertNotEmpty($displayName);
 
         $this->getJson('/api/members/code/'.$personalCode)
             ->assertStatus(200)
-            ->assertJsonPath('member.displayName', 'Chris')
+            ->assertJsonPath('member.displayName', (string) $displayName)
             ->assertJsonPath('member.class.classId', 'MG-3B-26')
             ->assertJsonMissingPath('member.email')
             ->assertJsonMissingPath('member.phone')
@@ -532,6 +534,7 @@ class ExampleTest extends TestCase
     public function test_students_can_create_calendar_events_and_update_rsvp(): void
     {
         Storage::fake('public');
+        $ownerDisplayName = DB::table('members')->where('id', 'demo-owner')->value('display_name');
 
         $this->createActiveDemoMember('calendar-maja', 'Maja Kalender', 'maja.calendar@example.test');
         $this->createActiveDemoMember('calendar-tobias', 'Tobias Kalender', 'tobias.calendar@example.test');
@@ -564,7 +567,7 @@ class ExampleTest extends TestCase
             ->assertJsonPath('class.events.0.title', 'Studentergilde hos Chris')
             ->assertJsonPath('class.events.0.startsAt', '2026-05-24T19:00:00.000Z')
             ->assertJsonPath('class.events.0.location', 'Chris have')
-            ->assertJsonPath('class.events.0.creator.displayName', 'Chris')
+            ->assertJsonPath('class.events.0.creator.displayName', (string) $ownerDisplayName)
             ->assertJsonPath('class.events.0.myRsvp', 'attending')
             ->assertJsonPath('class.events.0.inviteScope', 'custom')
             ->assertJsonPath('class.events.0.inviteCount', 2)
@@ -856,6 +859,9 @@ class ExampleTest extends TestCase
         $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
         $ownerToken = $this->issueTestMemberToken('demo-owner');
         $majaToken = $this->issueTestMemberToken('chat-maja');
+        $ownerDisplayName = DB::table('members')
+            ->where('id', 'demo-owner')
+            ->value('display_name');
 
         $this->postJson('/api/chat/conversations/direct', [
             'memberId' => 'chat-maja',
@@ -917,7 +923,7 @@ class ExampleTest extends TestCase
         Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
             && $request[0]['to'] === $majaPushToken
             && $request[0]['channelId'] === 'studos-default'
-            && $request[0]['title'] === 'Chris'
+            && $request[0]['title'] === (string) $ownerDisplayName
             && $request[0]['body'] === 'Hej Maja 👋'
             && ! array_key_exists('richContent', $request[0])
             && $request[0]['data']['type'] === 'chat_message'

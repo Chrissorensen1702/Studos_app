@@ -325,7 +325,9 @@ const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_UR
 const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const LOCAL_API_BASE_URLS = [
   'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
+  'http://10.171.168.140/studenter-app/public/api',
   'http://10.171.168.162/studenter-app/public/api',
+  'http://10.0.2.2/studenter-app/public/api',
   'http://localhost/studenter-app/public/api',
   'http://127.0.0.1/studenter-app/public/api',
 ];
@@ -334,7 +336,7 @@ const FALLBACK_CLOUD_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'ht
 const API_BASE_URLS = (EXPLICIT_API_BASE_URL
   ? [EXPLICIT_API_BASE_URL]
   : IS_WEB
-    ? [WEB_API_BASE_URL]
+    ? [WEB_API_BASE_URL, FALLBACK_CLOUD_API_BASE_URL]
     : [...LOCAL_API_BASE_URLS, FALLBACK_CLOUD_API_BASE_URL]
 ).filter(Boolean);
 const UNIQUE_API_BASE_URLS = Array.from(new Set(API_BASE_URLS));
@@ -411,6 +413,26 @@ const formatDate = (value) => {
   }).format(new Date(`${value}T12:00:00`));
 };
 
+const formatDateTime = (value) => {
+  if (!value) {
+    return '';
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('da-DK', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(parsed);
+};
+
 const formatProfileDate = (value) => {
   const rawValue = String(value ?? '').trim();
 
@@ -432,6 +454,26 @@ const formatProfileDate = (value) => {
     month: 'long',
     year: 'numeric',
   }).format(date);
+};
+
+const isValidProfileBirthday = (value) => {
+  const normalized = String(value ?? '').trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return false;
+  }
+
+  const [year, month, day] = normalized.split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return false;
+  }
+
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+  return !Number.isNaN(parsedDate.getTime())
+    && parsedDate.getUTCFullYear() === year
+    && parsedDate.getUTCMonth() + 1 === month
+    && parsedDate.getUTCDate() === day;
 };
 
 const PROFILE_ROLE_LABELS = {
@@ -484,6 +526,20 @@ const CALENDAR_INVITE_SCOPE_OPTIONS = [
   { id: 'class', label: 'Hele klassen', icon: 'school' },
   { id: 'crew', label: 'Mit crew', icon: 'people' },
   { id: 'custom', label: 'Vælg personer', icon: 'person-add' },
+];
+const EMERGENCY_CONTACT_VISIBILITY_OPTIONS = [
+  {
+    id: 'class',
+    label: 'Hele klassen',
+  },
+  {
+    id: 'crew',
+    label: 'Mit crew',
+  },
+  {
+    id: 'specific',
+    label: 'Personsspecifikt',
+  },
 ];
 const EVENT_COVER_TEMPLATES = [
   {
@@ -1423,6 +1479,20 @@ const profileFromMember = (member) => ({
   profilePhotoUrl: member?.profilePhotoUrl ?? '',
 });
 
+const normalizeEmergencyContactVisibility = (visibility) => (
+  visibility === 'crew' || visibility === 'specific' ? visibility : 'class'
+);
+
+const normalizeEmergencyContactMemberIds = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return uniqueById(value.map((memberId) => ({ id: String(memberId ?? '').trim() })))
+    .map((member) => member.id)
+    .filter((memberId) => Boolean(memberId));
+};
+
 export default function App() {
   const { height: viewportHeight } = useWindowDimensions();
   const [step, setStep] = useState('invite');
@@ -1472,7 +1542,8 @@ export default function App() {
     || activeTab === 'overview'
     || activeTab === 'earnCaps'
     || activeTab === 'classBattle'
-    || activeTab === 'classmates';
+    || activeTab === 'classmates'
+    || activeTab === 'emergencyContacts';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1545,6 +1616,146 @@ export default function App() {
       };
     });
   }, [session?.member?.id]);
+
+  const updateEmergencyContactVisibility = useCallback(async (visibility, visibleMemberIds = []) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const normalizedVisibility = normalizeEmergencyContactVisibility(visibility);
+    const normalizedVisibleMemberIds = normalizeEmergencyContactMemberIds(
+      normalizedVisibility === 'specific' ? visibleMemberIds : [],
+    );
+    const data = await apiFetch('/members/me/emergency-contact-visibility', {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify({
+        visibility: normalizedVisibility,
+        visibleMemberIds: normalizedVisibleMemberIds,
+      }),
+    });
+
+    const updatedMember = data?.member;
+    if (!updatedMember) {
+      throw new Error('Kunne ikke hente den opdaterede nødkontakt-indstilling.');
+    }
+
+    const nextSession = {
+      ...session,
+      member: updatedMember,
+    };
+    const nextClass = data.class ?? schoolClass;
+
+    setSession(nextSession);
+    if (nextClass) {
+      setSchoolClass(nextClass);
+    }
+    setProfile(profileFromMember(updatedMember));
+
+    await storeSession({
+      session: nextSession,
+      class: nextClass,
+    });
+
+    return updatedMember;
+  }, [session, schoolClass, storeSession]);
+
+  const updateEmergencyContact = useCallback(async (emergencyContactName, emergencyContactPhone) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const data = await apiFetch('/members/me/emergency-contact', {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify({
+        emergencyContactName: String(emergencyContactName ?? '').trim(),
+        emergencyContactPhone: String(emergencyContactPhone ?? '').trim(),
+      }),
+    });
+
+    const updatedMember = data?.member;
+    if (!updatedMember) {
+      throw new Error('Kunne ikke hente den opdaterede nødkontakt.');
+    }
+
+    const nextSession = {
+      ...session,
+      member: updatedMember,
+    };
+    const nextClass = data.class ?? schoolClass;
+
+    setSession(nextSession);
+    if (nextClass) {
+      setSchoolClass(nextClass);
+    }
+    setProfile(profileFromMember(updatedMember));
+
+    await storeSession({
+      session: nextSession,
+      class: nextClass,
+    });
+
+    return updatedMember;
+  }, [session, schoolClass, storeSession]);
+
+  const updateOwnProfileFields = useCallback(async (updates = {}) => {
+    if (!session?.token) {
+      throw new Error('Login mangler.');
+    }
+
+    const hasPhoneUpdate = Object.prototype.hasOwnProperty.call(updates, 'phone');
+    const hasBirthdayUpdate = Object.prototype.hasOwnProperty.call(updates, 'birthday');
+
+    if (!hasPhoneUpdate && !hasBirthdayUpdate) {
+      throw new Error('Ingen felter at opdatere.');
+    }
+
+    const payload = {};
+    if (hasPhoneUpdate) {
+      payload.phone = String(updates.phone ?? '').trim() || null;
+    }
+
+    if (hasBirthdayUpdate) {
+      const nextBirthday = String(updates.birthday ?? '').trim();
+
+      if (nextBirthday && !isValidProfileBirthday(nextBirthday)) {
+        throw new Error('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
+      }
+
+      payload.birthday = nextBirthday || null;
+    }
+
+    const data = await apiFetch('/members/me/profile', {
+      authToken: session.token,
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    const updatedMember = data?.member;
+    if (!updatedMember) {
+      throw new Error('Kunne ikke hente den opdaterede profil.');
+    }
+
+    const nextSession = {
+      ...session,
+      member: updatedMember,
+    };
+    const nextClass = data.class ?? schoolClass;
+
+    setSession(nextSession);
+    if (nextClass) {
+      setSchoolClass(nextClass);
+    }
+    setProfile(profileFromMember(updatedMember));
+
+    await storeSession({
+      session: nextSession,
+      class: nextClass,
+    });
+
+    return updatedMember;
+  }, [session, schoolClass, storeSession]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2411,6 +2622,7 @@ export default function App() {
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
                 activeTab === 'classmates' ? styles.appScreenCrewDetached : null,
+                activeTab === 'emergencyContacts' ? styles.appScreenCrewDetached : null,
                 activeTab === 'classBattle' ? styles.appScreenClassBattleDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
@@ -2436,9 +2648,12 @@ export default function App() {
                   onEnableAndroidNotifications={enableAndroidNotifications}
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
-                  onProfilePhotoUpdate={updateCurrentProfilePhoto}
-                  onLogout={clearSession}
-                  onDeleteAccount={deleteCurrentAccount}
+                onEmergencyContactVisibilityChange={updateEmergencyContactVisibility}
+                onEmergencyContactUpdate={updateEmergencyContact}
+                onProfileFieldUpdate={updateOwnProfileFields}
+                onProfilePhotoUpdate={updateCurrentProfilePhoto}
+                onLogout={clearSession}
+                onDeleteAccount={deleteCurrentAccount}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
@@ -2480,9 +2695,12 @@ export default function App() {
                   onEnableAndroidNotifications={enableAndroidNotifications}
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
-                  onProfilePhotoUpdate={updateCurrentProfilePhoto}
-                  onLogout={clearSession}
-                  onDeleteAccount={deleteCurrentAccount}
+                onEmergencyContactVisibilityChange={updateEmergencyContactVisibility}
+                onEmergencyContactUpdate={updateEmergencyContact}
+                onProfileFieldUpdate={updateOwnProfileFields}
+                onProfilePhotoUpdate={updateCurrentProfilePhoto}
+                onLogout={clearSession}
+                onDeleteAccount={deleteCurrentAccount}
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
@@ -2694,6 +2912,9 @@ function AppTabScreen({
   onBlockMember,
   onCapsBalanceChange,
   onOpenDirectChat,
+  onEmergencyContactVisibilityChange,
+  onEmergencyContactUpdate,
+  onProfileFieldUpdate,
   onProfilePhotoUpdate,
   onLogout,
   onDeleteAccount,
@@ -2747,6 +2968,7 @@ function AppTabScreen({
         loading={loading}
         profile={profile}
         schoolClass={schoolClass}
+        onProfileFieldUpdate={onProfileFieldUpdate}
         onProfilePhotoUpdate={onProfilePhotoUpdate}
         onLogout={onLogout}
         onDeleteAccount={onDeleteAccount}
@@ -2898,12 +3120,10 @@ function AppTabScreen({
 
   if (activeTab === 'challenges') {
     return (
-      <FeatureScreen
-        icon="flash"
-        kicker={schoolClass.className}
-        title="Pointduel"
-        emptyTitle="Ingen pointdueller endnu"
-        emptyText="Udfordr hinanden med Caps, og følg aktive dueller her."
+      <DuelScreen
+        activeMember={activeMember}
+        activeMembers={activeMembers}
+        schoolClass={schoolClass}
       />
     );
   }
@@ -2943,12 +3163,12 @@ function AppTabScreen({
 
   if (activeTab === 'emergencyContacts') {
     return (
-      <FeatureScreen
-        icon="call"
-        kicker={schoolClass.className}
-        title="Nødkontakter"
-        emptyTitle="Kommer snart"
-        emptyText="Vigtige kontaktpersoner og hjælp samles her."
+      <EmergencyContactsScreen
+        activeMember={activeMember}
+        activeMembers={activeMembers}
+        sessionToken={sessionToken}
+        onUpdateVisibility={onEmergencyContactVisibilityChange}
+        onUpdateContact={onEmergencyContactUpdate}
       />
     );
   }
@@ -8339,7 +8559,7 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, ti
   return (
     <View style={styles.flowStack}>
       <View style={styles.tabHeader}>
-        <View>
+        <View style={styles.duelHeaderLeft}>
           <Text style={styles.kicker}>{kicker}</Text>
           <Text style={styles.title}>{title}</Text>
         </View>
@@ -8366,20 +8586,38 @@ function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, ti
   );
 }
 
-function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
-  const miniGames = [
-    {
-      id: 'bottle-pointer',
-      title: 'Flaskehalsen peger på',
-      description: 'Vælg random, og lad flaskens retning afgøre dagens sjove opgave. Klar til at tage imod udfordringen?',
-    },
-    {
-      id: 'lie-truth',
-      title: 'Snyd (terninger)',
-      description: 'Spillere siger sandheder eller løgne, og gruppen skal gennemskue, hvem der sniger med. Hvem tager pointet for det skarpeste bluff?',
-    },
-  ];
+const MINI_GAMES = [
+  {
+    id: 'bottle-pointer',
+    title: 'Lykkehjulet',
+    badgeLabel: 'Studos special',
+    badgeTone: 'red',
+    hint: 'Spin, grin og bliv sat på prøve.',
+  },
+  {
+    id: 'lie-truth',
+    title: 'Snyd eller løgn',
+    badgeLabel: 'Klassiker',
+    badgeTone: 'blue',
+    hint: 'Hvem holder masken bedst, når løgnene flyver?',
+  },
+  {
+    id: 'most-likely',
+    title: 'Hvem er mest tilbøgelig til...',
+    badgeLabel: 'En gammel kending',
+    badgeTone: 'red',
+    hint: 'Hvem har størst chance for at..',
+  },
+  {
+    id: 'fake-news',
+    title: 'Fake news',
+    badgeLabel: 'Overraskelse',
+    badgeTone: 'blue',
+    hint: 'Kan I finde ud af, hvad der er sandt eller fup?',
+  },
+];
 
+function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
   return (
     <View style={styles.flowStack}>
       <View style={styles.tabHeader}>
@@ -8396,32 +8634,716 @@ function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
         </View>
       </View>
       <View style={styles.miniGamesGameList}>
-        {miniGames.map((game) => (
-          <Pressable
-            key={game.id}
-            onPress={() => onOpenGame?.(game.id)}
-            style={({ pressed }) => [
-              styles.panel,
-              styles.miniGamesCardPanel,
-              styles.miniGamesCardRow,
-              pressed ? styles.miniGamesCardPressed : null,
-            ]}
-          >
-            <View style={styles.miniGamesCardTextWrap}>
-              <View style={styles.miniGamesCardTitleRow}>
-                <Text style={[styles.sectionTitle, styles.miniGamesCardTitle]}>{game.title}</Text>
-                {game.id === 'bottle-pointer' ? (
-                  <MiniGamesBottleIcon style={styles.miniGamesBottleIconInTitle} />
-                ) : null}
+        {MINI_GAMES.map((game) => {
+          const isBottle = game.id === 'bottle-pointer';
+
+          return (
+            <Pressable
+              key={game.id}
+              onPress={() => onOpenGame?.(game.id)}
+              style={({ pressed }) => [
+                styles.panel,
+                styles.miniGamesCardPanel,
+                styles.miniGamesCardRow,
+                { transform: [{ scale: pressed ? 0.99 : 1 }] },
+                pressed ? styles.miniGamesCardPressed : null,
+              ]}
+            >
+              <View style={styles.miniGamesCardPattern} />
+              <View style={styles.miniGamesCardTopStrip} />
+              <View
+                style={[
+                  styles.miniGamesCardShimmer,
+                  {
+                    transform: [{ rotate: '-12deg' }],
+                    right: isBottle ? -44 : -48,
+                  },
+                ]}
+              />
+              <View style={styles.miniGamesCardTextWrap}>
+              <View style={[
+                styles.miniGamesCardBadgeRow,
+                game.id === 'fake-news' ? styles.miniGamesCardBadgeRowSingleLine : null,
+              ]}>
+                  <View style={game.badgeTone === 'blue' ? styles.miniGamesCardBadgeBlue : styles.miniGamesCardBadgeRed}>
+                    <Text style={styles.miniGamesCardBadgeText}>{game.badgeLabel}</Text>
+                  </View>
+                  <Text
+                    style={[styles.miniGamesCardHint, game.id === 'fake-news' ? styles.miniGamesCardHintSingleLine : null]}
+                    numberOfLines={game.id === 'fake-news' ? 1 : undefined}
+                    ellipsizeMode={game.id === 'fake-news' ? 'tail' : undefined}
+                  >
+                    {game.hint}
+                  </Text>
+                </View>
+                <View style={styles.miniGamesCardTitleRow}>
+                  <Text style={[styles.sectionTitle, styles.miniGamesCardTitle]}>{game.title}</Text>
+                  {isBottle ? <MiniGamesLuckyWheelIcon style={styles.miniGamesLuckyWheelIconInTitle} /> : (
+                    game.id === 'lie-truth' ? (
+                      <MiniGamesFiveDiceIcon style={styles.miniGamesFiveDiceIconInTitle} />
+                    ) : (
+                      game.id === 'most-likely' ? (
+                        <MiniGamesMostLikelyIcon style={styles.miniGamesMostLikelyIconInTitle} />
+                      ) : (
+                        <MiniGamesFakeNewsIcon style={styles.miniGamesFakeNewsIconInTitle} />
+                      )
+                    )
+                  )}
+                </View>
               </View>
-              <Text style={[styles.feedText, styles.miniGamesCardBody]}>{game.description}</Text>
-            </View>
-            <View style={styles.miniGamesCardChevronWrap}>
-              <Ionicons name="chevron-forward-outline" size={20} color={STUDOS_THEME.red} style={styles.miniGamesCardChevronIcon} />
-            </View>
-          </Pressable>
-        ))}
+              <View style={styles.miniGamesCardChevronWrap}>
+                <Ionicons name="chevron-forward-outline" size={20} color="#198047" style={styles.miniGamesCardChevronIcon} />
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
+    </View>
+  );
+}
+
+function DuelScreen({
+  activeMember,
+  activeMembers = [],
+  schoolClass,
+}) {
+  const activeMemberId = String(activeMember?.id ?? '');
+  const activeMemberName = activeMember?.displayName
+    || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
+    || 'Du';
+  const className = schoolClass?.className || 'Klassen';
+  const rawMembers = Array.isArray(activeMembers) ? activeMembers : [];
+  const normalizedOpponents = useMemo(() => {
+    const opponentPool = uniqueById(rawMembers).filter((member) => {
+      const memberId = String(member.id ?? '');
+
+      if (!memberId) {
+        return false;
+      }
+
+      return memberId !== activeMemberId;
+    });
+
+    return opponentPool.sort((a, b) => {
+      const aName = (a.displayName || `${a.firstName ?? ''} ${a.lastName ?? ''}`).trim();
+      const bName = (b.displayName || `${b.firstName ?? ''} ${b.lastName ?? ''}`).trim();
+
+      return aName.localeCompare(bName, 'da-DK');
+    });
+  }, [activeMemberId, rawMembers]);
+  const opponentById = useMemo(() => (
+    normalizedOpponents.reduce((accumulator, member) => {
+      accumulator[String(member.id)] = member;
+
+      return accumulator;
+    }, {})
+  ), [normalizedOpponents]);
+  const getMemberName = (member) => {
+    if (!member) {
+      return 'Ukendt';
+    }
+
+    return String(member.displayName || `${member.firstName ?? ''} ${member.lastName ?? ''}`.trim() || member.username || 'Ukendt');
+  };
+
+  const defaultDeadlineDate = useMemo(() => {
+    const date = new Date();
+
+    date.setDate(date.getDate() + 1);
+
+    return formatInputDate(date);
+  }, []);
+  const [duels, setDuels] = useState([]);
+  const [scope, setScope] = useState('active');
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [duelError, setDuelError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedOpponentId, setSelectedOpponentId] = useState('');
+  const [duelChallengeText, setDuelChallengeText] = useState('');
+  const [duelStakeText, setDuelStakeText] = useState('');
+  const [deadlineDate, setDeadlineDate] = useState(defaultDeadlineDate);
+  const [deadlineTime, setDeadlineTime] = useState('18:00');
+
+  const filterOptions = [
+    { id: 'active', label: 'Aktive' },
+    { id: 'pending', label: 'Afventer' },
+    { id: 'finished', label: 'Afsluttede' },
+    { id: 'all', label: 'Alle' },
+  ];
+
+  const statusMeta = useMemo(() => ({
+    awaitingOpponent: {
+      label: 'Venter på modstander',
+      style: styles.duelStatusPillWarning,
+    },
+    awaitingCreatorConfirm: {
+      label: 'Kræver din bekræftelse',
+      style: styles.duelStatusPillWarning,
+    },
+    active: {
+      label: 'I spil',
+      style: styles.duelStatusPillSuccess,
+    },
+    completed: {
+      label: 'Afsluttet',
+      style: styles.duelStatusPillInfo,
+    },
+    declined: {
+      label: 'Afvist',
+      style: styles.duelStatusPillDanger,
+    },
+    cancelled: {
+      label: 'Annulleret',
+      style: styles.duelStatusPillMuted,
+    },
+  }), []);
+
+  const getDuelStatus = (duel) => {
+    if (duel.status === 'awaitingOpponent') {
+      return statusMeta.awaitingOpponent;
+    }
+
+    if (duel.status === 'awaitingCreatorConfirm') {
+      return statusMeta.awaitingCreatorConfirm;
+    }
+
+    if (duel.status === 'completed') {
+      return statusMeta.completed;
+    }
+
+    if (duel.status === 'declined' || duel.status === 'cancelled') {
+      return statusMeta[duel.status];
+    }
+
+    return statusMeta.active;
+  };
+
+  const opponentRows = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+
+    return normalizedOpponents
+      .filter((member) => {
+        if (!normalizedQuery) {
+          return true;
+        }
+
+        return getMemberName(member).toLowerCase().includes(normalizedQuery);
+      });
+  }, [searchQuery, normalizedOpponents]);
+
+  const visibleDuels = useMemo(() => {
+    const rows = duels.filter((duel) => {
+      if (scope === 'all') {
+        return true;
+      }
+
+      if (scope === 'active') {
+        return duel.status === 'active' || duel.status === 'awaitingCreatorConfirm' || duel.status === 'awaitingOpponent';
+      }
+
+      if (scope === 'pending') {
+        return duel.status === 'awaitingOpponent' || duel.status === 'awaitingCreatorConfirm';
+      }
+
+      return duel.status === 'completed' || duel.status === 'declined' || duel.status === 'cancelled';
+    });
+
+    return [...rows].sort((left, right) => (
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    ));
+  }, [duels, scope]);
+
+  const openCreateModal = () => {
+    setDuelError('');
+    setSearchQuery('');
+    setSelectedOpponentId('');
+    setDuelChallengeText('');
+    setDuelStakeText('');
+    setDeadlineDate(defaultDeadlineDate);
+    setDeadlineTime('18:00');
+    setCreateModalOpen(true);
+  };
+
+  const closeCreateModal = () => {
+    setCreateModalOpen(false);
+    setDuelError('');
+  };
+
+  const resetDuelFields = () => {
+    setSearchQuery('');
+    setSelectedOpponentId('');
+    setDuelChallengeText('');
+    setDuelStakeText('');
+    setDeadlineDate(defaultDeadlineDate);
+    setDeadlineTime('18:00');
+  };
+
+  const submitDuel = () => {
+    if (!selectedOpponentId) {
+      setDuelError('Vælg en modstander.');
+      return;
+    }
+
+    const stakeValue = Number.parseInt(String(duelStakeText).replace(/[^0-9]/g, ''), 10);
+    const normalizedChallenge = duelChallengeText.trim();
+    const deadlineAt = `${deadlineDate}T${deadlineTime}`;
+
+    if (!normalizedChallenge) {
+      setDuelError('Skriv en udfordringstekst.');
+      return;
+    }
+
+    if (!stakeValue || stakeValue <= 0) {
+      setDuelError('Angiv et gyldigt antal Caps.');
+      return;
+    }
+
+    if (!deadlineDate || !deadlineTime || Number.isNaN(new Date(deadlineAt).getTime())) {
+      setDuelError('Sæt en gyldig deadline.');
+      return;
+    }
+
+    const id = `duel-${Date.now()}`;
+
+    setDuels((current) => [
+      {
+        id,
+        fromMemberId: activeMemberId,
+        toMemberId: selectedOpponentId,
+        challenge: normalizedChallenge,
+        stake: stakeValue,
+        deadlineAt,
+        status: 'awaitingOpponent',
+        confirmedBy: [],
+        createdAt: new Date().toISOString(),
+      },
+      ...current,
+    ]);
+
+    resetDuelFields();
+    setCreateModalOpen(false);
+  };
+
+  const respondToDuel = (duelId, action) => {
+    setDuels((current) => current.map((duel) => {
+      if (duel.id !== duelId) {
+        return duel;
+      }
+
+      if (duel.status === 'awaitingOpponent' && action === 'accept') {
+        return {
+          ...duel,
+          status: 'awaitingCreatorConfirm',
+          confirmedBy: ['target'],
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      if (duel.status === 'awaitingOpponent' && action === 'decline') {
+        return {
+          ...duel,
+          status: 'declined',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      if (duel.status === 'awaitingOpponent' && action === 'cancel') {
+        return {
+          ...duel,
+          status: 'cancelled',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      if (duel.status === 'awaitingCreatorConfirm' && action === 'confirm') {
+        return {
+          ...duel,
+          status: 'active',
+          confirmedBy: ['target', 'creator'],
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      if (duel.status === 'active' && action === 'complete') {
+        return {
+          ...duel,
+          status: 'completed',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      return duel;
+    }));
+  };
+
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.tabHeader}>
+        <View style={styles.duelHeaderLeft}>
+          <Text style={styles.kicker} numberOfLines={1} ellipsizeMode="tail">
+            {className}
+          </Text>
+          <View style={styles.titleWithLogoRow}>
+            <Text style={[styles.title, styles.titleSmallHeader]} numberOfLines={1} ellipsizeMode="tail">
+              Duel
+            </Text>
+            <DuelTitleGraphic style={styles.duelTitleLogo} />
+          </View>
+          <Text style={styles.duelSubtext} numberOfLines={1} ellipsizeMode="tail">
+            Udfordr en ven med en Caps-indsats, og få begge bekræftet før overførsel.
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          onPress={openCreateModal}
+          style={({ pressed }) => [
+            styles.duelHeaderAction,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="add" size={20} color="#FFFFFF" />
+          <Text style={styles.duelHeaderActionText}>Ny duel</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.duelScopeSwitch}>
+        {filterOptions.map((filter) => {
+          const active = filter.id === scope;
+
+          return (
+            <Pressable
+              key={filter.id}
+              onPress={() => setScope(filter.id)}
+              style={({ pressed }) => [
+                styles.duelScopeSwitchItem,
+                active ? styles.duelScopeSwitchItemActive : null,
+                pressed && !active ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.duelScopeSwitchText,
+                active ? styles.duelScopeSwitchTextActive : null,
+              ]}>
+                {filter.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.panelHeader}>
+          <Text style={styles.sectionTitle}>Dine dueller</Text>
+          <View style={styles.duelHeaderBadge}>
+            <Text style={styles.duelHeaderBadgeText}>
+              {visibleDuels.length}
+            </Text>
+          </View>
+        </View>
+
+        {visibleDuels.length === 0 ? (
+          <Text style={styles.emptyText}>
+            {duels.length === 0 ? 'Ingen dueller endnu. Tryk på “Ny duel” for at starte.' : 'Ingen dueller i denne visning.'}
+          </Text>
+        ) : (
+          <View style={styles.duelList}>
+            {visibleDuels.map((duel) => {
+              const isCreator = String(duel.fromMemberId) === activeMemberId;
+              const opponentId = isCreator ? duel.toMemberId : duel.fromMemberId;
+              const opponent = opponentById[String(opponentId)] ?? activeMember;
+              const opponentName = getMemberName(opponent);
+              const actionStatus = getDuelStatus(duel);
+              const deadlineLabel = formatDateTime(duel.deadlineAt);
+              const creatorName = getMemberName(isCreator ? activeMember : opponentById[String(duel.fromMemberId)] ?? activeMember);
+              const opponentLabel = isCreator
+                ? `Modstander: ${opponentName}`
+                : `Udfordrer: ${creatorName}`;
+
+              return (
+                <View key={duel.id} style={styles.duelCard}>
+                  <View style={styles.duelCardHeader}>
+                    <Avatar
+                      profile={opponent}
+                      variant="smallCircle"
+                    />
+                    <View style={styles.duelCardCopy}>
+                      <Text numberOfLines={1} style={styles.duelCardOpponent}>
+                        {opponentLabel}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.duelCardTitle}>
+                        {isCreator ? `Du udfordrer ${opponentName}` : `${opponentName} udfordrer dig`}
+                      </Text>
+                    </View>
+                    <View style={[styles.duelStatusPill, actionStatus.style]}>
+                      <Text style={styles.duelStatusPillText}>{actionStatus.label}</Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.duelCardChallenge}>{duel.challenge}</Text>
+
+                  <View style={styles.duelCardMetaRow}>
+                    <View style={styles.duelCardMetaItem}>
+                      <MaterialCommunityIcons name="sword-cross" size={15} color={STUDOS_THEME.ink} />
+                      <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+                    </View>
+                    <View style={styles.duelCardMetaItem}>
+                      <Ionicons name="time-outline" size={14} color={STUDOS_THEME.blue} />
+                      <Text numberOfLines={1} style={styles.duelMetaText}>Deadline: {deadlineLabel || 'Ikke sat'}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.duelCardActionRow}>
+                    {duel.status === 'awaitingOpponent' ? (
+                      isCreator ? (
+                        <Pressable
+                          accessibilityLabel="Annuller denne duel"
+                          onPress={() => respondToDuel(duel.id, 'cancel')}
+                          style={({ pressed }) => [
+                            styles.duelCardGhostAction,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text style={styles.duelCardGhostActionText}>Annuller</Text>
+                        </Pressable>
+                      ) : (
+                        <>
+                          <Pressable
+                            accessibilityLabel="Afvis duel"
+                            onPress={() => respondToDuel(duel.id, 'decline')}
+                            style={({ pressed }) => [
+                              styles.duelCardGhostAction,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Text style={styles.duelCardGhostActionText}>Afvis</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityLabel="Accepter duel"
+                            onPress={() => respondToDuel(duel.id, 'accept')}
+                            style={({ pressed }) => [
+                              styles.duelCardAction,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Text style={styles.duelCardActionText}>Accepter</Text>
+                          </Pressable>
+                        </>
+                      )
+                    ) : null}
+
+                    {duel.status === 'awaitingCreatorConfirm' ? (
+                      isCreator ? (
+                        <Pressable
+                          accessibilityLabel="Bekræft duel overførsel"
+                          onPress={() => respondToDuel(duel.id, 'confirm')}
+                          style={({ pressed }) => [
+                            styles.duelCardAction,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text style={styles.duelCardActionText}>Bekræft</Text>
+                        </Pressable>
+                      ) : (
+                        <Pressable
+                          disabled
+                          style={styles.duelCardGhostAction}
+                        >
+                          <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer bekræftelse</Text>
+                        </Pressable>
+                      )
+                    ) : null}
+
+                    {duel.status === 'active' ? (
+                      <Pressable
+                        accessibilityLabel="Markér duel som gennemført"
+                        onPress={() => respondToDuel(duel.id, 'complete')}
+                        style={({ pressed }) => [
+                          styles.duelCardGhostAction,
+                          pressed ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <Text style={styles.duelCardGhostActionText}>Markér gennemført</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+
+      <Text style={styles.duelFooterInfo}>
+        {activeMemberName}, du kan oprette duel med alle i dit crew.
+      </Text>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeCreateModal}
+        transparent
+        visible={createModalOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk opret duel"
+            style={styles.chatModalBackdrop}
+            onPress={closeCreateModal}
+          />
+          <View style={[styles.chatModalPanel, styles.duelCreatePanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatModalHeaderTextColumn}>
+                <Text style={styles.chatModalKicker}>Duel</Text>
+                <Text style={styles.chatModalTitle}>Opret ny duel</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk opret duel"
+                onPress={closeCreateModal}
+                style={styles.chatModalCloseButton}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <Text style={styles.chatCodeModalText}>
+              Skriv din udfordring, indsats og deadline, og vælg en modstander.
+            </Text>
+            {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
+
+            <View style={styles.chatModalSearchField}>
+              <Ionicons name="search" size={16} color="#65748b" />
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                onChangeText={setSearchQuery}
+                placeholder="Søg modstander"
+                placeholderTextColor="#8f9aaa"
+                style={styles.chatModalSearchInput}
+                value={searchQuery}
+              />
+              {searchQuery ? (
+                <Pressable
+                  onPress={() => setSearchQuery('')}
+                  style={({ pressed }) => [pressed ? styles.footerItemPressed : null]}
+                >
+                  <Ionicons name="close-circle" size={16} color="#a4afbf" />
+                </Pressable>
+              ) : null}
+            </View>
+
+            {opponentRows.length === 0 ? (
+              <Text style={styles.emptyText}>
+                Ingen modstandere her — inviter en ven til crewet eller vent på, at de tilmelder sig.
+              </Text>
+            ) : (
+              <ScrollView style={styles.duelOpponentList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                <View style={styles.chatModalMemberList}>
+                  {opponentRows.map((member) => {
+                    const rowId = String(member.id);
+                    const rowName = getMemberName(member);
+
+                    return (
+                      <Pressable
+                        key={rowId}
+                        onPress={() => setSelectedOpponentId(rowId)}
+                        style={({ pressed }) => [
+                          styles.chatModalMemberRow,
+                          styles.duelOpponentRow,
+                          selectedOpponentId === rowId ? styles.chatModalMemberRowSelected : null,
+                          pressed ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <Avatar profile={member} variant="smallCircle" />
+                        <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
+                        <Ionicons
+                          name={selectedOpponentId === rowId ? 'radio-button-on' : 'radio-button-off'}
+                          size={18}
+                          color={selectedOpponentId === rowId ? STUDOS_THEME.red : '#a4afbf'}
+                        />
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            )}
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Udfordring</Text>
+              <TextInput
+                autoCapitalize="sentences"
+                autoCorrect={false}
+                multiline
+                numberOfLines={3}
+                onChangeText={setDuelChallengeText}
+                placeholder="Fx Få mig til at holde op med at sende memes en hel dag"
+                placeholderTextColor="#8b93a1"
+                style={[styles.input, styles.duelModalTextarea]}
+                textAlignVertical="top"
+                value={duelChallengeText}
+              />
+            </View>
+
+            <View style={styles.duelModalInputRow}>
+              <View style={[styles.field, styles.duelModalField]}>
+                <Text style={styles.label}>Indsats (Caps)</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="number-pad"
+                  onChangeText={setDuelStakeText}
+                  placeholder="Fx 50"
+                  placeholderTextColor="#8b93a1"
+                  style={styles.input}
+                  value={duelStakeText}
+                />
+              </View>
+              <View style={[styles.field, styles.duelModalField]}>
+                <Text style={styles.label}>Deadline</Text>
+                <View style={styles.duelDateTimeRow}>
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="numbers-and-punctuation"
+                    onChangeText={setDeadlineDate}
+                    placeholder="2026-12-31"
+                    placeholderTextColor="#8b93a1"
+                    style={[styles.input, styles.duelDateTimeInput]}
+                    value={deadlineDate}
+                  />
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="numbers-and-punctuation"
+                    onChangeText={setDeadlineTime}
+                    placeholder="18:00"
+                    placeholderTextColor="#8b93a1"
+                    style={[styles.input, styles.duelDateTimeInput]}
+                    value={deadlineTime}
+                  />
+                </View>
+              </View>
+            </View>
+
+            <Button label="Opret duel" onPress={submitDuel} />
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+function DuelTitleGraphic({ style }) {
+  return (
+    <View style={[styles.duelTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.duelTitleGraphicBack} />
+      <View style={styles.duelTitleGraphicFace}>
+        <Ionicons name="shield" size={18} color={STUDOS_THEME.ink} />
+        <MaterialCommunityIcons
+          name="sword-cross"
+          size={12}
+          color={STUDOS_THEME.red}
+          style={styles.duelTitleGraphicSwords}
+        />
+      </View>
+      <View style={styles.duelTitleGraphicDot} />
     </View>
   );
 }
@@ -8741,13 +9663,112 @@ function MiniGamesHeaderLogo({ style }) {
   );
 }
 
-function MiniGamesBottleIcon({ style }) {
+function MiniGamesLuckyWheelIcon({ style }) {
+  const markerCount = 8;
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  useEffect(() => {
+    const spinAnimation = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 2600,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+
+    spinAnimation.start();
+
+    return () => {
+      spinAnimation.stop();
+      spinValue.setValue(0);
+    };
+  }, [spinValue]);
+
   return (
-    <View style={[styles.miniGamesBottleIcon, style]}>
-      <Ionicons name="wine-outline" size={16} color={STUDOS_THEME.red} />
-      <View style={styles.miniGamesBottleBadge}>
-        <Text style={styles.miniGamesBottleLogoText}>S</Text>
+    <View style={[styles.miniGamesLuckyWheelIcon, style]}>
+      <Animated.View style={[styles.miniGamesLuckyWheelSpin, { transform: [{ rotate: spin }] }]}>
+        <View style={styles.miniGamesLuckyWheelRing} />
+        {[...Array.from({ length: markerCount })].map((_, index) => (
+          <View
+            key={`mini-wheel-marker-${index}`}
+            style={[
+              styles.miniGamesLuckyWheelMarker,
+              {
+                transform: [{ rotate: `${index * (360 / markerCount)}deg` }],
+              },
+            ]}
+          >
+            <View style={styles.miniGamesLuckyWheelMarkerLine} />
+          </View>
+        ))}
+      </Animated.View>
+      <View style={styles.miniGamesLuckyWheelCenter}>
+        <Text style={styles.miniGamesLuckyWheelCenterText}>S</Text>
       </View>
+    </View>
+  );
+}
+
+function MiniGamesFiveDiceIcon({ style }) {
+  const faces = [1, 4, 2, 6, 3];
+  const rotations = [-8, -4, 0, 4, 8];
+  const lifts = [0, 3, -3, 2, 0];
+
+  return (
+    <View style={[styles.miniGamesFiveDiceIcon, style]}>
+      {faces.map((face, index) => (
+        <View
+          key={`mini-dice-${index}-${face}`}
+          style={[
+            {
+              transform: [{ rotate: `${rotations[index]}deg` }],
+              marginTop: lifts[index],
+              marginLeft: index === 0 ? 0 : -3,
+            },
+          ]}
+        >
+          <MaterialCommunityIcons
+            name={`dice-${face}-outline`}
+            size={15}
+            color={STUDOS_THEME.ink}
+          />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function MiniGamesMostLikelyIcon({ style }) {
+  return (
+    <View style={[styles.miniGamesMiniIconFrame, style]}>
+      <MaterialCommunityIcons
+        name="target"
+        size={18}
+        color={STUDOS_THEME.ink}
+      />
+    </View>
+  );
+}
+
+function MiniGamesFakeNewsIcon({ style }) {
+  return (
+    <View style={[styles.miniGamesMiniIconFrame, style]}>
+      <MaterialCommunityIcons
+        name="newspaper-variant-outline"
+        size={17}
+        color={STUDOS_THEME.ink}
+      />
+      <MaterialCommunityIcons
+        name="close-circle-outline"
+        size={12}
+        color={STUDOS_THEME.red}
+        style={styles.miniGamesFakeNewsStopper}
+      />
     </View>
   );
 }
@@ -9470,6 +10491,749 @@ function ConnectionsScreen({ activeMember, schoolClass, sessionToken }) {
           )}
         </View>
       </View>
+    </View>
+  );
+}
+
+function EmergencyContactsScreen({
+  activeMember,
+  activeMembers = [],
+  onUpdateVisibility,
+  onUpdateContact,
+  sessionToken,
+}) {
+  const personalContactName = String(activeMember?.emergencyContactName ?? '').trim();
+  const personalContactPhone = String(activeMember?.emergencyContactPhone ?? '').trim();
+  const personalContactDisplayPhone = personalContactPhone || 'Telefonnummer mangler';
+  const hasPersonalEmergencyContact = Boolean(personalContactName || personalContactPhone);
+  const personalContactSummary = hasPersonalEmergencyContact
+    ? `${personalContactName || 'Nødkontakt'} · ${personalContactDisplayPhone}`
+    : 'Ingen nødkontakt sat';
+  const [visibilityModalOpen, setVisibilityModalOpen] = useState(false);
+  const [editContactModalOpen, setEditContactModalOpen] = useState(false);
+  const [editContactName, setEditContactName] = useState('');
+  const [editContactPhone, setEditContactPhone] = useState('');
+  const [crewContactsSearchQuery, setCrewContactsSearchQuery] = useState('');
+  const [emergencyContactsSource, setEmergencyContactsSource] = useState('class');
+  const [emergencyContactVisibility, setEmergencyContactVisibility] = useState('class');
+  const [specificVisibleMemberIds, setSpecificVisibleMemberIds] = useState([]);
+  const [specificMembersSearchQuery, setSpecificMembersSearchQuery] = useState('');
+  const [savingVisibility, setSavingVisibility] = useState(false);
+  const [visibilityError, setVisibilityError] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactError, setContactError] = useState('');
+  const [emergencyConnections, setEmergencyConnections] = useState([]);
+  const [emergencyConnectionsLoading, setEmergencyConnectionsLoading] = useState(false);
+  const [emergencyConnectionsError, setEmergencyConnectionsError] = useState('');
+  const defaultEmergencyContactVisibility = useMemo(
+    () => normalizeEmergencyContactVisibility(activeMember?.emergencyContactVisibility),
+    [activeMember?.emergencyContactVisibility],
+  );
+  const defaultSpecificVisibleMemberIds = useMemo(
+    () => normalizeEmergencyContactMemberIds(activeMember?.emergencyContactVisibleMemberIds),
+    [activeMember?.emergencyContactVisibleMemberIds],
+  );
+
+  useEffect(() => {
+    setEmergencyContactVisibility(defaultEmergencyContactVisibility);
+    setSpecificVisibleMemberIds(defaultSpecificVisibleMemberIds);
+    setSpecificMembersSearchQuery('');
+    setVisibilityError('');
+  }, [defaultEmergencyContactVisibility, defaultSpecificVisibleMemberIds]);
+  useEffect(() => {
+    setCrewContactsSearchQuery('');
+  }, [activeMembers, emergencyContactsSource]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!activeMember?.id || !sessionToken) {
+      if (isMounted) {
+        setEmergencyConnections([]);
+        setEmergencyConnectionsError('');
+        setEmergencyConnectionsLoading(false);
+      }
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setEmergencyConnectionsLoading(true);
+    setEmergencyConnectionsError('');
+
+    apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
+      authToken: sessionToken,
+    })
+      .then((data) => {
+        if (isMounted) {
+          setEmergencyConnections(data.connections ?? []);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setEmergencyConnectionsError(error.message || 'Kunne ikke hente venner.');
+          setEmergencyConnections([]);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setEmergencyConnectionsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeMember?.id, sessionToken]);
+
+  const mapMembersToEmergencyContacts = (members) => {
+    const normalizedMembers = uniqueById(Array.isArray(members) ? members : []);
+    const selfMemberId = String(activeMember?.id ?? '');
+
+    return normalizedMembers
+      .filter((member) => String(member?.id ?? '') !== selfMemberId)
+      .map((member) => {
+        const emergencyName = String(member?.emergencyContactName ?? '').trim();
+        const emergencyPhone = String(member?.emergencyContactPhone ?? '').trim();
+        const hasEmergencyContact = Boolean(emergencyName || emergencyPhone);
+
+        const displayName = member?.displayName
+          || `${member?.firstName ?? ''} ${member?.lastName ?? ''}`.trim()
+          || 'Ukendt medlem';
+
+        return {
+          id: String(member?.id ?? displayName),
+          memberDisplayName: displayName,
+          profilePhotoUrl: member?.profilePhotoUrl ?? '',
+          hasEmergencyContact,
+          emergencyName: emergencyName || 'Nødkontakt',
+          emergencyPhone,
+          emergencySummary: hasEmergencyContact
+            ? `${emergencyName || 'Nødkontaktnavn mangler'} · ${emergencyPhone || 'Telefonnummer mangler'}`
+            : 'Ingen nødkontakt sat',
+        };
+      })
+      .sort((left, right) => left.memberDisplayName.localeCompare(right.memberDisplayName, 'da'));
+  };
+  const classCrewContacts = useMemo(() => mapMembersToEmergencyContacts(activeMembers), [activeMember?.id, activeMembers]);
+  const connectedCrewMembers = useMemo(() => {
+    const acceptedFriends = (Array.isArray(emergencyConnections) ? emergencyConnections : [])
+      .filter((connection) => connection?.status === 'accepted')
+      .map((connection) => connection?.otherMember ?? connection?.member)
+      .filter(Boolean);
+
+    return uniqueById(acceptedFriends);
+  }, [emergencyConnections]);
+  const friendCrewContacts = useMemo(() => mapMembersToEmergencyContacts(connectedCrewMembers), [connectedCrewMembers, activeMember?.id]);
+  const displayCrewContacts = emergencyContactsSource === 'class' ? classCrewContacts : friendCrewContacts;
+  const filteredCrewContacts = useMemo(() => {
+    const query = crewContactsSearchQuery.trim().toLocaleLowerCase('da-DK');
+
+    if (!query) {
+      return displayCrewContacts;
+    }
+
+    return displayCrewContacts.filter((memberContact) => {
+      const searchableName = `${memberContact.memberDisplayName} ${memberContact.emergencyName} ${memberContact.emergencyPhone}`
+        .toLocaleLowerCase('da-DK');
+
+      return searchableName.includes(query);
+    });
+  }, [displayCrewContacts, crewContactsSearchQuery]);
+
+  const showClassEmergencyContacts = emergencyContactsSource === 'class';
+  const specificMembers = useMemo(() => {
+    const normalizedMembers = uniqueById(Array.isArray(activeMembers) ? activeMembers : []);
+    const selfMemberId = String(activeMember?.id ?? '');
+
+    return normalizedMembers
+      .filter((member) => String(member?.id ?? '') !== selfMemberId)
+      .map((member) => {
+        const displayName = member?.displayName
+          || `${member?.firstName ?? ''} ${member?.lastName ?? ''}`.trim()
+          || 'Ukendt medlem';
+
+        return {
+          id: String(member?.id ?? ''),
+          memberDisplayName: displayName,
+        };
+      })
+      .filter((member) => member.id)
+      .sort((left, right) => left.memberDisplayName.localeCompare(right.memberDisplayName, 'da'));
+  }, [activeMembers, activeMember?.id]);
+  const filteredSpecificMembers = useMemo(() => {
+    const query = specificMembersSearchQuery.trim().toLocaleLowerCase('da-DK');
+
+    if (!query) {
+      return specificMembers;
+    }
+
+    return specificMembers.filter((member) => {
+      const searchableName = member.memberDisplayName.toLocaleLowerCase('da-DK');
+
+      return searchableName.includes(query);
+    });
+  }, [specificMembers, specificMembersSearchQuery]);
+
+  const visibilityLabel = useMemo(
+    () => {
+      const selectedOption = EMERGENCY_CONTACT_VISIBILITY_OPTIONS.find((option) => option.id === emergencyContactVisibility);
+      if (!selectedOption) {
+        return 'Hele klassen';
+      }
+
+      if (selectedOption.id !== 'specific') {
+        return selectedOption.label;
+      }
+
+      return selectedOption.label;
+    },
+    [emergencyContactVisibility, specificVisibleMemberIds],
+  );
+
+  useEffect(() => {
+    const validIds = specificMembers.map((member) => member.id);
+    setSpecificVisibleMemberIds((previousIds) => previousIds.filter((memberId) => validIds.includes(memberId)));
+  }, [specificMembers]);
+
+  const saveVisibility = useCallback(async (nextVisibility, nextVisibleMemberIds = []) => {
+    const normalizedVisibility = normalizeEmergencyContactVisibility(nextVisibility);
+    const normalizedVisibleMemberIds = normalizeEmergencyContactMemberIds(
+      normalizedVisibility === 'specific' ? nextVisibleMemberIds : [],
+    );
+
+    if (!onUpdateVisibility) {
+      setEmergencyContactVisibility(normalizedVisibility);
+      setSpecificVisibleMemberIds(normalizedVisibleMemberIds);
+      setVisibilityModalOpen(false);
+      return;
+    }
+
+    setSavingVisibility(true);
+    setVisibilityError('');
+
+    try {
+      const updatedMember = await onUpdateVisibility(normalizedVisibility, normalizedVisibleMemberIds);
+      const savedVisibility = normalizeEmergencyContactVisibility(updatedMember?.emergencyContactVisibility ?? normalizedVisibility);
+      const savedVisibleMemberIds = normalizeEmergencyContactMemberIds(
+        savedVisibility === 'specific'
+          ? updatedMember?.emergencyContactVisibleMemberIds
+          : [],
+      );
+
+      setEmergencyContactVisibility(savedVisibility);
+      setSpecificVisibleMemberIds(savedVisibleMemberIds);
+      setVisibilityModalOpen(false);
+    } catch (error) {
+      setVisibilityError(error?.message || 'Kunne ikke gemme synligheden.');
+      throw error;
+    } finally {
+      setSavingVisibility(false);
+    }
+  }, [onUpdateVisibility]);
+
+  const openVisibilityModal = () => {
+    setVisibilityError('');
+    setSpecificMembersSearchQuery('');
+    setVisibilityModalOpen(true);
+  };
+
+  const closeVisibilityModal = () => {
+    setVisibilityModalOpen(false);
+    setEmergencyContactVisibility(defaultEmergencyContactVisibility);
+    setSpecificVisibleMemberIds(defaultSpecificVisibleMemberIds);
+    setSpecificMembersSearchQuery('');
+    setVisibilityError('');
+  };
+
+  const openEditContactModal = () => {
+    setContactError('');
+    setEditContactName(personalContactName);
+    setEditContactPhone(personalContactPhone);
+    setEditContactModalOpen(true);
+  };
+
+  const closeEditContactModal = () => {
+    setEditContactModalOpen(false);
+    setContactError('');
+  };
+
+  const saveContact = useCallback(async (nextName, nextPhone) => {
+    if (savingContact) {
+      return;
+    }
+
+    const normalizedContactName = String(nextName ?? '').trim();
+    const normalizedContactPhone = String(nextPhone ?? '').trim();
+
+    setSavingContact(true);
+    setContactError('');
+
+    try {
+      if (!onUpdateContact) {
+        throw new Error('Kan ikke gemme din nødkontakt lige nu.');
+      }
+
+      await onUpdateContact(normalizedContactName, normalizedContactPhone);
+      setEditContactModalOpen(false);
+    } catch (error) {
+      setContactError(error?.message || 'Kunne ikke gemme din nødkontakt.');
+      throw error;
+    } finally {
+      setSavingContact(false);
+    }
+  }, [onUpdateContact, savingContact]);
+
+  const handleSaveContact = () => {
+    saveContact(editContactName, editContactPhone).catch(() => {
+      // keep modal open so user can retry
+    });
+  };
+
+  const handleClearContact = () => {
+    saveContact('', '').catch(() => {
+      // keep modal open so user can retry
+    });
+  };
+
+  const openPhone = (phone) => {
+    const normalized = String(phone ?? '').replace(/[^\d+]/g, '');
+
+    if (!normalized) {
+      return;
+    }
+
+    Linking.openURL(`tel:${normalized}`).catch(() => {});
+  };
+
+  const handleVisibilityOptionPress = (optionId) => {
+    if (savingVisibility) {
+      return;
+    }
+
+    if (optionId === emergencyContactVisibility) {
+      setVisibilityModalOpen(false);
+      return;
+    }
+
+    if (optionId === 'specific') {
+      setEmergencyContactVisibility(optionId);
+      setSpecificMembersSearchQuery('');
+      return;
+    }
+
+    saveVisibility(optionId).catch(() => {
+      // keep modal open so user can retry
+    });
+  };
+
+  const handleSaveSpecificVisibility = () => {
+    if (savingVisibility) {
+      return;
+    }
+
+    saveVisibility('specific', specificVisibleMemberIds).catch(() => {
+      // keep modal open so user can retry
+    });
+  };
+
+  const toggleSpecificMember = (memberId) => {
+    setSpecificVisibleMemberIds((previousIds) => (
+      previousIds.includes(memberId)
+        ? previousIds.filter((currentId) => currentId !== memberId)
+        : [...previousIds, memberId]
+    ));
+  };
+
+  return (
+    <View style={[styles.flowStack, styles.crewScreen, styles.emergencyContactsScreen]}>
+      <View style={[styles.tabHeader, styles.emergencyContactsTabHeader]}>
+        <View style={styles.emergencyContactsHeaderRow}>
+          <View style={styles.titleWithLogoRow}>
+            <Text style={[styles.title, styles.titleSmallHeader, styles.emergencyContactsHeaderTitle]}>Nødkontakter</Text>
+            <EmergencyContactsTitleGraphic />
+          </View>
+        </View>
+      </View>
+      <Text style={styles.feedText}>
+        Her kan du finde din egen og klassens nødkontakter ét sted.
+      </Text>
+      <View style={styles.emergencyContactsVisibilityStatusRow}>
+        <Text style={styles.emergencyContactsVisibilityStatus}>
+          Hvem kan se min kontakt:
+        </Text>
+        <Pressable
+          accessibilityLabel="Vælg synlighed for nødkontakt"
+          onPress={openVisibilityModal}
+          style={({ pressed }) => [
+            styles.emergencyContactsHeaderButton,
+            pressed ? styles.emergencyContactsHeaderButtonPressed : null,
+          ]}
+        >
+          <Ionicons name="eye-outline" size={18} color={STUDOS_THEME.red} />
+          <Text
+            numberOfLines={1}
+            style={styles.emergencyContactsHeaderButtonText}
+          >
+            {visibilityLabel}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={STUDOS_THEME.red} />
+        </Pressable>
+      </View>
+
+      <View style={styles.emergencyContactsCards}>
+        <View style={[styles.panel, styles.emergencyContactsOwnPanel]}>
+          <View style={styles.emergencyContactsOwnCard}>
+            <View style={styles.connectionCopy}>
+              <Text style={styles.emergencyContactsOwnHeader}>Min nødkontakt</Text>
+              <Text numberOfLines={1} style={styles.connectionMeta}>
+                {personalContactSummary}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Ret min nødkontakt"
+              onPress={openEditContactModal}
+              style={({ pressed }) => [
+                styles.emergencyContactsEditButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.emergencyContactsEditButtonText}>Ret</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={[styles.panel, styles.crewPanel, styles.emergencyContactsCrewPanel]}>
+          <View style={styles.crewSourceTabs}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setEmergencyContactsSource('class')}
+              style={({ pressed }) => [
+                styles.crewSourceTab,
+                showClassEmergencyContacts ? styles.crewSourceTabActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.crewSourceTabText,
+                showClassEmergencyContacts ? styles.crewSourceTabTextActive : null,
+              ]}>
+                Min klasse
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setEmergencyContactsSource('friends')}
+              style={({ pressed }) => [
+                styles.crewSourceTab,
+                !showClassEmergencyContacts ? styles.crewSourceTabActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.crewSourceTabText,
+                !showClassEmergencyContacts ? styles.crewSourceTabTextActive : null,
+              ]}>
+                Mit crew
+              </Text>
+            </Pressable>
+          </View>
+          {emergencyConnectionsError && !showClassEmergencyContacts ? <Text style={styles.errorText}>{emergencyConnectionsError}</Text> : null}
+          {emergencyConnectionsLoading && !showClassEmergencyContacts ? <ActivityIndicator color={STUDOS_THEME.red} /> : null}
+          <View style={[styles.chatModalSearchField, { marginBottom: 10 }]}>
+            <Ionicons name="search" size={16} color="#65748b" />
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setCrewContactsSearchQuery}
+              placeholder="Søg person"
+              placeholderTextColor="#8f9aaa"
+              style={styles.chatModalSearchInput}
+              value={crewContactsSearchQuery}
+            />
+            {crewContactsSearchQuery ? (
+              <Pressable
+                onPress={() => setCrewContactsSearchQuery('')}
+                style={({ pressed }) => [pressed ? styles.footerItemPressed : null]}
+              >
+                <Ionicons name="close-circle" size={16} color="#a4afbf" />
+              </Pressable>
+            ) : null}
+          </View>
+          {filteredCrewContacts.length > 0 ? (
+            <ScrollView
+              contentContainerStyle={styles.crewMemberList}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={[styles.crewMemberListScroll, styles.emergencyContactsCrewListScroll]}
+            >
+                  {filteredCrewContacts.map((memberContact) => (
+                <View key={memberContact.id} style={styles.connectionRow}>
+                  <Avatar
+                    profile={{
+                      id: memberContact.id,
+                      displayName: memberContact.memberDisplayName,
+                      profilePhotoUrl: memberContact.profilePhotoUrl,
+                    }}
+                    variant="smallCircle"
+                  />
+                <View style={styles.connectionCopy}>
+                  <Text numberOfLines={1} style={styles.connectionName}>
+                    {memberContact.memberDisplayName}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.connectionMeta}>
+                    {memberContact.emergencySummary}
+                  </Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={styles.emptyText}>
+              {displayCrewContacts.length > 0
+                ? 'Ingen personer matcher din søgning.'
+                : showClassEmergencyContacts
+                  ? 'Ingen nødkontakter fra klassen.'
+                  : 'Ingen nødkontakter i mit crew.'}
+            </Text>
+          )}
+        </View>
+      </View>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={editContactModalOpen}
+        onRequestClose={closeEditContactModal}
+      >
+        <View style={[styles.chatModalRoot, styles.emergencyContactsVisibilityModalRoot]}>
+          <Pressable
+            style={styles.chatModalBackdrop}
+            onPress={closeEditContactModal}
+          />
+          <View style={[styles.chatModalPanel, styles.emergencyContactsEditPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.emergencyContactsVisibilityHeaderTextWrap}>
+                <Text style={styles.chatModalKicker}>Nødkontakt</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  Min nødkontakt
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk redigering af nødkontakt"
+                onPress={closeEditContactModal}
+                style={styles.chatModalCloseButton}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <Text style={styles.chatCodeModalText}>
+              Tilføj, ret eller fjern navn og telefonnummer på din nødkontakt.
+            </Text>
+            {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
+            <View style={styles.field}>
+              <Text style={styles.label}>Nødkontakt-navn</Text>
+              <TextInput
+                autoComplete="off"
+                autoCorrect={false}
+                onChangeText={setEditContactName}
+                placeholder="Fx Mor eller far"
+                placeholderTextColor="#8b93a1"
+                returnKeyType="next"
+                style={styles.input}
+                value={editContactName}
+              />
+            </View>
+            <View style={styles.field}>
+              <Text style={styles.label}>Telefonnummer</Text>
+              <TextInput
+                autoComplete="off"
+                autoCorrect={false}
+                keyboardType="phone-pad"
+                returnKeyType="done"
+                onChangeText={setEditContactPhone}
+                placeholder="Fx 12 34 56 78"
+                placeholderTextColor="#8b93a1"
+                style={styles.input}
+                value={editContactPhone}
+              />
+            </View>
+            <Button
+              label="Gem ændringer"
+              loading={savingContact}
+              onPress={handleSaveContact}
+            />
+            {hasPersonalEmergencyContact ? (
+              <Pressable
+                accessibilityLabel="Fjern min nødkontakt"
+                disabled={savingContact}
+                onPress={handleClearContact}
+                style={({ pressed }) => [
+                  styles.emergencyContactsEditRemoveButton,
+                  savingContact ? styles.primaryButtonDisabled : null,
+                  pressed && !savingContact ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.emergencyContactsEditRemoveButtonText}>Fjern nødkontakt</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={visibilityModalOpen}
+        onRequestClose={closeVisibilityModal}
+      >
+        <View style={[styles.chatModalRoot, styles.emergencyContactsVisibilityModalRoot]}>
+          <Pressable
+            style={styles.chatModalBackdrop}
+            onPress={closeVisibilityModal}
+          />
+          <View style={[styles.chatModalPanel, styles.emergencyContactsVisibilityPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.emergencyContactsVisibilityHeaderTextWrap}>
+                <Text style={styles.chatModalKicker}>Nødkontakt</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  Hvem kan se din nødkontakt?
+                </Text>
+              </View>
+            <Pressable
+              accessibilityLabel="Luk synlighedsvælger"
+              onPress={closeVisibilityModal}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+          {visibilityError ? <Text style={styles.errorText}>{visibilityError}</Text> : null}
+            <Text style={styles.chatCodeModalText}>
+              Vælg hvordan din nødkontakt skal være synlig for andre i appen.
+            </Text>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={styles.emergencyContactsVisibilityOptionsScroll}
+            >
+              <View style={styles.selectOptions}>
+                {EMERGENCY_CONTACT_VISIBILITY_OPTIONS.map((option) => {
+                  const selected = option.id === emergencyContactVisibility;
+
+                  return (
+                    <Pressable
+                      key={option.id}
+                      onPress={() => handleVisibilityOptionPress(option.id)}
+                      style={[
+                        styles.selectOption,
+                        styles.emergencyContactsVisibilityOptionRow,
+                        selected ? styles.selectOptionActive : null,
+                      ]}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.selectOptionText,
+                          styles.emergencyContactsVisibilityOptionText,
+                          selected ? styles.selectOptionTextActive : null,
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                      <Ionicons
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={22}
+                        color={selected ? STUDOS_THEME.red : '#a4afbf'}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </ScrollView>
+            {emergencyContactVisibility === 'specific' ? (
+              <View style={styles.emergencyContactsVisibilitySpecificSection}>
+                <Text style={styles.emergencyContactsVisibilitySpecificTitle}>Vælg personer</Text>
+                <View style={[styles.chatModalSearchField, styles.emergencyContactsVisibilitySpecificSearchField]}>
+                  <Ionicons name="search" size={16} color="#65748b" />
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onChangeText={setSpecificMembersSearchQuery}
+                    placeholder="Søg person"
+                    placeholderTextColor="#8f9aaa"
+                    value={specificMembersSearchQuery}
+                    style={styles.chatModalSearchInput}
+                  />
+                  {specificMembersSearchQuery ? (
+                    <Pressable
+                      onPress={() => setSpecificMembersSearchQuery('')}
+                      style={({ pressed }) => [pressed ? styles.footerItemPressed : null]}
+                    >
+                      <Ionicons name="close-circle" size={16} color="#a4afbf" />
+                    </Pressable>
+                  ) : null}
+                </View>
+                {specificMembers.length === 0 ? (
+                  <Text style={styles.emergencyContactsVisibilityNoSpecific}>
+                    Der er ingen andre personer i klassen.
+                  </Text>
+                ) : filteredSpecificMembers.length === 0 ? (
+                  <Text style={styles.emergencyContactsVisibilityNoSpecific}>
+                    Ingen personer matcher din søgning.
+                  </Text>
+                ) : (
+                  <ScrollView
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator={false}
+                    style={styles.emergencyContactsVisibilitySpecificList}
+                  >
+                    <View style={styles.selectOptions}>
+                      {filteredSpecificMembers.map((member) => {
+                        const selected = specificVisibleMemberIds.includes(member.id);
+
+                        return (
+                          <Pressable
+                            key={member.id}
+                            onPress={() => toggleSpecificMember(member.id)}
+                            style={[
+                              styles.selectOption,
+                              styles.emergencyContactsVisibilitySpecificOption,
+                              selected ? styles.selectOptionActive : null,
+                            ]}
+                          >
+                            <Text
+                              numberOfLines={1}
+                              style={[
+                                styles.selectOptionText,
+                                styles.emergencyContactsVisibilitySpecificOptionText,
+                                selected ? styles.selectOptionTextActive : null,
+                              ]}
+                            >
+                              {member.memberDisplayName}
+                            </Text>
+                            <Ionicons
+                              name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                              size={22}
+                              color={selected ? STUDOS_THEME.red : '#a4afbf'}
+                            />
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                )}
+                <Button
+                  label="Gem"
+                  loading={savingVisibility}
+                  onPress={handleSaveSpecificVisibility}
+                />
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -10915,6 +12679,7 @@ function AccountProfileScreen({
   loading,
   profile,
   schoolClass,
+  onProfileFieldUpdate,
   onProfilePhotoUpdate,
   onLogout,
   onDeleteAccount,
@@ -10925,6 +12690,11 @@ function AccountProfileScreen({
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [deleteAccountConfirmOpen, setDeleteAccountConfirmOpen] = useState(false);
   const [emailChangeNoticeOpen, setEmailChangeNoticeOpen] = useState(false);
+  const [profileFieldEditOpen, setProfileFieldEditOpen] = useState(false);
+  const [editingProfileField, setEditingProfileField] = useState('');
+  const [editingProfileValue, setEditingProfileValue] = useState('');
+  const [editingProfileLoading, setEditingProfileLoading] = useState(false);
+  const [editingProfileError, setEditingProfileError] = useState('');
   const [profilePhotoMenuOpen, setProfilePhotoMenuOpen] = useState(false);
   const profileNumberFormat = useMemo(() => new Intl.NumberFormat('da-DK'), []);
   const displayProfile = {
@@ -11026,6 +12796,60 @@ function AccountProfileScreen({
       setDeleteAccountConfirmOpen(false);
     } finally {
       setDeleteAccountLoading(false);
+    }
+  };
+
+  const handleOpenProfileFieldEdit = (field) => {
+    const targetValue = field === 'phone'
+      ? displayProfile.phone
+      : field === 'birthday'
+        ? displayProfile.birthday
+        : '';
+    setEditingProfileField(field);
+    setEditingProfileValue(targetValue || '');
+    setEditingProfileError('');
+    setProfileFieldEditOpen(true);
+  };
+
+  const handleCloseProfileFieldEdit = () => {
+    if (editingProfileLoading) {
+      return;
+    }
+
+    setProfileFieldEditOpen(false);
+    setEditingProfileField('');
+    setEditingProfileValue('');
+    setEditingProfileError('');
+  };
+
+  const handleSaveProfileField = async () => {
+    if (!onProfileFieldUpdate || !editingProfileField) {
+      return;
+    }
+
+    setEditingProfileLoading(true);
+    setEditingProfileError('');
+
+    try {
+      const nextValue = editingProfileValue.trim();
+
+      if (editingProfileField === 'birthday' && nextValue && !isValidProfileBirthday(nextValue)) {
+        throw new Error('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
+      }
+
+      const updates = {
+        [editingProfileField]: nextValue || null,
+      };
+
+      await onProfileFieldUpdate(updates);
+      setProfileFieldEditOpen(false);
+      setEditingProfileField('');
+      setEditingProfileValue('');
+      setEditingProfileError('');
+    } catch (error) {
+      setEditingProfileError(error.message || 'Kunne ikke gemme ændringen.');
+    } finally {
+      setEditingProfileLoading(false);
     }
   };
 
@@ -11207,6 +13031,93 @@ function AccountProfileScreen({
 
       <Modal
         animationType="fade"
+        onRequestClose={handleCloseProfileFieldEdit}
+        transparent
+        visible={profileFieldEditOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk profilredigering"
+            disabled={editingProfileLoading}
+            onPress={handleCloseProfileFieldEdit}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={styles.chatModalPanel}>
+            <View style={styles.chatModalHeader}>
+              <Text numberOfLines={1} style={styles.chatModalTitle}>
+                Rediger {editingProfileField === 'phone' ? 'telefon' : 'fødselsdag'}
+              </Text>
+              <Pressable
+                accessibilityLabel="Luk redigering"
+                accessibilityRole="button"
+                disabled={editingProfileLoading}
+                onPress={handleCloseProfileFieldEdit}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <Text style={styles.chatCodeModalText}>
+              {editingProfileField === 'phone'
+                ? 'Indtast dit nye telefonnummer.'
+                : 'Indtast din fødselsdag som YYYY-MM-DD.'}
+            </Text>
+            {editingProfileError ? <Text style={styles.errorText}>{editingProfileError}</Text> : null}
+            <View style={styles.field}>
+              <Text style={styles.label}>{editingProfileField === 'phone' ? 'Telefon' : 'Fødselsdag'}</Text>
+              <TextInput
+                autoComplete="off"
+                autoCorrect={false}
+                autoCapitalize="none"
+                keyboardType={editingProfileField === 'phone' ? 'phone-pad' : 'default'}
+                returnKeyType="done"
+                onChangeText={setEditingProfileValue}
+                placeholder={editingProfileField === 'phone' ? '+45 12 34 56 78' : 'YYYY-MM-DD'}
+                placeholderTextColor="#8b93a1"
+                style={styles.input}
+                value={editingProfileValue}
+              />
+            </View>
+            <View style={styles.chatActionConfirmButtons}>
+              <Pressable
+                accessibilityLabel="Annuller redigering"
+                accessibilityRole="button"
+                disabled={editingProfileLoading}
+                onPress={handleCloseProfileFieldEdit}
+                style={({ pressed }) => [
+                  styles.chatActionCancelButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.chatActionCancelText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Gem profilændring"
+                accessibilityRole="button"
+                disabled={editingProfileLoading}
+                onPress={handleSaveProfileField}
+                style={({ pressed }) => [
+                  styles.chatActionConfirmButton,
+                  editingProfileLoading ? styles.primaryButtonDisabled : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                {editingProfileLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.chatActionConfirmButtonText}>Gem</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
         onRequestClose={() => {
           if (!deleteAccountLoading) {
             setDeleteAccountConfirmOpen(false);
@@ -11298,7 +13209,18 @@ function AccountProfileScreen({
                   >
                     <Ionicons name="create-outline" size={16} color={STUDOS_THEME.ink} />
                   </Pressable>
-                ) : null}
+                ) : (
+                  ['phone', 'birthday'].includes(row.key) ? (
+                    <Pressable
+                      accessibilityLabel={`Rediger ${row.label.toLowerCase()}`}
+                      accessibilityRole="button"
+                      onPress={() => handleOpenProfileFieldEdit(row.key)}
+                      style={({ pressed }) => [styles.accountProfileDetailAction, pressed ? styles.footerItemPressed : null]}
+                    >
+                      <Ionicons name="create-outline" size={16} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  ) : null
+                )}
               </View>
             </View>
           ))}
@@ -12488,6 +14410,21 @@ function CrewTitleGraphic() {
         </View>
       </View>
       <View style={[styles.crewTitleGraphicDot, styles.crewTitleGraphicOuterDot]} />
+    </View>
+  );
+}
+
+function EmergencyContactsTitleGraphic() {
+  return (
+    <View style={styles.emergencyContactsTitleGraphic} pointerEvents="none">
+      <View style={styles.emergencyContactsTitleGraphicBack} />
+      <View style={styles.emergencyContactsTitleGraphicFace}>
+        <Ionicons name="call" size={16} color={STUDOS_THEME.red} />
+        <View style={styles.emergencyContactsTitleGraphicWarningWrap}>
+          <Ionicons name="warning" size={10} color={STUDOS_THEME.ink} />
+        </View>
+      </View>
+      <View style={styles.emergencyContactsTitleGraphicOuterDot} />
     </View>
   );
 }
@@ -17876,6 +19813,260 @@ const styles = StyleSheet.create({
     top: 0,
     backgroundColor: STUDOS_THEME.yellow,
   },
+  emergencyContactsTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 47,
+    height: 40,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  emergencyContactsTitleGraphicBack: {
+    position: 'absolute',
+    right: 0,
+    bottom: 1,
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  emergencyContactsTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 35,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  emergencyContactsTitleGraphicWarningWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  emergencyContactsTitleGraphicOuterDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 7,
+    height: 7,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  emergencyContactsHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flex: 1,
+    width: '100%',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  emergencyContactsHeaderTitle: {
+    fontSize: 24,
+    lineHeight: 28,
+  },
+  emergencyContactsHeaderButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    height: 34,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.45)',
+    backgroundColor: 'rgba(255, 245, 240, 0.7)',
+    gap: 5,
+  },
+  emergencyContactsHeaderButtonPressed: {
+    backgroundColor: '#FFE6DC',
+  },
+  emergencyContactsHeaderButtonAlignRight: {
+    marginLeft: 0,
+    marginRight: 0,
+  },
+  emergencyContactsHeaderButtonText: {
+    color: '#f15863',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  emergencyContactsVisibilityPanel: {
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '68%',
+  },
+  emergencyContactsVisibilityHeaderTextWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  emergencyContactsVisibilityOptionsScroll: {
+    maxHeight: 180,
+    marginTop: -6,
+  },
+  emergencyContactsVisibilityOptionCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  emergencyContactsVisibilityOptionRow: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
+  emergencyContactsVisibilityOptionText: {
+    textAlign: 'center',
+    lineHeight: 20,
+    flex: 1,
+  },
+  emergencyContactsVisibilityStatus: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    flexShrink: 1,
+  },
+  emergencyContactsVisibilityStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  emergencyContactsVisibilityStatusValue: {
+    color: STUDOS_THEME.ink,
+    fontWeight: '900',
+  },
+  emergencyContactsVisibilityDescription: {
+    color: '#73839b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  emergencyContactsVisibilitySpecificSection: {
+    marginTop: 8,
+    gap: 7,
+  },
+  emergencyContactsVisibilitySpecificTitle: {
+    color: '#172143',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  emergencyContactsVisibilityNoSpecific: {
+    color: '#73839b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  emergencyContactsVisibilitySpecificList: {
+    maxHeight: 110,
+  },
+  emergencyContactsVisibilitySpecificSearchField: {
+    minHeight: 38,
+  },
+  emergencyContactsVisibilitySpecificOption: {
+    minHeight: 36,
+  },
+  emergencyContactsVisibilitySpecificOptionText: {
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  emergencyContactsCards: {
+    flex: 1,
+    minHeight: 0,
+    gap: 12,
+  },
+  emergencyContactsOwnPanel: {
+    flex: 0,
+  },
+  emergencyContactsCrewPanel: {
+    flex: 1,
+    minHeight: 0,
+  },
+  emergencyContactsCrewListScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  emergencyContactsOwnCard: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 111, 115, 0.06)',
+    borderColor: 'rgba(255, 111, 115, 0.28)',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: 10,
+  },
+  emergencyContactsOwnHeader: {
+    color: '#7e242f',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginBottom: 3,
+  },
+  emergencyContactsEditButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 111, 115, 0.45)',
+    backgroundColor: '#FFFFFF',
+  },
+  emergencyContactsEditButtonText: {
+    color: '#f15863',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  emergencyContactsEditPanel: {
+    gap: 12,
+  },
+  emergencyContactsEditRemoveButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#f15863',
+    backgroundColor: '#FFF4F5',
+  },
+  emergencyContactsEditRemoveButtonText: {
+    color: '#f15863',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  emergencyContactsVisibilityModalRoot: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 84,
+    paddingHorizontal: 20,
+  },
   earnCapsPageTitleText: {
     fontSize: 29,
   },
@@ -18308,73 +20499,187 @@ const styles = StyleSheet.create({
   miniGamesHeaderLogoInTitle: {
     marginLeft: 8,
   },
-  miniGamesCardTitle: {
-    fontSize: 15,
-    lineHeight: 18,
-  },
-  miniGamesCardBody: {
-    fontSize: 11,
-    lineHeight: 15,
-  },
   miniGamesCardPanel: {
     gap: 0,
-    padding: 12,
+    padding: 14,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#ddd6c7',
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 111, 115, 0.34)',
+    backgroundColor: '#fffaf4',
+    shadowColor: '#ff6f73',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    elevation: 5,
+    overflow: 'hidden',
   },
   miniGamesCardPressed: {
-    opacity: 0.94,
-    transform: [{ scale: 0.996 }],
+    borderColor: '#f25c63',
+    backgroundColor: '#fff2e8',
   },
   miniGamesCardTextWrap: {
     flex: 1,
     marginRight: 8,
     gap: 6,
+    zIndex: 3,
   },
   miniGamesCardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  miniGamesBottleIcon: {
+  miniGamesCardTitle: {
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  miniGamesCardBody: {
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  miniGamesCardBadgeRow: {
+    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  miniGamesCardBadgeRed: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#ffedef',
+    borderWidth: 1,
+    borderColor: 'rgba(242, 92, 99, 0.3)',
+  },
+  miniGamesCardBadgeBlue: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#ecfcff',
+    borderWidth: 1,
+    borderColor: 'rgba(117, 222, 208, 0.45)',
+  },
+  miniGamesCardBadgeText: {
+    color: '#333e56',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  miniGamesCardHint: {
+    color: '#6c6f7d',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '700',
+  },
+  miniGamesCardHintSingleLine: {
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 8,
+    lineHeight: 11,
+  },
+  miniGamesCardBadgeRowSingleLine: {
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    alignItems: 'center',
+    marginBottom: 4,
+    gap: 8,
+  },
+  miniGamesCardPattern: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 1.5,
+    borderColor: 'rgba(23, 33, 67, 0.08)',
+    right: -36,
+    top: -52,
+    zIndex: 1,
+  },
+  miniGamesCardTopStrip: {
+    position: 'absolute',
+    left: -2,
+    right: -2,
+    top: 0,
+    height: 7,
+    backgroundColor: 'rgba(255, 111, 115, 0.22)',
+    borderBottomLeftRadius: 7,
+    borderBottomRightRadius: 7,
+    zIndex: 2,
+  },
+  miniGamesCardShimmer: {
+    position: 'absolute',
+    top: -28,
+    bottom: -28,
+    width: 110,
+    backgroundColor: 'rgba(255, 255, 255, 0.45)',
+    zIndex: 2,
+  },
+  miniGamesLuckyWheelIcon: {
     position: 'relative',
     width: 18,
     height: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  miniGamesBottleIconInTitle: {
-    marginBottom: 2,
-    marginLeft: 2,
-  },
-  miniGamesBottleBadge: {
+  miniGamesLuckyWheelSpin: {
     position: 'absolute',
-    right: -3,
-    top: -3,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: STUDOS_THEME.red,
+    width: 18,
+    height: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  miniGamesBottleLogoText: {
-    color: STUDOS_THEME.red,
-    fontSize: 7,
-    lineHeight: 8,
+  miniGamesLuckyWheelIconInTitle: {
+    transform: [{ scale: 1.15 }],
+    marginBottom: 1,
+    marginLeft: 2,
+  },
+  miniGamesLuckyWheelRing: {
+    position: 'absolute',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 111, 115, 0.55)',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniGamesLuckyWheelMarker: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    top: 0,
+    left: 0,
+  },
+  miniGamesLuckyWheelMarkerLine: {
+    position: 'absolute',
+    top: -1,
+    left: 8.25,
+    width: 1.5,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(23, 33, 67, 0.22)',
+  },
+  miniGamesLuckyWheelCenter: {
+    position: 'absolute',
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: STUDOS_THEME.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniGamesLuckyWheelCenterText: {
+    color: '#FFFFFF',
+    fontSize: 6,
+    lineHeight: 7,
     fontWeight: '900',
+    marginTop: 0.5,
   },
   miniGamesCardRow: {
     alignItems: 'center',
@@ -18385,10 +20690,10 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFF3E6',
+    backgroundColor: '#CFF6D9',
     borderWidth: 1,
-    borderColor: 'rgba(255, 111, 115, 0.35)',
-    shadowColor: '#172143',
+    borderColor: '#2AA66B',
+    shadowColor: '#1f9d55',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
     shadowRadius: 8,
@@ -18396,6 +20701,46 @@ const styles = StyleSheet.create({
   },
   miniGamesCardChevronIcon: {
     transform: [{ translateX: 1 }],
+  },
+  miniGamesFiveDiceIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    transform: [{ scale: 0.94 }],
+  },
+  miniGamesFiveDiceIconInTitle: {
+    marginBottom: 2,
+    marginLeft: 2,
+  },
+  miniGamesMiniIconFrame: {
+    position: 'relative',
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniGamesMostLikelyIconInTitle: {
+    marginBottom: 2,
+    marginLeft: 2,
+  },
+  miniGamesFakeNewsIconInTitle: {
+    marginBottom: 2,
+    marginLeft: 2,
+  },
+  miniGamesFakeNewsStopper: {
+    position: 'absolute',
+    right: -2,
+    top: -2,
+  },
+  miniGamesFiveDiceDie: {
+    marginRight: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: 'rgba(23, 33, 67, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   miniGamesBackButton: {
     width: 32,
@@ -18766,10 +21111,279 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
+  duelSubtext: {
+    color: '#65748b',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  duelHeaderLeft: {
+    flex: 1,
+    minWidth: 0,
+  },
+  duelHeaderAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 36,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    maxWidth: 128,
+  },
+  duelTitleLogo: {
+    marginLeft: 5,
+    marginBottom: -2,
+  },
+  duelTitleGraphic: {
+    position: 'relative',
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    borderColor: '#d8e3e0',
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecf9f4',
+    overflow: 'hidden',
+  },
+  duelTitleGraphicBack: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 111, 115, 0.18)',
+    borderRadius: 7,
+    transform: [{ rotate: '12deg' }],
+  },
+  duelTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    backgroundColor: '#ffffff',
+    zIndex: 2,
+    borderColor: '#e4d8c4',
+    borderWidth: 1,
+  },
+  duelTitleGraphicSwords: {
+    position: 'absolute',
+    right: -2,
+    bottom: -3,
+  },
+  duelTitleGraphicDot: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: STUDOS_THEME.red,
+    opacity: 0.92,
+    zIndex: 3,
+  },
+  duelScopeSwitch: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 10,
+    flexWrap: 'wrap',
+  },
+  duelScopeSwitchItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 36,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#D8E0EA',
+    backgroundColor: '#F7F9FD',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  duelScopeSwitchItemActive: {
+    borderColor: '#ff8b8f',
+    backgroundColor: '#fff4d8',
+  },
+  duelScopeSwitchText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelScopeSwitchTextActive: {
+    color: STUDOS_THEME.ink,
+  },
+  duelHeaderActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelHeaderBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 24,
+    height: 24,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    backgroundColor: '#F1FBF8',
+  },
+  duelHeaderBadgeText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelList: {
+    gap: 10,
+  },
+  duelCard: {
+    gap: 10,
+    borderColor: '#ddd6c7',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+  },
+  duelCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  duelCardCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  duelCardOpponent: {
+    color: '#65748b',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  duelCardTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    minWidth: 0,
+  },
+  duelStatusPill: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  duelStatusPillWarning: {
+    backgroundColor: '#FFF1CC',
+  },
+  duelStatusPillSuccess: {
+    backgroundColor: '#DDF4E9',
+  },
+  duelStatusPillInfo: {
+    backgroundColor: '#E5F1FF',
+  },
+  duelStatusPillDanger: {
+    backgroundColor: '#FFE8E8',
+  },
+  duelStatusPillMuted: {
+    backgroundColor: '#F0F1F5',
+  },
+  duelStatusPillText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardChallenge: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  duelCardMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    alignItems: 'center',
+  },
+  duelCardMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  duelMetaText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  duelCardAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 38,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  duelCardActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardGhostAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DDE8E5',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  duelCardGhostActionText: {
+    color: '#4e5c74',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardGhostActionTextMuted: {
+    color: '#8f97a7',
+  },
+  duelFooterInfo: {
+    marginTop: 10,
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
   crewScreen: {
     flex: 1,
     gap: 16,
     minHeight: 0,
+  },
+  emergencyContactsScreen: {
+    flex: 1,
+    gap: 10,
+    marginTop: -10,
+    minHeight: 0,
+  },
+  emergencyContactsTabHeader: {
+    paddingTop: 4,
   },
   crewPanel: {
     flex: 1,
@@ -19063,6 +21677,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     lineHeight: 18,
+  },
+  emergencyContactsMiniIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#FFF4E9',
   },
   label: {
     color: '#48566d',
@@ -19615,6 +22237,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     padding: 18,
   },
+  duelCreatePanel: {
+    paddingTop: 14,
+    gap: 13,
+    maxHeight: 620,
+    minHeight: 460,
+  },
   chatModalHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -19742,6 +22370,33 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  duelOpponentList: {
+    maxHeight: 220,
+  },
+  duelOpponentRow: {
+    borderColor: 'rgba(23, 33, 67, 0.12)',
+    backgroundColor: '#fcfdfd',
+  },
+  duelModalField: {
+    flex: 1,
+  },
+  duelModalTextarea: {
+    minHeight: 100,
+    paddingTop: 10,
+  },
+  duelModalInputRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  duelDateTimeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  duelDateTimeInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 10,
   },
   chatGroupSelectionText: {
     color: '#65748b',
