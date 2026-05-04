@@ -13,7 +13,7 @@
     "reverb:start": "php artisan reverb:start --host=0.0.0.0 --port=8080",
     "web:dev": "php artisan serve --host=127.0.0.1 --port=8000",
     "mobile:start": "npm --workspace @studenter-app/mobile run start",
-    "mobile:start:cloud": "EXPO_PUBLIC_API_URL=https://studos.laravel.cloud/api EXPO_PUBLIC_CREATE_CLASS_URL=https://studos.laravel.cloud/opret-klasse EXPO_PUBLIC_REVERB_APP_KEY=DtaoEWytkVJqPm5j3qB3 EXPO_PUBLIC_REVERB_HOST=ws-a1a50b0c-3314-49b0-9204-475481930fa9-reverb.laravel.cloud EXPO_PUBLIC_REVERB_PORT=443 EXPO_PUBLIC_REVERB_SCHEME=https npm --workspace @studenter-app/mobile run start -- --go --clear",
+    "mobile:start:cloud": "cross-env EXPO_PUBLIC_API_URL=https://studos.laravel.cloud/api EXPO_PUBLIC_CREATE_CLASS_URL=https://studos.laravel.cloud/opret-klasse EXPO_PUBLIC_REVERB_APP_KEY=DtaoEWytkVJqPm5j3qB3 EXPO_PUBLIC_REVERB_HOST=ws-a1a50b0c-3314-49b0-9204-475481930fa9-reverb.laravel.cloud EXPO_PUBLIC_REVERB_PORT=443 EXPO_PUBLIC_REVERB_SCHEME=https npm --workspace @studenter-app/mobile run start -- --go --clear",
     "mobile:start:cloud:tunnel": "EXPO_PUBLIC_API_URL=https://studos.laravel.cloud/api EXPO_PUBLIC_CREATE_CLASS_URL=https://studos.laravel.cloud/opret-klasse EXPO_PUBLIC_REVERB_APP_KEY=DtaoEWytkVJqPm5j3qB3 EXPO_PUBLIC_REVERB_HOST=ws-a1a50b0c-3314-49b0-9204-475481930fa9-reverb.laravel.cloud EXPO_PUBLIC_REVERB_PORT=443 EXPO_PUBLIC_REVERB_SCHEME=https npm --workspace @studenter-app/mobile run start -- --go --tunnel --clear",
     "mobile:start:dev-client": "npm --workspace @studenter-app/mobile run start:dev-client",
     "mobile:ios:device": "npm --workspace @studenter-app/mobile run ios:device",
@@ -27,5 +27,8 @@
     "mobile:build:ios": "npm --workspace @studenter-app/mobile run build:ios",
     "mobile:build:all": "npm --workspace @studenter-app/mobile run build:all",
     "notes": "cat README.md"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }

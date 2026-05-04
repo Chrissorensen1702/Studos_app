@@ -110,6 +110,12 @@ Start Reverb lokalt til chat realtime:
 npm run reverb:start
 ```
 
+Bemærk til platformforskelle (Windows vs. Mac):
+
+Nogle scripts sætter miljøvariabler før kommandoerne (fx `EXPO_PUBLIC_*`). Det
+gøres med `cross-env`, så de virker på både MacOS og Windows uden at skrive to
+forskellige varianter af samme kommando.
+
 ## Vigtige Scripts
 
 ```bash
