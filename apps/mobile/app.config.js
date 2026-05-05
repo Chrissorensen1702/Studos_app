@@ -75,6 +75,11 @@ module.exports = ({ config: staticConfig }) => {
     };
   }
 
+  config.plugins = [
+    ...(config.plugins ?? []),
+    '@react-native-community/datetimepicker',
+  ];
+
   if (enableAndroidNotifications) {
     config.plugins = [
       ...(config.plugins ?? []),

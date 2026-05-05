@@ -89,7 +89,7 @@
             </div>
 
             <div class="landing-mockup-slide" data-feature-slide="duel" data-feature-title="Udfordr dine klassekammerater" aria-hidden="true">
-              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Dyst.png') }}" alt="Duel i Studos appen">
+              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Dyst.png') }}" alt="Dyst i Studos appen">
             </div>
 
             <div class="landing-mockup-slide" data-feature-slide="walls" data-feature-title="Walls" aria-hidden="true">
@@ -168,7 +168,7 @@
                 <span class="app-icon-duel-swords"></span>
               </span>
             </span>
-            <span class="landing-feature-label">Duel</span>
+            <span class="landing-feature-label">Dyst</span>
           </div>
           <h3>Udfordr dine klassekammerater</h3>
           <p>Lav challenges til klassen, sæt Caps på højkant, og følg dramaet på leaderboardet. Hvem tager føringen, når klassen dyster i sjove missioner, interne jokes og små kaotiske klassikere?

@@ -21,6 +21,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -57,6 +58,8 @@ const CHAT_THREAD_KEYBOARD_VERTICAL_OFFSET = 0;
 const ANDROID_NOTIFICATIONS_ENABLED = Platform.OS === 'android' && !IS_WEB;
 const STUDOS_NOTIFICATION_CHANNEL_ID = 'studos-default';
 const STUDOS_EAS_PROJECT_ID = 'b4da2c62-b9cd-442c-b8da-facc8e6dc689';
+const API_DISCOVERY_TIMEOUT_MS = 3500;
+const API_REQUEST_TIMEOUT_MS = 6000;
 const CHAT_LIST_HEADER_SCROLL_PADDING_TOP = 160;
 const CHAT_LIST_HEADER_COLLAPSE_DISTANCE = 260;
 const CHAT_LIST_HEADER_CLAMP_DISTANCE = 14;
@@ -99,6 +102,7 @@ const BrowserSessionStore = {
 const SessionStore = Platform.OS === 'web' ? BrowserSessionStore : SecureStore;
 let androidNotificationHandlerConfigured = false;
 let chatRealtimeFallbackLogged = false;
+let preferredApiBaseUrl = null;
 
 const androidExpoRuntimeReady = () => {
   if (!ANDROID_NOTIFICATIONS_ENABLED) {
@@ -310,9 +314,68 @@ const createWebPublicBaseUrl = () => {
   return window.location.origin;
 };
 
+const normalizeApiBaseUrl = (rawUrl) => {
+  const trimmed = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+
+  return trimmed ? trimmed.replace(/\/+$/, '') : '';
+};
+
+const readNonEmptyEnv = (rawValue) => {
+  const trimmed = typeof rawValue === 'string' ? rawValue.trim() : '';
+
+  return trimmed || null;
+};
+
+const parseApiBaseUrlList = (rawList) => {
+  if (typeof rawList !== 'string') {
+    return [];
+  }
+
+  return rawList
+    .split(',')
+    .map(normalizeApiBaseUrl)
+    .filter(Boolean);
+};
+
+const dedupe = (items) => Array.from(new Set((items ?? []).filter(Boolean)));
+
+const isLikelyLocalNetworkHost = (rawHost) => {
+  if (typeof rawHost !== 'string') {
+    return false;
+  }
+
+  const host = rawHost
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .split('/')[0]
+    .split(':')[0]
+    .toLowerCase();
+
+  if (!host) {
+    return false;
+  }
+
+  return host === 'localhost'
+    || host === '127.0.0.1'
+    || host === '10.0.2.2'
+    || host.includes('.local')
+    || host.startsWith('10.')
+    || host.startsWith('192.168.')
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+};
+
+const localApiBaseUrlFromHost = (rawHost) => {
+  if (!isLikelyLocalNetworkHost(rawHost)) {
+    return null;
+  }
+
+  const host = normalizeApiBaseUrl(rawHost).replace(/^https?:\/\//, '').split('/')[0];
+  return host ? `http://${host}/studenter-app/public/api` : null;
+};
+
 const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
 const CREATE_CLASS_URL =
-  process.env.EXPO_PUBLIC_CREATE_CLASS_URL
+  readNonEmptyEnv(process.env.EXPO_PUBLIC_CREATE_CLASS_URL)
   ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/opret-klasse');
 const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'support@studos.dk';
 const WEB_SITE_URL =
@@ -322,24 +385,43 @@ const WEB_SITE_URL =
     : CREATE_CLASS_URL.replace(/\/opret-klasse\/?$/, '').replace(/\/$/, ''));
 const STUDOS_TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
 const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
-const EXPLICIT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL;
-const LOCAL_API_BASE_URLS = [
-  'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/api',
-  'http://10.171.168.140/studenter-app/public/api',
-  'http://10.171.168.162/studenter-app/public/api',
-  'http://10.0.2.2/studenter-app/public/api',
+const EXPLICIT_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL);
+const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${normalizeApiBaseUrl(WEB_PUBLIC_BASE_URL)}/api` : null;
+const FALLBACK_CLOUD_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'https://studos.laravel.cloud/api');
+const CONFIGURED_LOCAL_API_URLS = parseApiBaseUrlList(process.env.EXPO_PUBLIC_API_URLS);
+const LOCAL_API_BASE_URLS = dedupe([
+  ...CONFIGURED_LOCAL_API_URLS,
+  localApiBaseUrlFromHost(process.env.EXPO_PUBLIC_REVERB_HOST),
   'http://localhost/studenter-app/public/api',
   'http://127.0.0.1/studenter-app/public/api',
-];
-const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/api` : null;
-const FALLBACK_CLOUD_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'https://studos.laravel.cloud/api';
-const API_BASE_URLS = (EXPLICIT_API_BASE_URL
-  ? [EXPLICIT_API_BASE_URL]
-  : IS_WEB
-    ? [WEB_API_BASE_URL, FALLBACK_CLOUD_API_BASE_URL]
-    : [...LOCAL_API_BASE_URLS, FALLBACK_CLOUD_API_BASE_URL]
-).filter(Boolean);
-const UNIQUE_API_BASE_URLS = Array.from(new Set(API_BASE_URLS));
+  'http://10.0.2.2/studenter-app/public/api',
+]);
+const FALLBACK_DISCOVERY_API_BASE_URLS = dedupe([
+  ...(IS_WEB ? [WEB_API_BASE_URL] : LOCAL_API_BASE_URLS),
+].filter(Boolean));
+const FALLBACK_API_BASE_URLS = dedupe([
+  ...FALLBACK_DISCOVERY_API_BASE_URLS,
+  FALLBACK_CLOUD_API_BASE_URL,
+].filter(Boolean));
+const API_BASE_URLS = EXPLICIT_API_BASE_URL
+  ? dedupe([EXPLICIT_API_BASE_URL, ...FALLBACK_API_BASE_URLS])
+  : FALLBACK_API_BASE_URLS;
+const UNIQUE_API_BASE_URLS = dedupe(API_BASE_URLS);
+const API_BASE_URLS_WITH_PREFERENCE = () => {
+  if (!preferredApiBaseUrl || !UNIQUE_API_BASE_URLS.includes(preferredApiBaseUrl)) {
+    return UNIQUE_API_BASE_URLS;
+  }
+
+  return dedupe([preferredApiBaseUrl, ...UNIQUE_API_BASE_URLS]);
+};
+const apiTimeoutForAttempt = (baseUrlCount, index) => {
+  if (baseUrlCount <= 1) {
+    return API_REQUEST_TIMEOUT_MS;
+  }
+
+  return index < baseUrlCount - 1 ? API_DISCOVERY_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
+};
+preferredApiBaseUrl = UNIQUE_API_BASE_URLS[0] ?? null;
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
 const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'MacBook-Air-tilhrende-Chris.local';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
@@ -355,7 +437,7 @@ const APP_TABS = [
   { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar', accentColor: STUDOS_THEME.blue },
   { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', accentColor: STUDOS_THEME.red },
   { id: 'overview', label: 'Overblik', icon: 'home-outline', activeIcon: 'home' },
-  { id: 'challenges', label: 'Duel', icon: 'flash-outline', activeIcon: 'flash', accentColor: STUDOS_THEME.red },
+  { id: 'challenges', label: 'Dyst', icon: 'flash-outline', activeIcon: 'flash', accentColor: STUDOS_THEME.red },
   { id: 'walls', label: 'Galleri', icon: 'images-outline', activeIcon: 'images', accentColor: STUDOS_THEME.yellow },
 ];
 const CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE = 18;
@@ -432,6 +514,37 @@ const formatDateTime = (value) => {
     minute: '2-digit',
   }).format(parsed);
 };
+
+const duelFinishedTimestamp = (duel) => (
+  duel?.completedAt
+  ?? duel?.declinedAt
+  ?? duel?.cancelledAt
+  ?? duel?.expiredAt
+  ?? duel?.updatedAt
+  ?? duel?.createdAt
+  ?? ''
+);
+
+const DYST_MODE_OPTIONS = [
+  {
+    id: 'versus',
+    label: 'Mod hinanden',
+    helper: 'Udfordr én fra dit crew til en 1:1 konkurrence.',
+    challengeLabel: 'Hvad dystes der om?',
+    placeholder: 'Fx Hvem kan hurtigst bunde en øl?',
+  },
+  {
+    id: 'challenge',
+    label: 'Challenge',
+    helper: 'Send en challenge til én, og se om vedkommende gennemfører.',
+    challengeLabel: 'Hvad er challengen?',
+    placeholder: 'Fx Spørg om hendes nummer inden midnat',
+  },
+];
+
+const getDystModeMeta = (mode) => DYST_MODE_OPTIONS.find((option) => option.id === mode) ?? DYST_MODE_OPTIONS[0];
+const DYST_TIME_HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, '0'));
+const DYST_TIME_MINUTES = ['00', '15', '30', '45'];
 
 const formatProfileDate = (value) => {
   const rawValue = String(value ?? '').trim();
@@ -1220,13 +1333,31 @@ const initialsFor = (profile) => {
   return (letters.length === 1 ? `${letters}${letters}` : letters || 'ST').toLocaleUpperCase('da-DK');
 };
 
-const fetchWithTimeout = (url, options) =>
-  Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Forbindelsen tog for lang tid.')), 6000);
-    }),
-  ]);
+const createTimeoutError = () => new Error('Forbindelsen tog for lang tid.');
+const fetchWithTimeout = (url, options, timeoutMs = API_REQUEST_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  return fetch(url, {
+    ...options,
+    signal: controller.signal,
+  })
+    .then((response) => {
+      clearTimeout(timer);
+      return response;
+    })
+    .catch((error) => {
+      clearTimeout(timer);
+
+      if (error?.name === 'AbortError') {
+        throw createTimeoutError();
+      }
+
+      throw error;
+    });
+};
 
 const parseApiError = (payload) => {
   const errors = payload?.errors ? Object.values(payload.errors).flat() : [];
@@ -1252,9 +1383,13 @@ const shouldRetryInviteErrorOnNextApi = (path, error) =>
 const apiFetch = async (path, options = {}) => {
   const { authToken, headers: optionHeaders, ...fetchOptions } = options;
   let lastError = null;
+  const apiBaseUrls = API_BASE_URLS_WITH_PREFERENCE();
+  const attemptedBaseUrls = [];
 
-  for (let index = 0; index < UNIQUE_API_BASE_URLS.length; index += 1) {
-    const baseUrl = UNIQUE_API_BASE_URLS[index];
+  for (let index = 0; index < apiBaseUrls.length; index += 1) {
+    const baseUrl = apiBaseUrls[index];
+    const timeoutMs = apiTimeoutForAttempt(apiBaseUrls.length, index);
+    attemptedBaseUrls.push(baseUrl);
 
     try {
       const response = await fetchWithTimeout(`${baseUrl}${path}`, {
@@ -1265,7 +1400,7 @@ const apiFetch = async (path, options = {}) => {
           ...(optionHeaders ?? {}),
         },
         ...fetchOptions,
-      });
+      }, timeoutMs);
       const text = await response.text();
       let payload = {};
 
@@ -1280,24 +1415,49 @@ const apiFetch = async (path, options = {}) => {
       if (!response.ok) {
         const error = new Error(parseApiError(payload));
         error.status = response.status;
+        error.apiBaseUrl = baseUrl;
         throw error;
       }
 
+      preferredApiBaseUrl = baseUrl;
       return payload;
     } catch (error) {
       lastError = error;
+      if (error && typeof error === 'object') {
+        error.apiBaseUrl = error.apiBaseUrl || baseUrl;
+        error.apiBaseUrlsTried = dedupe([...(error.apiBaseUrlsTried ?? []), ...attemptedBaseUrls]);
+      }
 
       if (error.status && !shouldRetryInviteErrorOnNextApi(path, error)) {
         throw error;
       }
 
-      if (error.status && index === UNIQUE_API_BASE_URLS.length - 1) {
+      if (error.status && index === apiBaseUrls.length - 1) {
         throw error;
       }
     }
   }
 
-  throw lastError ?? new Error('API kunne ikke nås.');
+  if (!lastError) {
+    throw new Error('API kunne ikke nås.');
+  }
+
+  if (!lastError.apiBaseUrlsTried) {
+    lastError.apiBaseUrlsTried = attemptedBaseUrls;
+  }
+
+  if (!lastError.message || lastError.message === 'Forbindelsen tog for lang tid.') {
+    throw Object.assign(new Error(`API kunne ikke nås via følgende endpoints: ${attemptedBaseUrls.join(', ')}`), {
+      ...lastError,
+      apiBaseUrlsTried: attemptedBaseUrls,
+    });
+  }
+
+  if (__DEV__) {
+    lastError.message = `${lastError.message} (Prøvede: ${attemptedBaseUrls.join(', ')})`;
+  }
+
+  throw lastError;
 };
 
 const androidNotificationProjectId = (constants) =>
@@ -3123,7 +3283,9 @@ function AppTabScreen({
       <DuelScreen
         activeMember={activeMember}
         activeMembers={activeMembers}
+        onCapsBalanceChange={onCapsBalanceChange}
         schoolClass={schoolClass}
+        sessionToken={sessionToken}
       />
     );
   }
@@ -5274,6 +5436,7 @@ function CalendarScreen({
   const [draft, setDraft] = useState(() => createCalendarDraft());
   const [visibleMonth, setVisibleMonth] = useState(() => dateFromInput(createCalendarDraft().eventDate));
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [calendarTimePickerOpen, setCalendarTimePickerOpen] = useState(false);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [selectingInvitees, setSelectingInvitees] = useState(false);
   const [editingEventId, setEditingEventId] = useState('');
@@ -5312,6 +5475,21 @@ function CalendarScreen({
   const [calendarDayRailWidth, setCalendarDayRailWidth] = useState(0);
   const visibleMonthDays = useMemo(() => calendarDaysForMonth(visibleMonth), [visibleMonth]);
   const selectedTime = useMemo(() => splitCalendarTime(draft.eventTime), [draft.eventTime]);
+  const calendarEventDateValue = useMemo(() => dateFromInput(draft.eventDate), [draft.eventDate]);
+  const calendarEventTimeValue = useMemo(() => {
+    const date = new Date();
+    const hour = Number.parseInt(selectedTime.hour, 10);
+    const minute = Number.parseInt(selectedTime.minute, 10);
+
+    date.setHours(
+      Number.isFinite(hour) ? hour : 19,
+      Number.isFinite(minute) ? minute : 0,
+      0,
+      0,
+    );
+
+    return date;
+  }, [selectedTime.hour, selectedTime.minute]);
   const selectedCoverTemplate = useMemo(
     () => EVENT_COVER_TEMPLATES.find((template) => template.id === draft.coverImageTemplateId),
     [draft.coverImageTemplateId],
@@ -5854,6 +6032,7 @@ function CalendarScreen({
     setDraft(nextDraft);
     setVisibleMonth(dateFromInput(nextDraft.eventDate));
     setDatePickerOpen(false);
+    setCalendarTimePickerOpen(false);
     setCoverPickerOpen(false);
     setSelectingInvitees(false);
     setInvitePeopleSearch('');
@@ -5880,6 +6059,7 @@ function CalendarScreen({
     setDraft(nextDraft);
     setVisibleMonth(dateFromInput(nextDraft.eventDate));
     setDatePickerOpen(false);
+    setCalendarTimePickerOpen(false);
     setCoverPickerOpen(false);
     setSelectingInvitees(false);
     setInvitePeopleSearch('');
@@ -5902,6 +6082,46 @@ function CalendarScreen({
     updateDraft('eventDate', value);
     setVisibleMonth(dateFromInput(value));
     setDatePickerOpen(false);
+  };
+
+  const openCalendarDatePicker = () => {
+    setCalendarTimePickerOpen(false);
+    setDatePickerOpen(true);
+  };
+
+  const openCalendarTimePicker = () => {
+    setDatePickerOpen(false);
+    setCalendarTimePickerOpen(true);
+  };
+
+  const handleCalendarDateChange = (event, selectedDate) => {
+    if (Platform.OS !== 'ios') {
+      setDatePickerOpen(false);
+    }
+
+    if (event?.type === 'dismissed' || !selectedDate) {
+      return;
+    }
+
+    const nextDate = formatInputDate(selectedDate);
+
+    updateDraft('eventDate', nextDate);
+    setVisibleMonth(dateFromInput(nextDate));
+  };
+
+  const handleCalendarTimeChange = (event, selectedDate) => {
+    if (Platform.OS !== 'ios') {
+      setCalendarTimePickerOpen(false);
+    }
+
+    if (event?.type === 'dismissed' || !selectedDate) {
+      return;
+    }
+
+    const hours = String(selectedDate.getHours()).padStart(2, '0');
+    const minutes = String(selectedDate.getMinutes()).padStart(2, '0');
+
+    updateDraft('eventTime', `${hours}:${minutes}`);
   };
 
   const updateCalendarTime = (part, value, shouldScroll = true) => {
@@ -7215,7 +7435,7 @@ function CalendarScreen({
             <Text style={styles.calendarFieldLabel}>Dato</Text>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setDatePickerOpen((current) => !current)}
+              onPress={openCalendarDatePicker}
               style={({ pressed }) => [
                 styles.calendarDateSelect,
                 pressed ? styles.footerItemPressed : null,
@@ -7229,173 +7449,30 @@ function CalendarScreen({
                   {formatDate(draft.eventDate)}
                 </Text>
               </View>
-              <Ionicons
-                name={datePickerOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color="#65748b"
-              />
+              <Ionicons name="calendar-outline" size={19} color="#65748b" />
             </Pressable>
-
-            {datePickerOpen ? (
-              <View style={styles.calendarPickerBlock}>
-                <View style={styles.calendarPickerHeader}>
-                  <View style={styles.calendarMonthControls}>
-                    <Pressable
-                      accessibilityLabel="Forrige måned"
-                      accessibilityRole="button"
-                      onPress={() => setVisibleMonth((current) => addCalendarMonths(current, -1))}
-                      style={({ pressed }) => [
-                        styles.calendarMonthButton,
-                        pressed ? styles.footerItemPressed : null,
-                      ]}
-                    >
-                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
-                    </Pressable>
-                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
-                      {monthTitle(visibleMonth)}
-                    </Text>
-                    <Pressable
-                      accessibilityLabel="Næste måned"
-                      accessibilityRole="button"
-                      onPress={() => setVisibleMonth((current) => addCalendarMonths(current, 1))}
-                      style={({ pressed }) => [
-                        styles.calendarMonthButton,
-                        pressed ? styles.footerItemPressed : null,
-                      ]}
-                    >
-                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.calendarWeekdayRow}>
-                  {CALENDAR_WEEKDAYS.map((weekday) => (
-                    <Text key={weekday} style={styles.calendarWeekdayText}>{weekday}</Text>
-                  ))}
-                </View>
-                <View style={styles.calendarDayGrid}>
-                  {visibleMonthDays.map((day) => {
-                    if (day.empty) {
-                      return <View key={day.id} style={styles.calendarDayCell} />;
-                    }
-
-                    const active = draft.eventDate === day.value;
-
-                    return (
-                      <View key={day.id} style={styles.calendarDayCell}>
-                        <Pressable
-                          accessibilityRole="button"
-                          onPress={() => updateCalendarDate(day.value)}
-                          style={({ pressed }) => [
-                            styles.calendarDayButton,
-                            active ? styles.calendarDayButtonActive : null,
-                            pressed ? styles.footerItemPressed : null,
-                          ]}
-                        >
-                          <Text style={[
-                            styles.calendarDayText,
-                            active ? styles.calendarDayTextActive : null,
-                          ]}>
-                            {day.day}
-                          </Text>
-                        </Pressable>
-                      </View>
-                    );
-                  })}
-                </View>
-              </View>
-            ) : null}
           </View>
 
           <View style={styles.calendarField}>
             <Text style={styles.calendarFieldLabel}>Tidspunkt</Text>
-            <View style={styles.calendarTimeWheelCard}>
-              <View style={styles.calendarTimeWheelLabelRow}>
-                <Text style={[styles.calendarTimeWheelLabel, styles.calendarTimeWheelLabelSlot]}>
-                  Time
-                </Text>
-                <View style={styles.calendarTimeWheelDividerSpacer} />
-                <Text style={[styles.calendarTimeWheelLabel, styles.calendarTimeWheelLabelSlot]}>
-                  Minut
+            <Pressable
+              accessibilityRole="button"
+              onPress={openCalendarTimePicker}
+              style={({ pressed }) => [
+                styles.calendarDateSelect,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.calendarDateSelectValue}>
+                <View style={styles.calendarDateSelectIcon}>
+                  <Ionicons name="time-outline" size={17} color={STUDOS_THEME.ink} />
+                </View>
+                <Text numberOfLines={1} style={styles.calendarDateSelectText}>
+                  {draft.eventTime || 'Vælg tidspunkt'}
                 </Text>
               </View>
-              <View style={styles.calendarTimeWheelBody}>
-                <View style={styles.calendarTimeWheelSelectedLine} pointerEvents="none" />
-                <View style={styles.calendarTimeWheelColumn}>
-                  <ScrollView
-                    contentContainerStyle={styles.calendarTimeWheelList}
-                    decelerationRate="fast"
-                    nestedScrollEnabled
-                    onMomentumScrollEnd={(event) => updateCalendarTimeFromScroll(
-                      'hour',
-                      CALENDAR_HOUR_OPTIONS,
-                      event.nativeEvent.contentOffset.y,
-                    )}
-                    ref={hourWheelRef}
-                    showsVerticalScrollIndicator={false}
-                    snapToInterval={CALENDAR_TIME_WHEEL_ITEM_HEIGHT}
-                    style={styles.calendarTimeWheel}
-                  >
-                    {CALENDAR_HOUR_OPTIONS.map((hour) => {
-                      const active = selectedTime.hour === hour;
-
-                      return (
-                        <Pressable
-                          accessibilityRole="button"
-                          key={hour}
-                          onPress={() => updateCalendarTime('hour', hour)}
-                          style={styles.calendarTimeWheelItem}
-                        >
-                          <Text style={[
-                            styles.calendarTimeWheelText,
-                            active ? styles.calendarTimeWheelTextActive : null,
-                          ]}>
-                            {hour}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-                <Text style={styles.calendarTimeWheelDivider}>:</Text>
-                <View style={styles.calendarTimeWheelColumn}>
-                  <ScrollView
-                    contentContainerStyle={styles.calendarTimeWheelList}
-                    decelerationRate="fast"
-                    nestedScrollEnabled
-                    onMomentumScrollEnd={(event) => updateCalendarTimeFromScroll(
-                      'minute',
-                      CALENDAR_MINUTE_OPTIONS,
-                      event.nativeEvent.contentOffset.y,
-                    )}
-                    ref={minuteWheelRef}
-                    showsVerticalScrollIndicator={false}
-                    snapToInterval={CALENDAR_TIME_WHEEL_ITEM_HEIGHT}
-                    style={styles.calendarTimeWheel}
-                  >
-                    {CALENDAR_MINUTE_OPTIONS.map((minute) => {
-                      const active = selectedTime.minute === minute;
-
-                      return (
-                        <Pressable
-                          accessibilityRole="button"
-                          key={minute}
-                          onPress={() => updateCalendarTime('minute', minute)}
-                          style={styles.calendarTimeWheelItem}
-                        >
-                          <Text style={[
-                            styles.calendarTimeWheelText,
-                            active ? styles.calendarTimeWheelTextActive : null,
-                          ]}>
-                            {minute}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </View>
-            </View>
+              <Ionicons name="time-outline" size={19} color="#65748b" />
+            </Pressable>
           </View>
 
           <View style={styles.calendarField}>
@@ -7499,6 +7576,96 @@ function CalendarScreen({
           />
         </View>
         </ScrollView>
+        {datePickerOpen ? (
+          <View style={styles.calendarNativePickerLayer}>
+            <Pressable
+              accessibilityLabel="Luk datovælger"
+              onPress={() => setDatePickerOpen(false)}
+              style={styles.calendarNativePickerBackdrop}
+            />
+            <View style={[styles.chatModalPanel, styles.calendarNativePickerPanel]}>
+              <View style={styles.calendarNativePickerHeader}>
+                <Pressable
+                  accessibilityLabel="Luk"
+                  accessibilityRole="button"
+                  onPress={() => setDatePickerOpen(false)}
+                  style={({ pressed }) => [
+                    styles.calendarNativePickerCloseButton,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+                </Pressable>
+                <Text style={styles.calendarNativePickerTitle}>Vælg dato</Text>
+                <View style={styles.calendarNativePickerCloseSpacer} />
+              </View>
+              <DateTimePicker
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                is24Hour
+                locale="da-DK"
+                mode="date"
+                onChange={handleCalendarDateChange}
+                style={styles.calendarNativePicker}
+                value={calendarEventDateValue}
+              />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setDatePickerOpen(false)}
+                style={({ pressed }) => [
+                  styles.calendarNativePickerDoneButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.calendarNativePickerDoneText}>Færdig</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {calendarTimePickerOpen ? (
+          <View style={[styles.calendarNativePickerLayer, styles.calendarNativeTimePickerLayer]}>
+            <Pressable
+              accessibilityLabel="Luk tidsvælger"
+              onPress={() => setCalendarTimePickerOpen(false)}
+              style={styles.calendarNativePickerBackdrop}
+            />
+            <View style={[styles.calendarNativeTimePickerPanel, styles.calendarNativePickerSheetLayer]}>
+              <View style={styles.calendarNativePickerHeader}>
+                <Pressable
+                  accessibilityLabel="Luk"
+                  accessibilityRole="button"
+                  onPress={() => setCalendarTimePickerOpen(false)}
+                  style={({ pressed }) => [
+                    styles.calendarNativePickerCloseButton,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+                </Pressable>
+                <Text style={styles.calendarNativePickerTitle}>Vælg klokkeslet</Text>
+                <View style={styles.calendarNativePickerCloseSpacer} />
+              </View>
+              <DateTimePicker
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                is24Hour
+                locale="en-GB"
+                mode="time"
+                onChange={handleCalendarTimeChange}
+                style={[styles.calendarNativePicker, styles.calendarNativeTimePicker]}
+                value={calendarEventTimeValue}
+              />
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCalendarTimePickerOpen(false)}
+                style={({ pressed }) => [
+                  styles.calendarNativePickerDoneButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.calendarNativePickerDoneText}>Vælg tid</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
         {coverPickerOpen ? (
           <View style={styles.calendarCoverPickerLayer}>
             <Pressable
@@ -8365,7 +8532,7 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolCl
           <View style={styles.classBattleHeroCopy}>
             <ClassBattleTitle />
             <Text style={styles.classBattleIntroText}>
-              Hvem har udført flest gode gerninger og vundet flest dueller?
+              Hvem har udført flest gode gerninger og vundet flest dyster?
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -8705,7 +8872,9 @@ function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
 function DuelScreen({
   activeMember,
   activeMembers = [],
+  onCapsBalanceChange,
   schoolClass,
+  sessionToken,
 }) {
   const activeMemberId = String(activeMember?.id ?? '');
   const activeMemberName = activeMember?.displayName
@@ -8754,35 +8923,134 @@ function DuelScreen({
     return formatInputDate(date);
   }, []);
   const [duels, setDuels] = useState([]);
-  const [scope, setScope] = useState('active');
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [finishedDuelsOpen, setFinishedDuelsOpen] = useState(false);
+  const [judgeDuelsOpen, setJudgeDuelsOpen] = useState(false);
+  const [winnerPickerDuelId, setWinnerPickerDuelId] = useState('');
+  const [duelInfoOpen, setDuelInfoOpen] = useState(false);
   const [duelError, setDuelError] = useState('');
+  const [duelLoading, setDuelLoading] = useState(false);
+  const [duelSubmitting, setDuelSubmitting] = useState(false);
+  const [duelActionLoadingId, setDuelActionLoadingId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [opponentPickerOpen, setOpponentPickerOpen] = useState(false);
   const [selectedOpponentId, setSelectedOpponentId] = useState('');
+  const [judgeEnabled, setJudgeEnabled] = useState(false);
+  const [judgePickerOpen, setJudgePickerOpen] = useState(false);
+  const [selectedJudgeId, setSelectedJudgeId] = useState('');
+  const [duelMode, setDuelMode] = useState('versus');
   const [duelChallengeText, setDuelChallengeText] = useState('');
   const [duelStakeText, setDuelStakeText] = useState('');
   const [deadlineDate, setDeadlineDate] = useState(defaultDeadlineDate);
   const [deadlineTime, setDeadlineTime] = useState('18:00');
+  const [deadlinePickerOpen, setDeadlinePickerOpen] = useState(false);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [timePickerDraftHour, setTimePickerDraftHour] = useState('18');
+  const [timePickerDraftMinute, setTimePickerDraftMinute] = useState('00');
+  const [deadlineCalendarMonth, setDeadlineCalendarMonth] = useState(defaultDeadlineDate.slice(0, 7));
+  const duelModeMeta = getDystModeMeta(duelMode);
+  const selectedOpponent = selectedOpponentId ? opponentById[String(selectedOpponentId)] : null;
+  const selectedOpponentName = selectedOpponent ? getMemberName(selectedOpponent) : '';
+  const selectedJudge = selectedJudgeId ? opponentById[String(selectedJudgeId)] : null;
+  const selectedJudgeName = selectedJudge ? getMemberName(selectedJudge) : '';
+  const winnerPickerDuel = useMemo(() => (
+    duels.find((duel) => String(duel.id) === String(winnerPickerDuelId)) ?? null
+  ), [duels, winnerPickerDuelId]);
+  const deadlineDateLabel = useMemo(() => {
+    const parsed = new Date(`${deadlineDate}T12:00:00`);
 
-  const filterOptions = [
-    { id: 'active', label: 'Aktive' },
-    { id: 'pending', label: 'Afventer' },
-    { id: 'finished', label: 'Afsluttede' },
-    { id: 'all', label: 'Alle' },
-  ];
+    if (Number.isNaN(parsed.getTime())) {
+      return deadlineDate || 'Vælg dato';
+    }
+
+    return new Intl.DateTimeFormat('da-DK', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(parsed);
+  }, [deadlineDate]);
+  const [selectedDeadlineHour = '18', selectedDeadlineMinute = '00'] = String(deadlineTime || '18:00').split(':');
+  const deadlineDateValue = useMemo(() => {
+    const parsed = new Date(`${deadlineDate}T12:00:00`);
+
+    return Number.isNaN(parsed.getTime()) ? new Date(`${defaultDeadlineDate}T12:00:00`) : parsed;
+  }, [deadlineDate, defaultDeadlineDate]);
+  const deadlineTimeValue = useMemo(() => {
+    const [hour = '18', minute = '00'] = String(deadlineTime || '18:00').split(':');
+    const parsedHour = Number.parseInt(hour, 10);
+    const parsedMinute = Number.parseInt(minute, 10);
+    const date = new Date();
+
+    date.setHours(
+      Number.isFinite(parsedHour) ? parsedHour : 18,
+      Number.isFinite(parsedMinute) ? parsedMinute : 0,
+      0,
+      0,
+    );
+
+    return date;
+  }, [deadlineTime]);
+  const deadlineMonthDate = useMemo(() => {
+    const [year, month] = String(deadlineCalendarMonth || defaultDeadlineDate.slice(0, 7)).split('-').map(Number);
+    const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
+    const safeMonth = Number.isFinite(month) ? month - 1 : new Date().getMonth();
+
+    return new Date(safeYear, safeMonth, 1);
+  }, [deadlineCalendarMonth, defaultDeadlineDate]);
+  const deadlineMonthLabel = useMemo(() => (
+    new Intl.DateTimeFormat('da-DK', { month: 'long', year: 'numeric' }).format(deadlineMonthDate)
+  ), [deadlineMonthDate]);
+  const deadlineCalendarDays = useMemo(() => {
+    const year = deadlineMonthDate.getFullYear();
+    const month = deadlineMonthDate.getMonth();
+    const weekdayOffset = (new Date(year, month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const days = Array.from({ length: weekdayOffset }, () => null);
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      days.push(formatInputDate(new Date(year, month, day)));
+    }
+
+    while (days.length % 7 !== 0) {
+      days.push(null);
+    }
+
+    return days;
+  }, [deadlineMonthDate]);
+  const createScreenTranslateX = useRef(new Animated.Value(0)).current;
+  const createScreenWidthRef = useRef(APP_WINDOW_WIDTH);
+  const createScreenSwipeActiveRef = useRef(false);
+  const createScreenTouchStartRef = useRef(null);
+  const createScreenTouchLatestRef = useRef(null);
+  const [duelCountdownNow, setDuelCountdownNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setDuelCountdownNow(Date.now()), 60 * 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   const statusMeta = useMemo(() => ({
     awaitingOpponent: {
-      label: 'Venter på modstander',
+      label: 'Afventer svar',
       style: styles.duelStatusPillWarning,
     },
     awaitingCreatorConfirm: {
       label: 'Kræver din bekræftelse',
       style: styles.duelStatusPillWarning,
     },
+    awaitingResultConfirm: {
+      label: 'Afventer modpart',
+      style: styles.duelStatusPillWarning,
+    },
     active: {
       label: 'I spil',
       style: styles.duelStatusPillSuccess,
+    },
+    awaitingJudgeApproval: {
+      label: 'Afventer dommer',
+      style: styles.duelStatusPillWarning,
     },
     completed: {
       label: 'Afsluttet',
@@ -8796,22 +9064,66 @@ function DuelScreen({
       label: 'Annulleret',
       style: styles.duelStatusPillMuted,
     },
+    expired: {
+      label: 'Udløbet',
+      style: styles.duelStatusPillMuted,
+    },
   }), []);
+
+  const getAwaitingOpponentStatus = (duel) => {
+    const createdAt = new Date(duel?.createdAt ?? '').getTime();
+    const acceptWindowMs = 24 * 60 * 60 * 1000;
+    const urgentWindowMs = 2 * 60 * 60 * 1000;
+
+    if (!Number.isFinite(createdAt)) {
+      return statusMeta.awaitingOpponent;
+    }
+
+    const remainingMs = createdAt + acceptWindowMs - duelCountdownNow;
+
+    if (remainingMs <= 0) {
+      return {
+        ...statusMeta.awaitingOpponent,
+        label: 'Udløber nu',
+        style: styles.duelStatusPillDanger,
+      };
+    }
+
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / (60 * 1000)));
+    const label =
+      remainingMinutes >= 60
+        ? `Svarfrist: ${Math.floor(remainingMinutes / 60)}t`
+        : `Svarfrist: ${remainingMinutes}m`;
+
+    return {
+      ...statusMeta.awaitingOpponent,
+      label,
+      style: remainingMs <= urgentWindowMs ? styles.duelStatusPillDanger : styles.duelStatusPillWarning,
+    };
+  };
 
   const getDuelStatus = (duel) => {
     if (duel.status === 'awaitingOpponent') {
-      return statusMeta.awaitingOpponent;
+      return getAwaitingOpponentStatus(duel);
     }
 
     if (duel.status === 'awaitingCreatorConfirm') {
       return statusMeta.awaitingCreatorConfirm;
     }
 
+    if (duel.status === 'awaitingResultConfirm') {
+      return statusMeta.awaitingResultConfirm;
+    }
+
+    if (duel.status === 'awaitingJudgeApproval') {
+      return statusMeta.awaitingJudgeApproval;
+    }
+
     if (duel.status === 'completed') {
       return statusMeta.completed;
     }
 
-    if (duel.status === 'declined' || duel.status === 'cancelled') {
+    if (duel.status === 'declined' || duel.status === 'cancelled' || duel.status === 'expired') {
       return statusMeta[duel.status];
     }
 
@@ -8830,57 +9142,287 @@ function DuelScreen({
         return getMemberName(member).toLowerCase().includes(normalizedQuery);
       });
   }, [searchQuery, normalizedOpponents]);
+  const judgeRows = useMemo(() => (
+    normalizedOpponents.filter((member) => String(member.id) !== String(selectedOpponentId))
+  ), [normalizedOpponents, selectedOpponentId]);
 
-  const visibleDuels = useMemo(() => {
-    const rows = duels.filter((duel) => {
-      if (scope === 'all') {
-        return true;
-      }
+  const pendingDuels = useMemo(() => (
+    duels
+      .filter((duel) => duel.status === 'awaitingOpponent' || duel.status === 'awaitingCreatorConfirm')
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+  ), [duels]);
+  const judgeApprovalDuels = useMemo(() => (
+    duels
+      .filter((duel) => duel.status === 'awaitingJudgeApproval' && String(duel.judgeMemberId) === activeMemberId)
+      .sort((left, right) => new Date(right.judgeRequestedAt || right.updatedAt || right.createdAt).getTime() - new Date(left.judgeRequestedAt || left.updatedAt || left.createdAt).getTime())
+  ), [activeMemberId, duels]);
+  const activeDuels = useMemo(() => (
+    duels
+      .filter((duel) => duel.status === 'active' || duel.status === 'awaitingResultConfirm' || (duel.status === 'awaitingJudgeApproval' && String(duel.judgeMemberId) !== activeMemberId))
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+  ), [activeMemberId, duels]);
+  const finishedDuels = useMemo(() => (
+    duels
+      .filter((duel) => duel.status === 'completed' || duel.status === 'declined' || duel.status === 'cancelled' || duel.status === 'expired')
+      .sort((left, right) => new Date(duelFinishedTimestamp(right)).getTime() - new Date(duelFinishedTimestamp(left)).getTime())
+  ), [duels]);
 
-      if (scope === 'active') {
-        return duel.status === 'active' || duel.status === 'awaitingCreatorConfirm' || duel.status === 'awaitingOpponent';
-      }
+  const applyDuelPayload = useCallback((data) => {
+    if (Array.isArray(data?.duels)) {
+      setDuels(data.duels);
+    } else if (data?.duel) {
+      setDuels((current) => {
+        const nextDuel = data.duel;
+        const exists = current.some((duel) => String(duel.id) === String(nextDuel.id));
+        const rows = exists
+          ? current.map((duel) => (String(duel.id) === String(nextDuel.id) ? nextDuel : duel))
+          : [nextDuel, ...current];
 
-      if (scope === 'pending') {
-        return duel.status === 'awaitingOpponent' || duel.status === 'awaitingCreatorConfirm';
-      }
+        return rows.sort((left, right) => (
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        ));
+      });
+    }
 
-      return duel.status === 'completed' || duel.status === 'declined' || duel.status === 'cancelled';
+    const nextCapsBalance = Number(data?.currentMember?.capsBalance);
+    if (Number.isFinite(nextCapsBalance)) {
+      onCapsBalanceChange?.(nextCapsBalance);
+    }
+  }, [onCapsBalanceChange]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      setDuels([]);
+      return undefined;
+    }
+
+    let isMounted = true;
+    setDuelLoading(true);
+    setDuelError('');
+
+    apiFetch('/duels', { authToken: sessionToken })
+      .then((data) => {
+        if (isMounted) {
+          applyDuelPayload(data);
+        }
+      })
+      .catch((apiError) => {
+        if (isMounted) {
+          setDuelError(apiError.message || 'Dyster kunne ikke hentes.');
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setDuelLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [applyDuelPayload, sessionToken]);
+
+  const finishReturnToDuelList = useCallback(() => {
+    Keyboard.dismiss();
+    createScreenSwipeActiveRef.current = false;
+    createScreenTouchStartRef.current = null;
+    createScreenTouchLatestRef.current = null;
+    setCreateModalOpen(false);
+    setDuelError('');
+
+    requestAnimationFrame(() => {
+      createScreenTranslateX.setValue(0);
     });
+  }, [createScreenTranslateX]);
 
-    return [...rows].sort((left, right) => (
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-    ));
-  }, [duels, scope]);
+  const runCreateScreenOpenTransition = useCallback(() => {
+    createScreenTranslateX.stopAnimation();
+    createScreenTranslateX.setValue(Math.max(createScreenWidthRef.current, APP_WINDOW_WIDTH));
+
+    requestAnimationFrame(() => {
+      Animated.timing(createScreenTranslateX, {
+        toValue: 0,
+        duration: 285,
+        easing: Easing.out(Easing.poly(4)),
+        useNativeDriver: false,
+      }).start();
+    });
+  }, [createScreenTranslateX]);
+
+  const resetCreateScreenDrag = useCallback(() => {
+    createScreenSwipeActiveRef.current = false;
+
+    Animated.spring(createScreenTranslateX, {
+      toValue: 0,
+      tension: 135,
+      friction: 19,
+      useNativeDriver: false,
+    }).start();
+  }, [createScreenTranslateX]);
+
+  const returnToDuelList = useCallback(() => {
+    Keyboard.dismiss();
+
+    Animated.timing(createScreenTranslateX, {
+      toValue: Math.max(createScreenWidthRef.current, APP_WINDOW_WIDTH),
+      duration: 245,
+      easing: Easing.out(Easing.poly(4)),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        finishReturnToDuelList();
+      }
+    });
+  }, [createScreenTranslateX, finishReturnToDuelList]);
 
   const openCreateModal = () => {
     setDuelError('');
     setSearchQuery('');
     setSelectedOpponentId('');
+    setDuelMode('versus');
     setDuelChallengeText('');
     setDuelStakeText('');
     setDeadlineDate(defaultDeadlineDate);
     setDeadlineTime('18:00');
     setCreateModalOpen(true);
+    runCreateScreenOpenTransition();
   };
 
-  const closeCreateModal = () => {
-    setCreateModalOpen(false);
-    setDuelError('');
-  };
+  const createScreenTouchHandlers = useMemo(() => {
+    const touchFromEvent = (event) => event.nativeEvent.touches?.[0] ?? event.nativeEvent;
+
+    const releaseCreateScreenSwipe = () => {
+      const latest = createScreenTouchLatestRef.current;
+      const start = createScreenTouchStartRef.current;
+
+      if (!latest || !start || !createScreenSwipeActiveRef.current) {
+        createScreenTouchStartRef.current = null;
+        createScreenTouchLatestRef.current = null;
+        createScreenSwipeActiveRef.current = false;
+        return;
+      }
+
+      const elapsed = Math.max(1, latest.time - start.time);
+      const velocityX = latest.dx / elapsed;
+      const movedFarEnough = latest.dx > Math.max(
+        CHAT_THREAD_BACK_SWIPE_DISTANCE,
+        createScreenWidthRef.current * 0.08,
+      );
+      const flickedRight = latest.dx > CHAT_THREAD_BACK_SWIPE_FAST_DISTANCE
+        && velocityX > CHAT_THREAD_BACK_SWIPE_VELOCITY;
+
+      createScreenTouchStartRef.current = null;
+      createScreenTouchLatestRef.current = null;
+      createScreenSwipeActiveRef.current = false;
+
+      if (movedFarEnough || flickedRight) {
+        returnToDuelList();
+        return;
+      }
+
+      resetCreateScreenDrag();
+    };
+
+    return {
+      onTouchStart: (event) => {
+        const touch = touchFromEvent(event);
+
+        if (!Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) {
+          return;
+        }
+
+        createScreenTouchStartRef.current = {
+          x: touch.pageX,
+          y: touch.pageY,
+          time: Date.now(),
+        };
+        createScreenTouchLatestRef.current = null;
+        createScreenSwipeActiveRef.current = false;
+      },
+      onTouchMove: (event) => {
+        const start = createScreenTouchStartRef.current;
+        const touch = touchFromEvent(event);
+
+        if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) {
+          return;
+        }
+
+        const dx = touch.pageX - start.x;
+        const dy = touch.pageY - start.y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        if (dx <= CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE) {
+          return;
+        }
+
+        const isSwipeIntent = createScreenSwipeActiveRef.current
+          || (
+            absDx > CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE
+            && absDx > absDy * CHAT_THREAD_BACK_SWIPE_VERTICAL_RATIO
+          );
+
+        if (!isSwipeIntent) {
+          return;
+        }
+
+        if (!createScreenSwipeActiveRef.current) {
+          Keyboard.dismiss();
+          createScreenTranslateX.stopAnimation();
+          createScreenSwipeActiveRef.current = true;
+        }
+
+        createScreenTouchLatestRef.current = {
+          dx,
+          dy,
+          time: Date.now(),
+        };
+        createScreenTranslateX.setValue(Math.min(Math.max(dx, 0), createScreenWidthRef.current));
+      },
+      onTouchEnd: releaseCreateScreenSwipe,
+      onTouchCancel: releaseCreateScreenSwipe,
+    };
+  }, [createScreenTranslateX, resetCreateScreenDrag, returnToDuelList]);
 
   const resetDuelFields = () => {
     setSearchQuery('');
+    setOpponentPickerOpen(false);
     setSelectedOpponentId('');
+    setJudgeEnabled(false);
+    setJudgePickerOpen(false);
+    setSelectedJudgeId('');
+    setDuelMode('versus');
     setDuelChallengeText('');
     setDuelStakeText('');
     setDeadlineDate(defaultDeadlineDate);
     setDeadlineTime('18:00');
+    setDeadlinePickerOpen(false);
+    setTimePickerOpen(false);
+    setDeadlineCalendarMonth(defaultDeadlineDate.slice(0, 7));
   };
 
-  const submitDuel = () => {
+  const submitDuel = async () => {
+    if (duelSubmitting) {
+      return;
+    }
+
+    if (!sessionToken) {
+      setDuelError('Login mangler.');
+      return;
+    }
+
     if (!selectedOpponentId) {
       setDuelError('Vælg en modstander.');
+      return;
+    }
+
+    if (judgeEnabled && !selectedJudgeId) {
+      setDuelError('Vælg en dommer.');
+      return;
+    }
+
+    if (judgeEnabled && String(selectedJudgeId) === String(selectedOpponentId)) {
+      setDuelError('Dommeren skal være en anden end modstanderen.');
       return;
     }
 
@@ -8903,151 +9445,1176 @@ function DuelScreen({
       return;
     }
 
-    const id = `duel-${Date.now()}`;
+    setDuelSubmitting(true);
+    setDuelError('');
 
-    setDuels((current) => [
-      {
-        id,
-        fromMemberId: activeMemberId,
-        toMemberId: selectedOpponentId,
-        challenge: normalizedChallenge,
-        stake: stakeValue,
-        deadlineAt,
-        status: 'awaitingOpponent',
-        confirmedBy: [],
-        createdAt: new Date().toISOString(),
-      },
-      ...current,
-    ]);
+    try {
+      const data = await apiFetch('/duels', {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({
+          toMemberId: selectedOpponentId,
+          judgeMemberId: judgeEnabled ? selectedJudgeId : null,
+          mode: duelMode,
+          challenge: normalizedChallenge,
+          stake: stakeValue,
+          deadlineAt,
+        }),
+      });
 
-    resetDuelFields();
-    setCreateModalOpen(false);
+      applyDuelPayload(data);
+      resetDuelFields();
+      finishReturnToDuelList();
+    } catch (apiError) {
+      setDuelError(apiError.message || 'Dysten kunne ikke oprettes.');
+    } finally {
+      setDuelSubmitting(false);
+    }
   };
 
-  const respondToDuel = (duelId, action) => {
-    setDuels((current) => current.map((duel) => {
-      if (duel.id !== duelId) {
-        return duel;
-      }
+  const respondToDuel = async (duelId, action, payload = null) => {
+    if (!sessionToken || duelActionLoadingId) {
+      return;
+    }
 
-      if (duel.status === 'awaitingOpponent' && action === 'accept') {
-        return {
-          ...duel,
-          status: 'awaitingCreatorConfirm',
-          confirmedBy: ['target'],
-          updatedAt: new Date().toISOString(),
-        };
-      }
+    const endpointAction = {
+      accept: 'accept',
+      decline: 'decline',
+      cancel: 'cancel',
+      confirm: 'confirm',
+      complete: 'complete',
+      approve: 'approve',
+      reject: 'reject',
+    }[action];
 
-      if (duel.status === 'awaitingOpponent' && action === 'decline') {
-        return {
-          ...duel,
-          status: 'declined',
-          updatedAt: new Date().toISOString(),
-        };
-      }
+    if (!endpointAction) {
+      return;
+    }
 
-      if (duel.status === 'awaitingOpponent' && action === 'cancel') {
-        return {
-          ...duel,
-          status: 'cancelled',
-          updatedAt: new Date().toISOString(),
-        };
-      }
+    setDuelActionLoadingId(`${duelId}:${action}`);
+    setDuelError('');
 
-      if (duel.status === 'awaitingCreatorConfirm' && action === 'confirm') {
-        return {
-          ...duel,
-          status: 'active',
-          confirmedBy: ['target', 'creator'],
-          updatedAt: new Date().toISOString(),
-        };
-      }
+    try {
+      const data = await apiFetch(`/duels/${encodeURIComponent(duelId)}/${endpointAction}`, {
+        authToken: sessionToken,
+        method: 'POST',
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+      });
 
-      if (duel.status === 'active' && action === 'complete') {
-        return {
-          ...duel,
-          status: 'completed',
-          updatedAt: new Date().toISOString(),
-        };
+      applyDuelPayload(data);
+      if (action === 'complete') {
+        setWinnerPickerDuelId('');
       }
-
-      return duel;
-    }));
+    } catch (apiError) {
+      setDuelError(apiError.message || 'Dysten kunne ikke opdateres.');
+    } finally {
+      setDuelActionLoadingId('');
+    }
   };
+
+  const openDeadlinePicker = () => {
+    setTimePickerOpen(false);
+    setDeadlineCalendarMonth(/^\d{4}-\d{2}/.test(deadlineDate) ? deadlineDate.slice(0, 7) : defaultDeadlineDate.slice(0, 7));
+    setDeadlinePickerOpen(true);
+  };
+
+  const openTimePicker = () => {
+    setDeadlinePickerOpen(false);
+    setTimePickerDraftHour(DYST_TIME_HOURS.includes(selectedDeadlineHour) ? selectedDeadlineHour : '18');
+    setTimePickerDraftMinute(DYST_TIME_MINUTES.includes(selectedDeadlineMinute) ? selectedDeadlineMinute : '00');
+    setTimePickerOpen(true);
+  };
+
+  const confirmTimePicker = () => {
+    setDeadlineTime(`${timePickerDraftHour}:${timePickerDraftMinute}`);
+    setTimePickerOpen(false);
+  };
+
+  const handleDeadlineDateChange = (event, selectedDate) => {
+    if (Platform.OS !== 'ios') {
+      setDeadlinePickerOpen(false);
+    }
+
+    if (event?.type === 'dismissed' || !selectedDate) {
+      return;
+    }
+
+    setDeadlineDate(formatInputDate(selectedDate));
+  };
+
+  const handleDeadlineTimeChange = (event, selectedDate) => {
+    if (Platform.OS !== 'ios') {
+      setTimePickerOpen(false);
+    }
+
+    if (event?.type === 'dismissed' || !selectedDate) {
+      return;
+    }
+
+    const hours = String(selectedDate.getHours()).padStart(2, '0');
+    const minutes = String(selectedDate.getMinutes()).padStart(2, '0');
+
+    setDeadlineTime(`${hours}:${minutes}`);
+  };
+
+  const changeDeadlineMonth = (direction) => {
+    const nextMonth = new Date(deadlineMonthDate.getFullYear(), deadlineMonthDate.getMonth() + direction, 1);
+    setDeadlineCalendarMonth(formatInputDate(nextMonth).slice(0, 7));
+  };
+
+  const renderDuelCard = (duel) => {
+    const isCreator = String(duel.fromMemberId) === activeMemberId;
+    const opponentId = isCreator ? duel.toMemberId : duel.fromMemberId;
+    const opponent = opponentById[String(opponentId)] ?? activeMember;
+    const opponentName = getMemberName(opponent);
+    const actionStatus = getDuelStatus(duel);
+    const deadlineLabel = formatDateTime(duel.deadlineAt);
+    const creatorName = getMemberName(isCreator ? activeMember : opponentById[String(duel.fromMemberId)] ?? activeMember);
+    const duelTitle = `${creatorName} vs ${opponentName}`;
+    const proposedWinnerName = getMemberName(String(duel.winnerMemberId) === activeMemberId ? activeMember : opponentById[String(duel.winnerMemberId)]);
+    const resultProposerIsMe = String(duel.completedByMemberId ?? '') === activeMemberId;
+
+    return (
+                  <View
+                    key={duel.id}
+                    style={[
+                      styles.duelCard,
+                      duel.status === 'awaitingOpponent'
+                        ? { backgroundColor: '#EAF6FF', borderColor: '#B7DDF7' }
+                        : null,
+                    ]}
+                  >
+        <View style={styles.duelCardHeader}>
+          <Avatar
+            profile={opponent}
+            variant="smallCircle"
+          />
+          <View style={styles.duelCardCopy}>
+            <Text numberOfLines={1} style={styles.duelCardTitle}>
+              {duelTitle}
+            </Text>
+          </View>
+          <View style={[styles.duelStatusPill, actionStatus.style]}>
+            <Text style={styles.duelStatusPillText}>{actionStatus.label}</Text>
+          </View>
+        </View>
+
+        <Text numberOfLines={2} style={styles.duelCardChallenge}>{duel.challenge}</Text>
+
+          <View style={styles.duelCardMetaRow}>
+            <View style={styles.duelCardMetaItem}>
+              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.ink} />
+              <Text numberOfLines={1} style={styles.duelMetaText}>{getDystModeMeta(duel.mode).label}</Text>
+            </View>
+            <View style={styles.duelCardMetaItem}>
+              <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
+              <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+            </View>
+          <View style={styles.duelCardMetaItem}>
+            <Ionicons name="time-outline" size={14} color={STUDOS_THEME.blue} />
+            <Text numberOfLines={1} style={styles.duelMetaText}>Deadline: {deadlineLabel || 'Ikke sat'}</Text>
+          </View>
+          {duel.status === 'awaitingResultConfirm' ? (
+            <View style={styles.duelCardMetaItem}>
+              <Ionicons name="trophy-outline" size={14} color={STUDOS_THEME.red} />
+              <Text numberOfLines={1} style={styles.duelMetaText}>Foreslået: {proposedWinnerName}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.duelCardActionRow}>
+          {duel.status === 'awaitingOpponent' ? (
+            isCreator ? (
+              <Pressable
+                accessibilityLabel="Annuller denne dyst"
+                disabled={Boolean(duelActionLoadingId)}
+                onPress={() => respondToDuel(duel.id, 'cancel')}
+                style={({ pressed }) => [
+                  styles.duelCardGhostAction,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.duelCardGhostActionText}>Annuller</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.duelCardSplitActionRow}>
+                <Pressable
+                  accessibilityLabel="Afvis dyst"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'decline')}
+                  style={({ pressed }) => [
+                    styles.duelCardRejectAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Accepter dyst"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'accept')}
+                  style={({ pressed }) => [
+                    styles.duelCardAcceptAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Text style={styles.duelCardAcceptActionText}>Accepter</Text>
+                </Pressable>
+              </View>
+            )
+          ) : null}
+
+          {duel.status === 'awaitingCreatorConfirm' ? (
+            isCreator ? (
+              <Pressable
+                accessibilityLabel="Bekræft dyst-overførsel"
+                disabled={Boolean(duelActionLoadingId)}
+                onPress={() => respondToDuel(duel.id, 'confirm')}
+                style={({ pressed }) => [
+                  styles.duelCardAction,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.duelCardActionText}>Bekræft</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                disabled
+                style={styles.duelCardGhostAction}
+              >
+                <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer bekræftelse</Text>
+              </Pressable>
+            )
+          ) : null}
+
+          {duel.status === 'active' ? (
+            <Pressable
+              accessibilityLabel={duel.mode === 'versus' ? 'Vælg vinder' : 'Markér dyst som gennemført'}
+              disabled={Boolean(duelActionLoadingId)}
+              onPress={() => {
+                if (duel.mode === 'versus') {
+                  setWinnerPickerDuelId(duel.id);
+                  return;
+                }
+
+                respondToDuel(duel.id, 'complete');
+              }}
+              style={({ pressed }) => [
+                styles.duelCardGhostAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={styles.duelCardGhostActionText}>{duel.mode === 'versus' ? 'Vælg vinder' : duel.judgeMemberId ? 'Send til dommer' : 'Markér gennemført'}</Text>
+            </Pressable>
+          ) : null}
+          {duel.status === 'awaitingResultConfirm' ? (
+            resultProposerIsMe ? (
+              <Pressable
+                disabled
+                style={styles.duelCardGhostAction}
+              >
+                <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer modpart</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.duelCardSplitActionRow}>
+                <Pressable
+                  accessibilityLabel="Afvis foreslået vinder"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'reject')}
+                  style={({ pressed }) => [
+                    styles.duelCardRejectAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Bekræft foreslået vinder"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'approve')}
+                  style={({ pressed }) => [
+                    styles.duelCardAcceptAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Text style={styles.duelCardAcceptActionText}>Bekræft</Text>
+                </Pressable>
+              </View>
+            )
+          ) : null}
+          {duel.status === 'awaitingJudgeApproval' ? (
+            <Pressable
+              disabled
+              style={styles.duelCardGhostAction}
+            >
+              <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer dommer</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
+  const renderJudgeApprovalCard = (duel) => {
+    const creator = opponentById[String(duel.fromMemberId)];
+    const opponent = opponentById[String(duel.toMemberId)];
+    const creatorName = getMemberName(creator);
+    const opponentName = getMemberName(opponent);
+    const proposedWinnerName = getMemberName(opponentById[String(duel.winnerMemberId)]);
+    const deadlineLabel = formatDateTime(duel.deadlineAt);
+
+    return (
+      <View key={duel.id} style={[styles.duelCard, styles.duelJudgeApprovalCard]}>
+        <View style={styles.duelCardHeader}>
+          <Ionicons name="shield-checkmark-outline" size={24} color={STUDOS_THEME.ink} />
+          <View style={styles.duelCardCopy}>
+            <Text numberOfLines={1} style={styles.duelCardTitle}>
+              {creatorName} vs {opponentName}
+            </Text>
+          </View>
+          <View style={[styles.duelStatusPill, styles.duelStatusPillWarning]}>
+            <Text style={styles.duelStatusPillText}>Du er dommer</Text>
+          </View>
+        </View>
+
+        <Text style={styles.duelCardChallenge}>{duel.challenge}</Text>
+
+        <View style={styles.duelCardMetaRow}>
+          <View style={styles.duelCardMetaItem}>
+            <Ionicons name="trophy-outline" size={14} color={STUDOS_THEME.red} />
+            <Text numberOfLines={1} style={styles.duelMetaText}>Vinder: {proposedWinnerName}</Text>
+          </View>
+          <View style={styles.duelCardMetaItem}>
+            <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
+            <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+          </View>
+        </View>
+
+        <View style={styles.duelCardSplitActionRow}>
+          <Pressable
+            accessibilityLabel="Afvis dommergodkendelse"
+            disabled={Boolean(duelActionLoadingId)}
+            onPress={() => respondToDuel(duel.id, 'reject')}
+            style={({ pressed }) => [
+              styles.duelCardRejectAction,
+              styles.duelCardSplitAction,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Godkend dommergodkendelse"
+            disabled={Boolean(duelActionLoadingId)}
+            onPress={() => respondToDuel(duel.id, 'approve')}
+            style={({ pressed }) => [
+              styles.duelCardAcceptAction,
+              styles.duelCardSplitAction,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={styles.duelCardAcceptActionText}>Godkend</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  };
+
+  const getFinishedDuelResult = (duel) => {
+    if (duel.status === 'declined') {
+      return { label: 'Afvist', style: styles.duelArchiveResultNeutral, textStyle: styles.duelArchiveResultTextDark };
+    }
+
+    if (duel.status === 'cancelled') {
+      return { label: 'Annulleret', style: styles.duelArchiveResultMuted, textStyle: styles.duelArchiveResultTextDark };
+    }
+
+    if (duel.status === 'expired') {
+      return { label: 'Udløbet', style: styles.duelArchiveResultMuted, textStyle: styles.duelArchiveResultTextDark };
+    }
+
+    if (duel.status === 'completed') {
+      return String(duel.winnerMemberId) === activeMemberId
+        ? { label: 'Vundet', style: styles.duelArchiveResultWin, textStyle: styles.duelArchiveResultTextLight }
+        : { label: 'Tabt', style: styles.duelArchiveResultLoss, textStyle: styles.duelArchiveResultTextLight };
+    }
+
+    return { label: 'Afsluttet', style: styles.duelArchiveResultMuted, textStyle: styles.duelArchiveResultTextDark };
+  };
+
+  const deadlinePickerModal = deadlinePickerOpen ? (
+    <View style={styles.duelDeadlinePickerOverlay}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Luk deadline-vælger"
+        onPress={() => setDeadlinePickerOpen(false)}
+        style={styles.duelPickerBackdrop}
+      />
+      <View style={[styles.chatModalPanel, styles.duelDeadlinePickerPanel, styles.duelPickerSheetLayer]}>
+        <View style={styles.duelDeadlinePickerHeader}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setDeadlinePickerOpen(false)}
+            style={({ pressed }) => [styles.duelDeadlinePickerNav, pressed ? styles.footerItemPressed : null]}
+          >
+            <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+          </Pressable>
+          <Text style={styles.duelDeadlinePickerMonth}>Vælg dato</Text>
+          <View style={styles.duelDeadlinePickerNavSpacer} />
+        </View>
+
+        <DateTimePicker
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          is24Hour
+          locale="da-DK"
+          minimumDate={new Date()}
+          mode="date"
+          onChange={handleDeadlineDateChange}
+          style={styles.duelNativePicker}
+          value={deadlineDateValue}
+        />
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setDeadlinePickerOpen(false)}
+          style={({ pressed }) => [styles.duelDeadlineDoneButton, pressed ? styles.footerItemPressed : null]}
+        >
+          <Text style={styles.duelDeadlineDoneButtonText}>Færdig</Text>
+        </Pressable>
+      </View>
+    </View>
+  ) : null;
+
+  const timePickerModal = timePickerOpen ? (
+    <View style={styles.duelTimePickerOverlay}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Luk klokkeslet-vælger"
+        onPress={() => setTimePickerOpen(false)}
+        style={styles.duelPickerBackdrop}
+      />
+      <View style={[styles.duelTimePickerSheet, styles.duelPickerSheetLayer]}>
+        <View style={styles.duelTimePickerHeader}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setTimePickerOpen(false)}
+            style={({ pressed }) => [styles.duelDeadlinePickerNav, pressed ? styles.footerItemPressed : null]}
+          >
+            <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+          </Pressable>
+          <Text style={styles.duelTimePickerTitleText}>Vælg klokkeslet</Text>
+          <View style={styles.duelDeadlinePickerNavSpacer} />
+        </View>
+
+        <DateTimePicker
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          is24Hour
+          locale="en-GB"
+          minuteInterval={1}
+          mode="time"
+          onChange={handleDeadlineTimeChange}
+          style={[styles.duelNativePicker, styles.duelNativeTimePicker]}
+          value={deadlineTimeValue}
+        />
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setTimePickerOpen(false)}
+          style={({ pressed }) => [styles.duelDeadlineDoneButton, pressed ? styles.footerItemPressed : null]}
+        >
+          <Text style={styles.duelDeadlineDoneButtonText}>Vælg tid</Text>
+        </Pressable>
+      </View>
+    </View>
+  ) : null;
+
+  const winnerPickerModal = winnerPickerDuel ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setWinnerPickerDuelId('')}
+      transparent
+      visible={Boolean(winnerPickerDuel)}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk vælg vinder"
+          onPress={() => setWinnerPickerDuelId('')}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelWinnerPickerPanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Mod hinanden</Text>
+              <Text style={styles.chatModalTitle}>Vælg vinder</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk vælg vinder"
+              onPress={() => setWinnerPickerDuelId('')}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          <Text style={styles.duelWinnerPickerText}>
+            Vælg hvem der vandt dysten. {winnerPickerDuel.judgeMemberId ? 'Dommeren skal godkende valget, før Caps udbetales.' : 'Modparten skal bekræfte valget, før Caps udbetales.'}
+          </Text>
+
+          <View style={styles.chatModalMemberList}>
+            {[winnerPickerDuel.fromMemberId, winnerPickerDuel.toMemberId].map((memberId) => {
+              const member = String(memberId) === activeMemberId ? activeMember : opponentById[String(memberId)];
+              const memberName = getMemberName(member);
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={memberId}
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(winnerPickerDuel.id, 'complete', { winnerMemberId: memberId })}
+                  style={({ pressed }) => [
+                    styles.chatModalMemberRow,
+                    styles.duelWinnerPickerRow,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Avatar profile={member} variant="smallCircle" />
+                  <Text numberOfLines={1} style={styles.chatModalMemberName}>{memberName}</Text>
+                  <Ionicons name="trophy-outline" size={19} color={STUDOS_THEME.red} />
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  ) : null;
+
+  const createDuelOverlay = createModalOpen ? (
+    <Modal
+      animationType="none"
+      onRequestClose={returnToDuelList}
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      transparent
+      visible={createModalOpen}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.duelCreateOverlayHost}
+      >
+        <View style={styles.duelCreateOverlayContent}>
+          <Animated.View
+        {...createScreenTouchHandlers}
+        onLayout={(event) => {
+          createScreenWidthRef.current = Math.max(event.nativeEvent.layout.width, 1);
+        }}
+        style={[
+          styles.duelCreateSwipeFrame,
+          { transform: [{ translateX: createScreenTranslateX }] },
+        ]}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[styles.flowStack, styles.duelCreateScreen]}
+        >
+          <View style={styles.duelCreateScreenHeader} {...createScreenTouchHandlers}>
+          <Pressable
+            accessibilityLabel="Tilbage til dyster"
+            onPress={returnToDuelList}
+            style={({ pressed }) => [
+              styles.duelCreateBackButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+            <Text style={styles.duelCreateBackText}>Dyst</Text>
+          </Pressable>
+          <DuelTitleGraphic style={styles.duelCreateHeaderLogo} />
+        </View>
+
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={styles.duelCreateScreenScroll}
+          contentContainerStyle={styles.duelCreateScreenContent}
+          {...createScreenTouchHandlers}
+        >
+          <View style={styles.duelModePanel}>
+            <Text style={styles.label}>Dyst-type</Text>
+            <View style={styles.duelModeSwitch}>
+              {DYST_MODE_OPTIONS.map((option) => {
+                const selected = duelMode === option.id;
+
+                return (
+                  <Pressable
+                    key={option.id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => setDuelMode(option.id)}
+                    style={({ pressed }) => [
+                      styles.duelModeOption,
+                      selected ? styles.duelModeOptionActive : null,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <Text style={[styles.duelModeOptionText, selected ? styles.duelModeOptionTextActive : null]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.duelModeHelper}>{duelModeMeta.helper}</Text>
+          </View>
+
+          {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
+
+          <View style={styles.duelOpponentPicker}>
+            <Text style={styles.label}>Modstander</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: opponentPickerOpen }}
+              onPress={() => setOpponentPickerOpen((open) => !open)}
+              style={({ pressed }) => [
+                styles.duelOpponentPickerButton,
+                selectedOpponentId ? styles.duelOpponentPickerButtonSelected : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.duelOpponentPickerCopy}>
+                <Text numberOfLines={1} style={styles.duelOpponentPickerTitle}>
+                  {selectedOpponentName || 'Vælg modstander'}
+                </Text>
+                <Text numberOfLines={1} style={styles.duelOpponentPickerMeta}>
+                  {selectedOpponentName ? 'Tryk for at ændre' : 'Fold listen ud og vælg personen'}
+                </Text>
+              </View>
+              <Ionicons name={opponentPickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+
+            {opponentPickerOpen ? (
+              <View style={styles.duelOpponentPickerPanel}>
+                <View style={styles.chatModalSearchField}>
+                  <Ionicons name="search" size={16} color="#65748b" />
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onChangeText={setSearchQuery}
+                    placeholder="Søg modstander"
+                    placeholderTextColor="#8f9aaa"
+                    style={styles.chatModalSearchInput}
+                    value={searchQuery}
+                  />
+                  {searchQuery ? (
+                    <Pressable
+                      onPress={() => setSearchQuery('')}
+                      style={({ pressed }) => [pressed ? styles.footerItemPressed : null]}
+                    >
+                      <Ionicons name="close-circle" size={16} color="#a4afbf" />
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                {opponentRows.length === 0 ? (
+                  <Text style={styles.emptyText}>
+                    Ingen modstandere her - inviter en ven til crewet eller vent på, at de tilmelder sig.
+                  </Text>
+                ) : (
+                  <ScrollView style={styles.duelOpponentList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                    <View style={styles.chatModalMemberList}>
+                      {opponentRows.map((member) => {
+                        const rowId = String(member.id);
+                        const rowName = getMemberName(member);
+
+                        return (
+                          <Pressable
+                            key={rowId}
+                            onPress={() => {
+                              setSelectedOpponentId(rowId);
+                              if (String(selectedJudgeId) === rowId) {
+                                setSelectedJudgeId('');
+                              }
+                              setOpponentPickerOpen(false);
+                            }}
+                            style={({ pressed }) => [
+                              styles.chatModalMemberRow,
+                              styles.duelOpponentRow,
+                              selectedOpponentId === rowId ? styles.chatModalMemberRowSelected : null,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Avatar profile={member} variant="smallCircle" />
+                            <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
+                            <Ionicons
+                              name={selectedOpponentId === rowId ? 'radio-button-on' : 'radio-button-off'}
+                              size={18}
+                              color={selectedOpponentId === rowId ? STUDOS_THEME.red : '#a4afbf'}
+                            />
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                )}
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>{duelModeMeta.challengeLabel}</Text>
+            <TextInput
+              autoCapitalize="sentences"
+              autoCorrect={false}
+              multiline
+              numberOfLines={3}
+              onChangeText={setDuelChallengeText}
+              placeholder={duelModeMeta.placeholder}
+              placeholderTextColor="#8b93a1"
+              style={[styles.input, styles.duelModalTextarea]}
+              textAlignVertical="top"
+              value={duelChallengeText}
+            />
+          </View>
+
+          <View style={styles.duelDeadlineSplitRow}>
+            <View style={[styles.field, styles.duelDeadlineDateField]}>
+              <Text style={styles.label}>Dato</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openDeadlinePicker}
+                style={({ pressed }) => [
+                  styles.duelDeadlineButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={styles.duelDeadlineButtonCopy}>
+                  <Text numberOfLines={1} style={styles.duelDeadlineButtonTitle}>{deadlineDateLabel}</Text>
+                  <Text numberOfLines={1} style={styles.duelDeadlineButtonMeta}>Tryk for kalender</Text>
+                </View>
+                <Ionicons name="calendar-outline" size={21} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <View style={[styles.field, styles.duelDeadlineTimeField]}>
+              <Text style={styles.label}>Klokkeslet</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openTimePicker}
+                style={({ pressed }) => [
+                  styles.duelTimePickerButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={styles.duelTimePickerCopy}>
+                  <Text numberOfLines={1} style={styles.duelTimePickerTitle}>{deadlineTime}</Text>
+                  <Text numberOfLines={1} style={styles.duelTimePickerMeta}>Vælg tid</Text>
+                </View>
+                <Ionicons name="time-outline" size={20} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={[styles.field, styles.duelStakeField]}>
+            <Text style={styles.label}>Indsats (Caps)</Text>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="number-pad"
+              onChangeText={setDuelStakeText}
+              placeholder="Fx 50"
+              placeholderTextColor="#8b93a1"
+              style={styles.input}
+              value={duelStakeText}
+            />
+          </View>
+
+          <View style={styles.duelJudgePanel}>
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: judgeEnabled }}
+              onPress={() => {
+                setJudgeEnabled((enabled) => {
+                  const nextEnabled = !enabled;
+
+                  if (!nextEnabled) {
+                    setJudgePickerOpen(false);
+                    setSelectedJudgeId('');
+                  }
+
+                  return nextEnabled;
+                });
+              }}
+              style={({ pressed }) => [
+                styles.duelJudgeToggleCard,
+                judgeEnabled ? styles.duelJudgeToggleCardActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.duelJudgeToggleIcon}>
+                <Ionicons name="shield-checkmark-outline" size={19} color={STUDOS_THEME.ink} />
+              </View>
+              <View style={styles.duelJudgeToggleCopy}>
+                <Text style={styles.duelJudgeToggleTitle}>Vidne / dommer</Text>
+                <Text style={styles.duelJudgeToggleText}>Lad en tredjepart bekræfte resultatet.</Text>
+              </View>
+              <View style={[styles.duelJudgeSwitch, judgeEnabled ? styles.duelJudgeSwitchActive : null]}>
+                <View style={[styles.duelJudgeSwitchKnob, judgeEnabled ? styles.duelJudgeSwitchKnobActive : null]} />
+              </View>
+            </Pressable>
+
+            {judgeEnabled ? (
+              <View style={styles.duelJudgePicker}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: judgePickerOpen }}
+                  onPress={() => setJudgePickerOpen((open) => !open)}
+                  style={({ pressed }) => [
+                    styles.duelOpponentPickerButton,
+                    selectedJudgeId ? styles.duelOpponentPickerButtonSelected : null,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <View style={styles.duelOpponentPickerCopy}>
+                    <Text numberOfLines={1} style={styles.duelOpponentPickerTitle}>
+                      {selectedJudgeName || 'Vælg dommer'}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.duelOpponentPickerMeta}>
+                      {selectedJudgeName ? 'Tryk for at ændre' : 'Dommeren kan godkende eller afvise'}
+                    </Text>
+                  </View>
+                  <Ionicons name={judgePickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={STUDOS_THEME.ink} />
+                </Pressable>
+
+                {judgePickerOpen ? (
+                  <View style={styles.duelOpponentPickerPanel}>
+                    {judgeRows.length === 0 ? (
+                      <Text style={styles.emptyText}>Ingen mulige dommere lige nu.</Text>
+                    ) : (
+                      <ScrollView style={styles.duelOpponentList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+                        <View style={styles.chatModalMemberList}>
+                          {judgeRows.map((member) => {
+                            const rowId = String(member.id);
+                            const rowName = getMemberName(member);
+
+                            return (
+                              <Pressable
+                                key={rowId}
+                                onPress={() => {
+                                  setSelectedJudgeId(rowId);
+                                  setJudgePickerOpen(false);
+                                }}
+                                style={({ pressed }) => [
+                                  styles.chatModalMemberRow,
+                                  styles.duelOpponentRow,
+                                  selectedJudgeId === rowId ? styles.chatModalMemberRowSelected : null,
+                                  pressed ? styles.footerItemPressed : null,
+                                ]}
+                              >
+                                <Avatar profile={member} variant="smallCircle" />
+                                <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
+                                <Ionicons
+                                  name={selectedJudgeId === rowId ? 'radio-button-on' : 'radio-button-off'}
+                                  size={18}
+                                  color={selectedJudgeId === rowId ? STUDOS_THEME.red : '#a4afbf'}
+                                />
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    )}
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        </ScrollView>
+
+          <View style={styles.duelCreateBottomBar} {...createScreenTouchHandlers}>
+            <Button label="Opret dyst" loading={duelSubmitting} onPress={submitDuel} />
+          </View>
+        </KeyboardAvoidingView>
+          </Animated.View>
+          {deadlinePickerModal}
+          {timePickerModal}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  ) : null;
+
+  const finishedDuelArchiveModal = finishedDuelsOpen ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setFinishedDuelsOpen(false)}
+      transparent
+      visible={finishedDuelsOpen}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk afsluttede dyster"
+          onPress={() => setFinishedDuelsOpen(false)}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelArchivePanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Dyst-arkiv</Text>
+              <Text style={styles.chatModalTitle}>Afsluttede dyster</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk afsluttede dyster"
+              onPress={() => setFinishedDuelsOpen(false)}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          {finishedDuels.length === 0 ? (
+            <Text style={styles.emptyText}>Ingen afsluttede dyster endnu.</Text>
+          ) : (
+            <ScrollView style={styles.duelArchiveList} showsVerticalScrollIndicator={false}>
+              <View style={styles.chatModalMemberList}>
+                {finishedDuels.map((duel) => {
+                  const challenger = getMemberName(
+                    String(duel.fromMemberId) === activeMemberId
+                      ? activeMember
+                      : opponentById[String(duel.fromMemberId)],
+                  );
+                  const result = getFinishedDuelResult(duel);
+                  const finishedLabel = formatDateTime(duelFinishedTimestamp(duel));
+
+                  return (
+                    <View key={duel.id} style={styles.duelArchiveRow}>
+                      <View style={styles.duelArchiveTopLine}>
+                        <Text numberOfLines={1} style={styles.duelArchiveChallenger}>
+                          {challenger}
+                        </Text>
+                        <View style={[styles.duelArchiveResultPill, result.style]}>
+                          <Text numberOfLines={1} style={[styles.duelArchiveResultText, result.textStyle]}>
+                            {result.label}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.duelArchiveMetaLine}>
+                        <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
+                        <Text numberOfLines={1} style={styles.duelArchiveStake}>{duel.stake} Caps</Text>
+                        {finishedLabel ? (
+                          <>
+                            <Text style={styles.duelArchiveMetaDot}>·</Text>
+                            <Text numberOfLines={1} style={styles.duelArchiveDate}>{finishedLabel}</Text>
+                          </>
+                        ) : null}
+                      </View>
+                      <Text numberOfLines={2} style={styles.duelArchiveChallenge}>
+                        {duel.challenge}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  ) : null;
+
+  const judgeDuelModal = judgeDuelsOpen ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setJudgeDuelsOpen(false)}
+      transparent
+      visible={judgeDuelsOpen}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk dommerdyster"
+          onPress={() => setJudgeDuelsOpen(false)}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelArchivePanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Dommer</Text>
+              <Text style={styles.chatModalTitle}>Til godkendelse</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk dommerdyster"
+              onPress={() => setJudgeDuelsOpen(false)}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          {judgeApprovalDuels.length === 0 ? (
+            <Text style={styles.emptyText}>Ingen dyster afventer din godkendelse.</Text>
+          ) : (
+            <ScrollView style={styles.duelArchiveList} showsVerticalScrollIndicator={false}>
+              <View style={styles.duelList}>
+                {judgeApprovalDuels.map(renderJudgeApprovalCard)}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  ) : null;
+
+  const duelInfoModal = duelInfoOpen ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setDuelInfoOpen(false)}
+      transparent
+      visible={duelInfoOpen}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk dyst-info"
+          onPress={() => setDuelInfoOpen(false)}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelInfoPanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Sådan virker Dyst</Text>
+              <Text style={styles.chatModalTitle}>Caps på højkant</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk dyst-info"
+              onPress={() => setDuelInfoOpen(false)}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          <View style={styles.duelInfoList}>
+            {[
+              'Opret en challenge, vælg en modstander, sæt en Caps-indsats og en deadline.',
+              'Modstanderen kan acceptere eller afvise dysten.',
+              'Når dysten accepteres, låses begge jeres Caps i escrow, indtil den er afgjort.',
+              'Uden dommer skal begge deltagere være enige om vinderen, før Caps udbetales.',
+              'Hvis der er valgt dommer, skal dommeren godkende vinderen, før Caps udbetales.',
+              'Vinderen får puljen udbetalt, og afsluttede dyster gemmes i arkivet.',
+            ].map((item, index) => (
+              <View key={item} style={styles.duelInfoStep}>
+                <View style={styles.duelInfoStepNumber}>
+                  <Text style={styles.duelInfoStepNumberText}>{index + 1}</Text>
+                </View>
+                <Text style={styles.duelInfoText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  ) : null;
 
   return (
     <View style={styles.flowStack}>
       <View style={styles.tabHeader}>
         <View style={styles.duelHeaderLeft}>
-          <Text style={styles.kicker} numberOfLines={1} ellipsizeMode="tail">
-            {className}
-          </Text>
           <View style={styles.titleWithLogoRow}>
             <Text style={[styles.title, styles.titleSmallHeader]} numberOfLines={1} ellipsizeMode="tail">
-              Duel
+              Dyst
             </Text>
             <DuelTitleGraphic style={styles.duelTitleLogo} />
           </View>
-          <Text style={styles.duelSubtext} numberOfLines={1} ellipsizeMode="tail">
-            Udfordr en ven med en Caps-indsats, og få begge bekræftet før overførsel.
-          </Text>
         </View>
+        <View style={styles.duelHeaderActions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setFinishedDuelsOpen(true)}
+            style={({ pressed }) => [
+              styles.duelHeaderArchiveAction,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="archive-outline" size={15} color={STUDOS_THEME.ink} />
+            <Text style={[styles.duelHeaderArchiveActionText, styles.duelHeaderTinyActionText]}>Arkiv</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={openCreateModal}
+            style={({ pressed }) => [
+              styles.duelHeaderAction,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="add" size={18} color="#FFFFFF" />
+            <Text style={[styles.duelHeaderActionText, styles.duelHeaderTinyActionText]}>Ny dyst</Text>
+          </Pressable>
+        </View>
+      </View>
+      <View style={styles.duelSubtextRow}>
+        <Text style={styles.duelSubtext}>
+          Udfordr dit crew, sæt Caps på højkant, og kravl op ad leaderboardet.
+        </Text>
         <Pressable
-          accessibilityRole="button"
-          onPress={openCreateModal}
+          accessibilityLabel="Læs om dyster"
+          onPress={() => setDuelInfoOpen(true)}
           style={({ pressed }) => [
-            styles.duelHeaderAction,
+            styles.duelInfoButton,
             pressed ? styles.footerItemPressed : null,
           ]}
         >
-          <Ionicons name="add" size={20} color="#FFFFFF" />
-          <Text style={styles.duelHeaderActionText}>Ny duel</Text>
+          <Text style={styles.duelInfoButtonText}>?</Text>
         </Pressable>
       </View>
 
-      <View style={styles.duelScopeSwitch}>
-        {filterOptions.map((filter) => {
-          const active = filter.id === scope;
-
-          return (
-            <Pressable
-              key={filter.id}
-              onPress={() => setScope(filter.id)}
-              style={({ pressed }) => [
-                styles.duelScopeSwitchItem,
-                active ? styles.duelScopeSwitchItemActive : null,
-                pressed && !active ? styles.footerItemPressed : null,
-              ]}
-            >
-              <Text style={[
-                styles.duelScopeSwitchText,
-                active ? styles.duelScopeSwitchTextActive : null,
-              ]}>
-                {filter.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {judgeApprovalDuels.length > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setJudgeDuelsOpen(true)}
+          style={({ pressed }) => [
+            styles.duelJudgeStrip,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <View style={styles.duelJudgeStripIcon}>
+            <Ionicons name="shield-checkmark-outline" size={18} color={STUDOS_THEME.ink} />
+          </View>
+          <View style={styles.duelJudgeStripCopy}>
+            <Text style={styles.duelJudgeStripTitle}>Dommer</Text>
+            <Text style={styles.duelJudgeStripText}>
+              {judgeApprovalDuels.length} {judgeApprovalDuels.length === 1 ? 'dyst afventer' : 'dyster afventer'} din godkendelse
+            </Text>
+          </View>
+          <View style={styles.duelJudgeStripAction}>
+            <Text style={styles.duelJudgeStripActionText}>Åbn</Text>
+            <View style={styles.duelJudgeStripBadge}>
+              <Text style={styles.duelJudgeStripBadgeText}>{judgeApprovalDuels.length}</Text>
+            </View>
+          </View>
+        </Pressable>
+      ) : null}
 
       <View style={styles.panel}>
         <View style={styles.panelHeader}>
-          <Text style={styles.sectionTitle}>Dine dueller</Text>
+          <Text style={styles.sectionTitle}>Afventende dyster</Text>
           <View style={styles.duelHeaderBadge}>
             <Text style={styles.duelHeaderBadgeText}>
-              {visibleDuels.length}
+              {pendingDuels.length}
             </Text>
           </View>
         </View>
 
-        {visibleDuels.length === 0 ? (
+        {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
+
+        {duelLoading ? (
+          <Text style={styles.emptyText}>Henter dyster...</Text>
+        ) : pendingDuels.length === 0 ? (
           <Text style={styles.emptyText}>
-            {duels.length === 0 ? 'Ingen dueller endnu. Tryk på “Ny duel” for at starte.' : 'Ingen dueller i denne visning.'}
+            Ingen afventende dyster lige nu.
           </Text>
         ) : (
           <View style={styles.duelList}>
-            {visibleDuels.map((duel) => {
+            {pendingDuels.map((duel) => {
               const isCreator = String(duel.fromMemberId) === activeMemberId;
               const opponentId = isCreator ? duel.toMemberId : duel.fromMemberId;
               const opponent = opponentById[String(opponentId)] ?? activeMember;
@@ -9055,9 +10622,7 @@ function DuelScreen({
               const actionStatus = getDuelStatus(duel);
               const deadlineLabel = formatDateTime(duel.deadlineAt);
               const creatorName = getMemberName(isCreator ? activeMember : opponentById[String(duel.fromMemberId)] ?? activeMember);
-              const opponentLabel = isCreator
-                ? `Modstander: ${opponentName}`
-                : `Udfordrer: ${creatorName}`;
+              const duelTitle = `${creatorName} vs ${opponentName}`;
 
               return (
                 <View key={duel.id} style={styles.duelCard}>
@@ -9067,11 +10632,8 @@ function DuelScreen({
                       variant="smallCircle"
                     />
                     <View style={styles.duelCardCopy}>
-                      <Text numberOfLines={1} style={styles.duelCardOpponent}>
-                        {opponentLabel}
-                      </Text>
                       <Text numberOfLines={1} style={styles.duelCardTitle}>
-                        {isCreator ? `Du udfordrer ${opponentName}` : `${opponentName} udfordrer dig`}
+                        {duelTitle}
                       </Text>
                     </View>
                     <View style={[styles.duelStatusPill, actionStatus.style]}>
@@ -9081,22 +10643,29 @@ function DuelScreen({
 
                   <Text style={styles.duelCardChallenge}>{duel.challenge}</Text>
 
-                  <View style={styles.duelCardMetaRow}>
-                    <View style={styles.duelCardMetaItem}>
-                      <MaterialCommunityIcons name="sword-cross" size={15} color={STUDOS_THEME.ink} />
-                      <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
-                    </View>
+                    <View style={styles.duelCardMetaRow}>
+            <View style={styles.duelCardMetaItem}>
+              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.ink} />
+              <Text numberOfLines={1} style={styles.duelMetaText}>{getDystModeMeta(duel.mode).label}</Text>
+            </View>
+            <View style={styles.duelCardMetaItem}>
+              <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
+                        <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+                      </View>
                     <View style={styles.duelCardMetaItem}>
                       <Ionicons name="time-outline" size={14} color={STUDOS_THEME.blue} />
                       <Text numberOfLines={1} style={styles.duelMetaText}>Deadline: {deadlineLabel || 'Ikke sat'}</Text>
                     </View>
                   </View>
 
-                  <View style={styles.duelCardActionRow}>
+                  <View style={[
+                    styles.duelCardActionRow,
+                    duel.status === 'awaitingOpponent' && !isCreator ? styles.duelCardSplitActionRow : null,
+                  ]}>
                     {duel.status === 'awaitingOpponent' ? (
                       isCreator ? (
                         <Pressable
-                          accessibilityLabel="Annuller denne duel"
+                          accessibilityLabel="Annuller denne dyst"
                           onPress={() => respondToDuel(duel.id, 'cancel')}
                           style={({ pressed }) => [
                             styles.duelCardGhostAction,
@@ -9108,24 +10677,26 @@ function DuelScreen({
                       ) : (
                         <>
                           <Pressable
-                            accessibilityLabel="Afvis duel"
+                            accessibilityLabel="Afvis dyst"
                             onPress={() => respondToDuel(duel.id, 'decline')}
                             style={({ pressed }) => [
-                              styles.duelCardGhostAction,
+                              styles.duelCardRejectAction,
+                              styles.duelCardSplitAction,
                               pressed ? styles.footerItemPressed : null,
                             ]}
                           >
-                            <Text style={styles.duelCardGhostActionText}>Afvis</Text>
+                            <Text style={styles.duelCardRejectActionText}>Afvis</Text>
                           </Pressable>
                           <Pressable
-                            accessibilityLabel="Accepter duel"
+                            accessibilityLabel="Accepter dyst"
                             onPress={() => respondToDuel(duel.id, 'accept')}
                             style={({ pressed }) => [
-                              styles.duelCardAction,
+                              styles.duelCardAcceptAction,
+                              styles.duelCardSplitAction,
                               pressed ? styles.footerItemPressed : null,
                             ]}
                           >
-                            <Text style={styles.duelCardActionText}>Accepter</Text>
+                            <Text style={styles.duelCardAcceptActionText}>Accepter</Text>
                           </Pressable>
                         </>
                       )
@@ -9134,7 +10705,7 @@ function DuelScreen({
                     {duel.status === 'awaitingCreatorConfirm' ? (
                       isCreator ? (
                         <Pressable
-                          accessibilityLabel="Bekræft duel overførsel"
+                          accessibilityLabel="Bekræft dyst-overførsel"
                           onPress={() => respondToDuel(duel.id, 'confirm')}
                           style={({ pressed }) => [
                             styles.duelCardAction,
@@ -9155,7 +10726,7 @@ function DuelScreen({
 
                     {duel.status === 'active' ? (
                       <Pressable
-                        accessibilityLabel="Markér duel som gennemført"
+                        accessibilityLabel="Markér dyst som gennemført"
                         onPress={() => respondToDuel(duel.id, 'complete')}
                         style={({ pressed }) => [
                           styles.duelCardGhostAction,
@@ -9173,177 +10744,54 @@ function DuelScreen({
         )}
       </View>
 
-      <Text style={styles.duelFooterInfo}>
-        {activeMemberName}, du kan oprette duel med alle i dit crew.
-      </Text>
-
-      <Modal
-        animationType="fade"
-        onRequestClose={closeCreateModal}
-        transparent
-        visible={createModalOpen}
-      >
-        <View style={styles.chatModalRoot}>
-          <Pressable
-            accessibilityLabel="Luk opret duel"
-            style={styles.chatModalBackdrop}
-            onPress={closeCreateModal}
-          />
-          <View style={[styles.chatModalPanel, styles.duelCreatePanel]}>
-            <View style={styles.chatModalHeader}>
-              <View style={styles.chatModalHeaderTextColumn}>
-                <Text style={styles.chatModalKicker}>Duel</Text>
-                <Text style={styles.chatModalTitle}>Opret ny duel</Text>
-              </View>
-              <Pressable
-                accessibilityLabel="Luk opret duel"
-                onPress={closeCreateModal}
-                style={styles.chatModalCloseButton}
-              >
-                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
-              </Pressable>
-            </View>
-            <Text style={styles.chatCodeModalText}>
-              Skriv din udfordring, indsats og deadline, og vælg en modstander.
+      <View style={styles.panel}>
+        <View style={styles.panelHeader}>
+          <Text style={styles.sectionTitle}>Aktive dyster</Text>
+          <View style={styles.duelHeaderBadge}>
+            <Text style={styles.duelHeaderBadgeText}>
+              {activeDuels.length}
             </Text>
-            {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
-
-            <View style={styles.chatModalSearchField}>
-              <Ionicons name="search" size={16} color="#65748b" />
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                onChangeText={setSearchQuery}
-                placeholder="Søg modstander"
-                placeholderTextColor="#8f9aaa"
-                style={styles.chatModalSearchInput}
-                value={searchQuery}
-              />
-              {searchQuery ? (
-                <Pressable
-                  onPress={() => setSearchQuery('')}
-                  style={({ pressed }) => [pressed ? styles.footerItemPressed : null]}
-                >
-                  <Ionicons name="close-circle" size={16} color="#a4afbf" />
-                </Pressable>
-              ) : null}
-            </View>
-
-            {opponentRows.length === 0 ? (
-              <Text style={styles.emptyText}>
-                Ingen modstandere her — inviter en ven til crewet eller vent på, at de tilmelder sig.
-              </Text>
-            ) : (
-              <ScrollView style={styles.duelOpponentList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-                <View style={styles.chatModalMemberList}>
-                  {opponentRows.map((member) => {
-                    const rowId = String(member.id);
-                    const rowName = getMemberName(member);
-
-                    return (
-                      <Pressable
-                        key={rowId}
-                        onPress={() => setSelectedOpponentId(rowId)}
-                        style={({ pressed }) => [
-                          styles.chatModalMemberRow,
-                          styles.duelOpponentRow,
-                          selectedOpponentId === rowId ? styles.chatModalMemberRowSelected : null,
-                          pressed ? styles.footerItemPressed : null,
-                        ]}
-                      >
-                        <Avatar profile={member} variant="smallCircle" />
-                        <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
-                        <Ionicons
-                          name={selectedOpponentId === rowId ? 'radio-button-on' : 'radio-button-off'}
-                          size={18}
-                          color={selectedOpponentId === rowId ? STUDOS_THEME.red : '#a4afbf'}
-                        />
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </ScrollView>
-            )}
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Udfordring</Text>
-              <TextInput
-                autoCapitalize="sentences"
-                autoCorrect={false}
-                multiline
-                numberOfLines={3}
-                onChangeText={setDuelChallengeText}
-                placeholder="Fx Få mig til at holde op med at sende memes en hel dag"
-                placeholderTextColor="#8b93a1"
-                style={[styles.input, styles.duelModalTextarea]}
-                textAlignVertical="top"
-                value={duelChallengeText}
-              />
-            </View>
-
-            <View style={styles.duelModalInputRow}>
-              <View style={[styles.field, styles.duelModalField]}>
-                <Text style={styles.label}>Indsats (Caps)</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="number-pad"
-                  onChangeText={setDuelStakeText}
-                  placeholder="Fx 50"
-                  placeholderTextColor="#8b93a1"
-                  style={styles.input}
-                  value={duelStakeText}
-                />
-              </View>
-              <View style={[styles.field, styles.duelModalField]}>
-                <Text style={styles.label}>Deadline</Text>
-                <View style={styles.duelDateTimeRow}>
-                  <TextInput
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="numbers-and-punctuation"
-                    onChangeText={setDeadlineDate}
-                    placeholder="2026-12-31"
-                    placeholderTextColor="#8b93a1"
-                    style={[styles.input, styles.duelDateTimeInput]}
-                    value={deadlineDate}
-                  />
-                  <TextInput
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="numbers-and-punctuation"
-                    onChangeText={setDeadlineTime}
-                    placeholder="18:00"
-                    placeholderTextColor="#8b93a1"
-                    style={[styles.input, styles.duelDateTimeInput]}
-                    value={deadlineTime}
-                  />
-                </View>
-              </View>
-            </View>
-
-            <Button label="Opret duel" onPress={submitDuel} />
           </View>
         </View>
-      </Modal>
+
+        {duelLoading ? (
+          <Text style={styles.emptyText}>Henter dyster...</Text>
+        ) : activeDuels.length === 0 ? (
+          <Text style={styles.emptyText}>
+            Ingen aktive dyster lige nu.
+          </Text>
+        ) : (
+          <View style={styles.duelList}>
+            {activeDuels.map(renderDuelCard)}
+          </View>
+        )}
+      </View>
+
+      <Text style={styles.duelFooterInfo}>
+        {activeMemberName}, du kan oprette dyst med alle i dit crew.
+      </Text>
+
+      {createDuelOverlay}
+      {winnerPickerModal}
+      {finishedDuelArchiveModal}
+      {judgeDuelModal}
+      {duelInfoModal}
     </View>
   );
 }
 
-function DuelTitleGraphic({ style }) {
+function DuelTitleGraphic({ style, coinStyle }) {
   return (
     <View style={[styles.duelTitleGraphic, style]} pointerEvents="none">
-      <View style={styles.duelTitleGraphicBack} />
-      <View style={styles.duelTitleGraphicFace}>
-        <Ionicons name="shield" size={18} color={STUDOS_THEME.ink} />
-        <MaterialCommunityIcons
-          name="sword-cross"
-          size={12}
-          color={STUDOS_THEME.red}
-          style={styles.duelTitleGraphicSwords}
-        />
+      <View style={styles.duelTitleGraphicVsBlue} />
+      <View style={styles.duelTitleGraphicVsRed} />
+      <View style={styles.duelTitleGraphicVsCore}>
+        <Text style={styles.duelTitleGraphicVsText}>VS</Text>
       </View>
-      <View style={styles.duelTitleGraphicDot} />
+      <Image source={CAPS_COIN} resizeMode="contain" style={[styles.duelTitleGraphicCoin, coinStyle]} />
+      <View style={styles.duelTitleGraphicFriendBadge}>
+        <Ionicons name="people" size={10} color="#FFFFFF" />
+      </View>
     </View>
   );
 }
@@ -9965,11 +11413,11 @@ function EarnCapsScreen({
       id: 'duels',
       actionAlignRight: true,
       actionIconRight: 'shield',
-      actionLabel: 'Åbn dueller',
+      actionLabel: 'Åbn dyster',
       icon: 'shield',
       reward: 'Indsats',
       subtitle: 'Udfordr dit crew i challenges. I bestemmer indsats og udfordring.',
-      title: 'Dueller om Caps',
+      title: 'Dyster om Caps',
       onPress: onOpenPointDuel,
       swords: true,
     },
@@ -12257,30 +13705,13 @@ function FooterChatIcon({ active }) {
 
 function FooterPointDuelIcon({ active }) {
   return (
-    <View style={[
-      styles.overviewCapsDuelMark,
+    <DuelTitleGraphic
+      style={[
       styles.footerPointDuelIcon,
       active ? styles.footerPointDuelIconActive : null,
-    ]}>
-      <Ionicons
-        name="shield"
-        size={24}
-        color={STUDOS_THEME.ink}
-        style={styles.footerPointDuelShieldOutline}
-      />
-      <Ionicons
-        name="shield"
-        size={20}
-        color="#FFFFFF"
-        style={styles.footerPointDuelShieldFill}
-      />
-      <MaterialCommunityIcons
-        name="sword-cross"
-        size={18}
-        color={STUDOS_THEME.red}
-        style={[styles.overviewCapsDuelSwords, styles.footerPointDuelSwords]}
-      />
-    </View>
+    ]}
+      coinStyle={styles.footerPointDuelCoin}
+    />
   );
 }
 
@@ -14031,7 +15462,7 @@ function OverviewScreen({
               </View>
               <View style={styles.overviewClassDuelsCopy}>
                 <Text numberOfLines={1} style={styles.overviewClassDuelsTitle}>
-                  Klassedueller
+                  Klassedyster
                 </Text>
                 <Text numberOfLines={1} style={styles.overviewClassDuelsMeta}>
                   Udfordringer, Caps og rivaliseringer i klassen
@@ -14062,7 +15493,7 @@ function OverviewScreen({
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              <Text style={styles.overviewClassDuelsActionText}>Åbn Duel</Text>
+              <Text style={styles.overviewClassDuelsActionText}>Åbn Dyst</Text>
               <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
             </Pressable>
           </View>
@@ -17360,6 +18791,98 @@ const styles = StyleSheet.create({
   calendarCoverPickerBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(4, 8, 22, 0.34)',
+  },
+  calendarNativePickerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 70,
+    elevation: 70,
+    paddingHorizontal: 20,
+  },
+  calendarNativeTimePickerLayer: {
+    justifyContent: 'flex-end',
+    paddingHorizontal: 0,
+  },
+  calendarNativePickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(4, 8, 22, 0.34)',
+    zIndex: 1,
+    elevation: 1,
+  },
+  calendarNativePickerSheetLayer: {
+    zIndex: 2,
+    elevation: 2,
+  },
+  calendarNativePickerPanel: {
+    gap: 13,
+    maxWidth: 430,
+    zIndex: 2,
+    elevation: 2,
+  },
+  calendarNativeTimePickerPanel: {
+    width: '100%',
+    gap: 14,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 16,
+    paddingTop: 15,
+    paddingBottom: 22,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    elevation: 14,
+  },
+  calendarNativePickerHeader: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  calendarNativePickerTitle: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  calendarNativePickerCloseButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  calendarNativePickerCloseSpacer: {
+    width: 36,
+    height: 36,
+  },
+  calendarNativePicker: {
+    width: '100%',
+    minHeight: 190,
+  },
+  calendarNativeTimePicker: {
+    alignSelf: 'center',
+    maxWidth: 320,
+  },
+  calendarNativePickerDoneButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    borderRadius: 15,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  calendarNativePickerDoneText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   calendarCoverUploadOption: {
     alignItems: 'center',
@@ -21111,101 +22634,558 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-  duelSubtext: {
+  duelSubtextRow: {
+    width: '100%',
+    alignItems: 'flex-start',
+    minWidth: 0,
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+    marginTop: -5,
+    marginBottom: 4,
+  },
+  duelCreateOverlayHost: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  duelCreateOverlayContent: {
+    position: 'relative',
+    flex: 1,
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  duelCreateSwipeFrame: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
+    backgroundColor: '#F1FBF8',
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingTop: CHAT_THREAD_TOP_PADDING,
+    paddingBottom: CHAT_THREAD_BOTTOM_PADDING,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: -12, height: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 18,
+  },
+  duelCreateScreen: {
+    flex: 1,
+    gap: 12,
+    minHeight: 0,
+  },
+  duelCreateScreenHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  duelCreateBackButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 9,
+    paddingRight: 12,
+  },
+  duelCreateBackText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCreateHeaderLogo: {
+    marginLeft: 0,
+    marginBottom: 0,
+  },
+  duelCreateScreenScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  duelCreateScreenContent: {
+    width: '100%',
+    gap: 13,
+    paddingTop: 16,
+    paddingBottom: 2,
+  },
+  duelCreateHeroCard: {
+    width: '100%',
+    minWidth: 0,
+    gap: 6,
+    borderColor: '#F2D9B1',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    padding: 14,
+  },
+  duelModePanel: {
+    width: '100%',
+    gap: 8,
+  },
+  duelModeSwitch: {
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+  },
+  duelModeOption: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 42,
+    borderColor: '#E5E8EF',
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  duelModeOptionActive: {
+    borderColor: STUDOS_THEME.ink,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelModeOptionText: {
+    color: '#65748b',
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: -0.1,
+    textAlign: 'center',
+  },
+  duelModeOptionTextActive: {
+    color: '#FFFFFF',
+  },
+  duelModeHelper: {
     color: '#65748b',
     fontSize: 12,
-    lineHeight: 18,
     fontWeight: '700',
-    marginTop: 4,
+    lineHeight: 17,
+  },
+  duelJudgePanel: {
+    width: '100%',
+    gap: 9,
+  },
+  duelJudgeToggleCard: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 62,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  duelJudgeToggleCardActive: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+  },
+  duelJudgeToggleIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  duelJudgeToggleCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  duelJudgeToggleTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelJudgeToggleText: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  duelJudgeSwitch: {
+    justifyContent: 'center',
+    width: 42,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: '#E5E8EF',
+    paddingHorizontal: 3,
+  },
+  duelJudgeSwitchActive: {
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelJudgeSwitchKnob: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#FFFFFF',
+  },
+  duelJudgeSwitchKnobActive: {
+    alignSelf: 'flex-end',
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  duelJudgePicker: {
+    gap: 9,
+  },
+  duelJudgeStrip: {
+    width: '100%',
+    minHeight: 48,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    borderColor: '#FFE1B1',
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  duelJudgeStripIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  duelJudgeStripCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  duelJudgeStripTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelJudgeStripText: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  duelJudgeStripAction: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  duelJudgeStripActionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelJudgeStripBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 6,
+  },
+  duelJudgeStripBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 13,
+  },
+  duelOpponentPicker: {
+    width: '100%',
+    gap: 8,
+  },
+  duelOpponentPickerButton: {
+    width: '100%',
+    minHeight: 56,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 10,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  duelOpponentPickerButtonSelected: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+  },
+  duelOpponentPickerCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  duelOpponentPickerTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelOpponentPickerMeta: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  duelOpponentPickerPanel: {
+    width: '100%',
+    gap: 9,
+  },
+  duelCreateTitle: {
+    flexShrink: 1,
+    color: STUDOS_THEME.ink,
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: -0.4,
+    lineHeight: 30,
+  },
+  duelCreateBottomBar: {
+    width: '100%',
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  duelSubtext: {
+    flex: 1,
+    minWidth: 0,
+    color: '#526078',
+    flex: 1,
+    fontSize: 11.5,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  duelInfoButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 24,
+    height: 24,
+    borderColor: '#F2D9B1',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+  },
+  duelInfoButtonText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 16,
   },
   duelHeaderLeft: {
     flex: 1,
     minWidth: 0,
+    flex: 1,
+    minWidth: 0,
   },
-  duelHeaderAction: {
+  duelHeaderActions: {
+    flexShrink: 0,
+    minWidth: 0,
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 7,
+  },
+  duelHeaderArchiveAction: {
+    position: 'relative',
+    minWidth: 0,
+    flexShrink: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
     flexDirection: 'row',
-    gap: 8,
-    minHeight: 36,
-    borderRadius: 10,
-    backgroundColor: STUDOS_THEME.red,
+    gap: 5,
+    minHeight: 34,
+    borderColor: '#E5E8EF',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    maxWidth: 128,
+    paddingVertical: 7,
+  },
+  duelHeaderJudgeAction: {
+    paddingHorizontal: 9,
+  },
+  duelHeaderActionBadge: {
+    position: 'absolute',
+    top: -7,
+    right: -7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 18,
+    height: 18,
+    borderColor: '#FFFFFF',
+    borderRadius: 9,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 4,
+  },
+  duelHeaderActionBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
+    fontWeight: '900',
+    lineHeight: 12,
+  },
+  duelHeaderArchiveActionText: {
+    flexShrink: 1,
+    color: STUDOS_THEME.ink,
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: -0.1,
+  },
+  duelHeaderTinyActionText: {
+    fontSize: 11.5,
+    lineHeight: 14,
+    letterSpacing: -0.1,
+  },
+  duelHeaderAction: {
+    minWidth: 0,
+    flexShrink: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 34,
+    borderColor: '#FFE1B1',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    maxWidth: 104,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 7,
   },
   duelTitleLogo: {
-    marginLeft: 5,
-    marginBottom: -2,
+    marginLeft: 7,
+    marginBottom: -1,
   },
   duelTitleGraphic: {
     position: 'relative',
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    borderColor: '#d8e3e0',
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ecf9f4',
-    overflow: 'hidden',
-  },
-  duelTitleGraphicBack: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255, 111, 115, 0.18)',
-    borderRadius: 7,
-    transform: [{ rotate: '12deg' }],
-  },
-  duelTitleGraphicFace: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    backgroundColor: '#ffffff',
-    zIndex: 2,
-    borderColor: '#e4d8c4',
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    borderColor: 'rgba(23, 33, 67, 0.1)',
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: STUDOS_THEME.ink,
+    overflow: 'hidden',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  duelTitleGraphicSwords: {
+  duelTitleGraphicVsBlue: {
     position: 'absolute',
-    right: -2,
-    bottom: -3,
+    right: -10,
+    top: -7,
+    width: 31,
+    height: 31,
+    borderRadius: 16,
+    backgroundColor: STUDOS_THEME.blue,
   },
-  duelTitleGraphicDot: {
+  duelTitleGraphicVsRed: {
     position: 'absolute',
-    top: 4,
-    left: 4,
-    width: 7,
-    height: 7,
-    borderRadius: 7,
+    left: -10,
+    bottom: -8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: STUDOS_THEME.red,
-    opacity: 0.92,
+  },
+  duelTitleGraphicVsCore: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderColor: STUDOS_THEME.yellow,
+    borderRadius: 11,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    zIndex: 2,
+    transform: [{ rotate: '-5deg' }],
+  },
+  duelTitleGraphicVsText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: -0.4,
+    lineHeight: 16,
+  },
+  duelTitleGraphicCoin: {
+    position: 'absolute',
+    right: 3,
+    top: 3,
+    width: 13,
+    height: 13,
+    zIndex: 3,
+  },
+  duelTitleGraphicFriendBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    borderColor: '#FFFFFF',
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
     zIndex: 3,
   },
   duelScopeSwitch: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-    marginBottom: 10,
+    gap: 6,
+    marginTop: 12,
+    marginBottom: 12,
     flexWrap: 'wrap',
+    borderColor: '#E5E8EF',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 5,
   },
   duelScopeSwitchItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 36,
-    borderRadius: 999,
+    minHeight: 34,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#D8E0EA',
-    backgroundColor: '#F7F9FD',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   duelScopeSwitchItemActive: {
-    borderColor: '#ff8b8f',
-    backgroundColor: '#fff4d8',
+    borderColor: '#FFE1B1',
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.yellow,
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 4,
   },
   duelScopeSwitchText: {
     color: '#65748b',
@@ -21217,10 +23197,12 @@ const styles = StyleSheet.create({
     color: STUDOS_THEME.ink,
   },
   duelHeaderActionText: {
-    color: '#FFFFFF',
+    flexShrink: 1,
+    fontSize: 11,
+    color: STUDOS_THEME.yellow,
     fontSize: 13,
     fontWeight: '900',
-    letterSpacing: 0,
+    letterSpacing: 0.1,
   },
   duelHeaderBadge: {
     alignItems: 'center',
@@ -21229,34 +23211,63 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 999,
     paddingHorizontal: 8,
-    backgroundColor: '#F1FBF8',
+    backgroundColor: STUDOS_THEME.ink,
   },
   duelHeaderBadgeText: {
-    color: STUDOS_THEME.ink,
+    color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
   },
   duelList: {
-    gap: 10,
+    gap: 9,
   },
   duelCard: {
-    gap: 10,
-    borderColor: '#ddd6c7',
-    borderRadius: 8,
+    gap: 8,
+    borderColor: '#F2D9B1',
+    borderRadius: 12,
     borderWidth: 1,
+    backgroundColor: '#FFFDF8',
+    padding: 11,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  duelJudgeApprovalCard: {
+    gap: 7,
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF8E8',
+    padding: 9,
+  },
+  duelWinnerPickerPanel: {
+    gap: 13,
+    borderColor: '#F2D9B1',
+    borderWidth: 1,
+    backgroundColor: '#FFFDF8',
+  },
+  duelWinnerPickerText: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  duelWinnerPickerRow: {
+    borderColor: '#F2D9B1',
     backgroundColor: '#FFFFFF',
-    padding: 12,
   },
   duelCardHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 9,
   },
   duelCardCopy: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    flex: 1,
+    minWidth: 0,
+    gap: 0,
   },
   duelCardOpponent: {
     color: '#65748b',
@@ -21266,8 +23277,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   duelCardTitle: {
+    flexShrink: 1,
+    minWidth: 0,
     color: STUDOS_THEME.ink,
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: '900',
     letterSpacing: 0,
     minWidth: 0,
@@ -21275,69 +23288,144 @@ const styles = StyleSheet.create({
   duelStatusPill: {
     alignSelf: 'flex-start',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   duelStatusPillWarning: {
-    backgroundColor: '#FFF1CC',
+    borderColor: '#FFE1B1',
+    backgroundColor: '#FFF6DB',
   },
   duelStatusPillSuccess: {
-    backgroundColor: '#DDF4E9',
+    borderColor: '#BEECD4',
+    backgroundColor: '#E3F8EF',
   },
   duelStatusPillInfo: {
-    backgroundColor: '#E5F1FF',
+    borderColor: 'rgba(117, 222, 208, 0.55)',
+    backgroundColor: '#ECFBF7',
   },
   duelStatusPillDanger: {
-    backgroundColor: '#FFE8E8',
+    borderColor: '#FFD0D2',
+    backgroundColor: '#FFF0F0',
   },
   duelStatusPillMuted: {
-    backgroundColor: '#F0F1F5',
+    borderColor: '#E5E8EF',
+    backgroundColor: '#F6F7FA',
   },
   duelStatusPillText: {
     color: STUDOS_THEME.ink,
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0,
   },
   duelCardChallenge: {
     color: STUDOS_THEME.ink,
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '700',
   },
   duelCardMetaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    alignItems: 'center',
-  },
-  duelCardMetaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  duelMetaText: {
-    color: '#65748b',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  duelCardActionRow: {
+    minWidth: 0,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
     alignItems: 'center',
   },
+  duelCardMetaItem: {
+    minWidth: 0,
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 27,
+    borderColor: '#E5E8EF',
+    borderRadius: 9,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  duelMetaText: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelMetaCoin: {
+    width: 15,
+    height: 15,
+  },
+  duelCardActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    alignItems: 'center',
+  },
+  duelCardSplitActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    gap: 8,
+    width: '100%',
+  },
+  duelCardSplitAction: {
+    flex: 1,
+  },
   duelCardAction: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 38,
-    borderRadius: 10,
+    minHeight: 35,
+    borderColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 12,
+    borderWidth: 1,
     backgroundColor: STUDOS_THEME.red,
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 6,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 4,
   },
   duelCardActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardAcceptAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 35,
+    borderColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#1F9D55',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    shadowColor: '#1F9D55',
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  duelCardAcceptActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelCardRejectAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 35,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.ink,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  duelCardRejectActionText: {
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '900',
@@ -21346,13 +23434,13 @@ const styles = StyleSheet.create({
   duelCardGhostAction: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 38,
-    borderRadius: 10,
+    minHeight: 35,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#DDE8E5',
+    borderColor: '#E5E8EF',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 6,
   },
   duelCardGhostActionText: {
     color: '#4e5c74',
@@ -21364,11 +23452,18 @@ const styles = StyleSheet.create({
     color: '#8f97a7',
   },
   duelFooterInfo: {
-    marginTop: 10,
-    color: '#65748b',
+    width: '100%',
+    marginTop: 12,
+    borderColor: 'rgba(117, 222, 208, 0.36)',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#F1FBF8',
+    color: '#526078',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     textAlign: 'center',
   },
   crewScreen: {
@@ -22242,6 +24337,144 @@ const styles = StyleSheet.create({
     gap: 13,
     maxHeight: 620,
     minHeight: 460,
+    borderColor: '#F2D9B1',
+    borderWidth: 1,
+    backgroundColor: '#FFFDF8',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 10,
+  },
+  duelArchivePanel: {
+    gap: 13,
+    maxHeight: 560,
+    borderColor: '#F2D9B1',
+    borderWidth: 1,
+    backgroundColor: '#FFFDF8',
+  },
+  duelInfoPanel: {
+    borderColor: '#F2D9B1',
+    borderWidth: 1,
+    backgroundColor: '#FFFDF8',
+  },
+  duelInfoList: {
+    gap: 10,
+  },
+  duelInfoStep: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  duelInfoStepNumber: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelInfoStepNumberText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 15,
+  },
+  duelInfoText: {
+    color: '#526078',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  duelArchiveList: {
+    maxHeight: 410,
+  },
+  duelArchiveRow: {
+    gap: 6,
+    borderColor: '#E5E8EF',
+    borderRadius: 11,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+  },
+  duelArchiveTopLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  duelArchiveChallenger: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelArchiveStake: {
+    color: '#65748b',
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelArchiveMetaLine: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    minWidth: 0,
+  },
+  duelArchiveMetaDot: {
+    color: '#A1AAB8',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  duelArchiveDate: {
+    color: '#8A94A6',
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  duelArchiveResultPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    minHeight: 24,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+  },
+  duelArchiveResultWin: {
+    backgroundColor: '#1F9D55',
+  },
+  duelArchiveResultLoss: {
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelArchiveResultNeutral: {
+    backgroundColor: '#FFF1CC',
+  },
+  duelArchiveResultMuted: {
+    backgroundColor: '#F0F1F5',
+  },
+  duelArchiveResultText: {
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelArchiveResultTextLight: {
+    color: '#FFFFFF',
+  },
+  duelArchiveResultTextDark: {
+    color: STUDOS_THEME.ink,
+  },
+  duelArchiveChallenge: {
+    color: '#526078',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 16,
   },
   chatModalHeader: {
     alignItems: 'center',
@@ -22372,30 +24605,389 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   duelOpponentList: {
+    width: '100%',
     maxHeight: 220,
   },
   duelOpponentRow: {
-    borderColor: 'rgba(23, 33, 67, 0.12)',
-    backgroundColor: '#fcfdfd',
+    minWidth: 0,
+    borderColor: '#E5E8EF',
+    backgroundColor: '#FFFFFF',
   },
   duelModalField: {
+    minWidth: 132,
+    flex: 1,
     flex: 1,
   },
+  duelDeadlineField: {
+    width: '100%',
+  },
+  duelDeadlineSplitRow: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  duelDeadlineDateField: {
+    flex: 1.25,
+    minWidth: 180,
+  },
+  duelDeadlineTimeField: {
+    flex: 0.75,
+    minWidth: 122,
+  },
+  duelDeadlineButton: {
+    width: '100%',
+    minHeight: 56,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 12,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  duelDeadlineButtonCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  duelDeadlineButtonTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelDeadlineButtonMeta: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  duelDeadlinePickerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 80,
+    elevation: 80,
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
+    paddingHorizontal: 16,
+  },
+  duelPickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    elevation: 1,
+  },
+  duelPickerSheetLayer: {
+    zIndex: 2,
+    elevation: 2,
+  },
+  duelNativePicker: {
+    width: '100%',
+    minHeight: 190,
+  },
+  duelNativeTimePicker: {
+    alignSelf: 'center',
+    maxWidth: 320,
+  },
+  duelTimePickerButton: {
+    width: '100%',
+    minHeight: 56,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 10,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  duelTimePickerCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  duelTimePickerTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelTimePickerMeta: {
+    color: '#65748b',
+    fontSize: 11.5,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  duelTimePickerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+    zIndex: 90,
+    elevation: 90,
+    backgroundColor: 'rgba(15, 23, 42, 0.38)',
+  },
+  duelTimePickerSheet: {
+    width: '100%',
+    gap: 14,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 16,
+    paddingTop: 15,
+    paddingBottom: 22,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    elevation: 14,
+  },
+  duelTimePickerHeader: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 12,
+  },
+  duelTimePickerTitleText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: -0.2,
+  },
+  duelTimePickerWheelRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  duelTimePickerWheel: {
+    flex: 1,
+    minWidth: 0,
+    gap: 8,
+  },
+  duelTimePickerWheelLabel: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+  },
+  duelTimePickerWheelScroll: {
+    maxHeight: 190,
+  },
+  duelTimePickerWheelOption: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+    marginBottom: 7,
+    borderColor: '#E5E8EF',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  duelTimePickerWheelOptionActive: {
+    borderColor: STUDOS_THEME.ink,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelTimePickerWheelOptionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelTimePickerWheelOptionTextActive: {
+    color: '#FFFFFF',
+  },
+  duelTimePickerPanel: {
+    width: '100%',
+    gap: 9,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+  },
+  duelTimePickerStrip: {
+    gap: 7,
+    paddingRight: 2,
+  },
+  duelTimePickerChip: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 42,
+    minHeight: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+  },
+  duelTimePickerChipActive: {
+    borderColor: STUDOS_THEME.ink,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelTimePickerChipText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12.5,
+    fontWeight: '900',
+  },
+  duelTimePickerChipTextActive: {
+    color: '#FFFFFF',
+  },
+  duelMinutePickerRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  duelMinutePickerChip: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#F8FAFC',
+    padding: 0,
+  },
+  duelDeadlinePickerPanel: {
+    gap: 13,
+    padding: 16,
+  },
+  duelDeadlinePickerHeader: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  duelDeadlinePickerNav: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  duelDeadlinePickerNavSpacer: {
+    width: 36,
+    height: 36,
+  },
+  duelDeadlinePickerMonth: {
+    flex: 1,
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: -0.1,
+    textAlign: 'center',
+    textTransform: 'capitalize',
+  },
+  duelDeadlineWeekRow: {
+    flexDirection: 'row',
+    gap: 5,
+  },
+  duelDeadlineWeekday: {
+    flex: 1,
+    color: '#65748b',
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  duelDeadlineGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  duelDeadlineDay: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '12.6%',
+    aspectRatio: 1,
+    borderColor: '#E5E8EF',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  duelDeadlineDayEmpty: {
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+  },
+  duelDeadlineDaySelected: {
+    borderColor: STUDOS_THEME.ink,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelDeadlineDayText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12.5,
+    fontWeight: '900',
+  },
+  duelDeadlineDayTextSelected: {
+    color: '#FFFFFF',
+  },
+  duelDeadlineTimeRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    borderColor: '#E5E8EF',
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  duelDeadlineTimeInput: {
+    flex: 1,
+    minWidth: 0,
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    padding: 0,
+  },
+  duelDeadlineDoneButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    borderRadius: 15,
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  duelDeadlineDoneButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelStakeField: {
+    width: '100%',
+  },
   duelModalTextarea: {
+    width: '100%',
     minHeight: 100,
+    borderColor: '#F2D9B1',
+    backgroundColor: '#FFFFFF',
     paddingTop: 10,
   },
   duelModalInputRow: {
+    width: '100%',
+    flexWrap: 'wrap',
     flexDirection: 'row',
     gap: 10,
   },
   duelDateTimeRow: {
+    minWidth: 0,
+    flexWrap: 'wrap',
     flexDirection: 'row',
     gap: 8,
   },
   duelDateTimeInput: {
+    minWidth: 0,
+    flex: 1,
     flex: 1,
     minWidth: 0,
+    borderColor: '#F2D9B1',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 10,
   },
   chatGroupSelectionText: {
@@ -24116,25 +26708,19 @@ const styles = StyleSheet.create({
     transform: [{ translateY: -1 }, { scale: 1.04 }],
   },
   footerPointDuelIcon: {
-    width: 26,
-    height: 24,
-    transform: [{ scale: 1.14 }],
+    width: 30,
+    height: 30,
+    borderRadius: 11,
+    transform: [{ translateY: -1 }],
   },
   footerPointDuelIconActive: {
-    transform: [{ scale: 1.2 }],
+    transform: [{ translateY: -2 }, { scale: 1.04 }],
   },
-  footerPointDuelShieldOutline: {
-    position: 'absolute',
-    top: -2,
-    zIndex: 1,
-  },
-  footerPointDuelShieldFill: {
-    position: 'absolute',
-    top: 0,
-    zIndex: 2,
-  },
-  footerPointDuelSwords: {
-    zIndex: 3,
+  footerPointDuelCoin: {
+    right: 2,
+    top: 1,
+    width: 10,
+    height: 10,
   },
   footerCenterCircleLabel: {
     color: '#FFF4D8',
@@ -24151,6 +26737,8 @@ const styles = StyleSheet.create({
     opacity: 0.72,
   },
   footerIconWrap: {
+    flexShrink: 0,
+    minWidth: 36,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',

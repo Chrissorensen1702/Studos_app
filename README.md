@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-03 efter dynamiske Caps, Klassedyst,
-Optjen Caps, weekly streak og forenklet claim-flow for ugens gode gerning.
+Status er opdateret 2026-05-05 efter Dyst-backend, Caps-escrow,
+dommerflow, native dato/tid og 24 timers svarfrist paa dystanmodninger.
 
 Se ogsaa:
 
@@ -38,9 +38,10 @@ Se ogsaa:
   Metro.
 - Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
   afhaengige af lokal dev-server.
-- Duel-siden i mobilappen har en færdig UI (oprettelse, modstander-søgning,
-  challenge/indsats/deadline, filtre, status og actions), men mangler backend-
-  integration.
+- Dyst-siden i mobilappen er koblet paa backend med oprettelse, accept/afvis,
+  Caps-escrow, resultatbekraeftelse, dommerflow, arkiv og 24 timers svarfrist.
+- Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
+  er paa plads.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 - Medlems-email er nu entydig på tværs af systemet; én email kan kun knyttes til
   én klasse. Dette håndhæves i backend-validering og database-indekset
@@ -178,6 +179,15 @@ GET  /api/good-deeds/current
 POST /api/good-deeds/claims
 GET  /api/check-ins/weekly
 POST /api/check-ins/weekly
+GET  /api/duels
+POST /api/duels
+POST /api/duels/{duel}/accept
+POST /api/duels/{duel}/decline
+POST /api/duels/{duel}/cancel
+POST /api/duels/{duel}/confirm
+POST /api/duels/{duel}/complete
+POST /api/duels/{duel}/approve
+POST /api/duels/{duel}/reject
 POST /api/events
 POST /api/events/{event}/update
 POST /api/events/{event}/delete
@@ -262,14 +272,14 @@ Footer-navigation:
 - `Kalender`
 - `Chat`
 - `Overblik`
-- `Duel`
+- `Dyst`
 - `Walls`
 
 Sidebar:
 
 - `Din klasse`: Optjen Caps, Leaderboard, Dagens stemning, Klasseawards,
   Tilfaeldig vaelger.
-- `Andre klasser`: Andre klasser, Klassedueller.
+- `Andre klasser`: Andre klasser, Klassedyster.
 - `Kommende`: Wallet og Blaa bog er laast.
 - Nederst: Noedkontakter og Indstillinger.
 
@@ -291,7 +301,7 @@ Overblik:
 - `Min kommende kalender` viser alle dagens events og maks 3 kommende events.
 - Klik paa et event i Overblik aabner Kalender paa den rigtige dag/eventkort.
 - `Dagens stemning` gemmes lokalt pr. bruger og resetter ved lokal midnat.
-- Der er nederste kort til `Seneste walls aktivitet` og `Klassedueller`.
+- Der er nederste kort til `Seneste walls aktivitet` og `Klassedyster`.
 
 Kalender:
 
@@ -320,17 +330,34 @@ Klassedyst:
 - Topkort viser klassens placering, brugerens Caps og brugerens klasseandel.
 - Ugens gode gerning kan claimes direkte paa kortet og opdaterer Caps.
 
-Duel:
+Dyst:
 
-- `DuelScreen` er bygget i `apps/mobile/App.js` med:
-  - header med titel/logo og “Ny duel”-flow
-  - modstander-søgning
-  - challenge-tekst + indsats (Caps) + deadline
-  - filtre på status (`Aktive`, `Afventer`, `Afsluttede`, `Alle`)
-  - handlinger: accepter, afvis, annuller, bekræft, markér gennemført
-- Denne funktion er i dag lokal-state og er ikke server-synkroniseret.
-- Der findes ingen backend-kobling til duels endnu (persistens, notifikationer,
-  validering, escrow eller caps-udførelse).
+- Dyst er produktnavnet for det tidligere Duel-flow.
+- Opret dyst aabner som overlay oven paa Dyst-siden og kan swipes tilbage paa
+  samme maade som chat-overlayet.
+- Der kan oprettes to typer: `Mod hinanden` til 1:1-konkurrencer og `Challenge`
+  til envejs-udfordringer.
+- Opret-flowet har kollapset modstandervalg, native dato- og tidsvaelger,
+  Caps-indsats, deadline og valgfri tredjepartsdommer.
+- Afventende dystanmodninger viser en 24 timers svarfrist i status-pill i stedet
+  for en statisk `Afventer svar` tekst.
+- Afventende dystkort bruger lyseblaa container, mens svarfrist-pill kan vaere
+  gul eller roed, naar fristen er taet paa at udloebe.
+- Aktive `Mod hinanden`-dyster bruger `Vaelg vinder`. Uden dommer skal begge
+  parter bekraefte resultatet, foer Caps udbetales.
+- Aktive `Challenge`-dyster bruger gennemfoert-flow; uden dommer kraever
+  resultatet ogsaa modpartens bekraeftelse.
+- Hvis der er dommer paa en dyst, sendes resultatet til dommergodkendelse, og
+  dommeren kan godkende eller afvise via en separat dommermodal.
+- Dommeropgaver vises kun, naar brugeren faktisk har afventende
+  dommergodkendelser, med lille badge/tal paa Dyst-siden.
+- Afsluttede, afviste, annullerede og udloebne dyster ligger i arkivmodalen.
+- Backend gemmer dyster i `point_duels`, validerer Caps-balance, laaser indsats i
+  escrow og skriver bevaegelser i `cap_transactions`.
+- Udlober en aktiv dyst, eller udlober en anmodning efter 24 timer uden accept,
+  arkiveres den som udloebet og escrow-Caps refunderes.
+- Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
+  er paa plads.
 
 Optjen Caps:
 
@@ -338,7 +365,7 @@ Optjen Caps:
 - Weekly streak registreres automatisk ved app-aabning.
 - Dag 7 giver 100 Caps, viser reward-modal og starter derefter en ny streak.
 - Andre maader at optjene Caps ligger i en intern scroll-container:
-  Ugens gode gerning, Check-in med `Scan QR`, og dueller med point paa hoejkant.
+  Ugens gode gerning, Check-in med `Scan QR`, og dyster med point paa hoejkant.
 - Ugens gode gerning giver 25 Caps og kan kun claimes en gang pr. uge.
 
 ## Build-/Store-Konfiguration
@@ -424,8 +451,7 @@ Release-blokkere foer Apple/Google:
 - Blaa bog.
 - Walls/feed/galleri.
 - Klasseawards/afstemninger.
-- Pointduel backend og regler (status-flow, validering, persistens, escrow,
-  modstander-sync).
+- Push-notifikationer for dyster.
 - Backend-persistens for Dagens stemning og hueklip.
 - Kalender-push og daglig stemningsreminder.
 - Glemt adgangskode/email reset.
@@ -484,5 +510,7 @@ Resultat:
 3. Lav admin/moderationsside.
 4. Kør to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
 5. Gør Dagens stemning/hueklip rigtige i backend.
-6. Lav App Store Connect metadata, screenshots, privacy labels og review notes.
-7. Lav production iOS/TestFlight build og Android production AAB.
+6. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
+   dommergodkendelse, udloeb og Caps-refundering.
+7. Lav App Store Connect metadata, screenshots, privacy labels og review notes.
+8. Lav production iOS/TestFlight build og Android production AAB.

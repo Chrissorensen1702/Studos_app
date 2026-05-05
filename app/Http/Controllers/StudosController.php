@@ -343,6 +343,421 @@ class StudosController extends Controller
         ], 201);
     }
 
+    public function duels(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $this->ensurePointDuelsReady();
+        $this->expireDueDuelsForMember($member);
+
+        return response()->json([
+            'duels' => $this->duelsForMember($member),
+            'currentMember' => $this->serializeMember(
+                DB::table('members')->where('id', $member->id)->first(),
+                true,
+                true,
+                $member->id,
+            ),
+        ]);
+    }
+
+    public function storeDuel(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        $data = $request->validate([
+            'toMemberId' => ['required', 'string', 'max:36'],
+            'judgeMemberId' => ['nullable', 'string', 'max:36'],
+            'mode' => ['nullable', Rule::in(['versus', 'challenge'])],
+            'challenge' => ['required', 'string', 'min:2', 'max:500'],
+            'stake' => ['required', 'integer', 'min:1', 'max:100000'],
+            'deadlineAt' => ['required', 'date'],
+        ]);
+        $deadlineAt = Carbon::parse($data['deadlineAt']);
+        $duelMode = $data['mode'] ?? 'versus';
+
+        abort_if($deadlineAt->isPast(), 422, 'Deadline skal være i fremtiden.');
+        abort_if(! blank($data['judgeMemberId'] ?? null) && ! Schema::hasColumn('point_duels', 'judge_member_id'), 500, 'Dommerfunktionen er ikke migreret endnu.');
+
+        $duelId = DB::transaction(function () use ($member, $data, $deadlineAt, $duelMode): string {
+            $creator = DB::table('members')
+                ->where('id', $member->id)
+                ->where('status', 'active')
+                ->lockForUpdate()
+                ->first();
+            $opponent = DB::table('members')
+                ->where('id', $data['toMemberId'])
+                ->where('class_id', $member->class_id)
+                ->where('status', 'active')
+                ->lockForUpdate()
+                ->first();
+            $judge = blank($data['judgeMemberId'] ?? null)
+                ? null
+                : DB::table('members')
+                    ->where('id', $data['judgeMemberId'])
+                    ->where('class_id', $member->class_id)
+                    ->where('status', 'active')
+                    ->first();
+            $stake = (int) $data['stake'];
+
+            abort_unless($creator, 401, 'Medlemmet har ikke adgang længere.');
+            abort_unless($opponent, 422, 'Modstanderen findes ikke længere.');
+            abort_if((string) $opponent->id === (string) $creator->id, 422, 'Du kan ikke oprette en dyst mod dig selv.');
+            abort_if(! blank($data['judgeMemberId'] ?? null) && ! $judge, 422, 'Dommeren findes ikke længere.');
+            abort_if($judge && (string) $judge->id === (string) $creator->id, 422, 'Du kan ikke vælge dig selv som dommer.');
+            abort_if($judge && (string) $judge->id === (string) $opponent->id, 422, 'Modstanderen kan ikke også være dommer.');
+
+            $creatorBalance = (int) ($creator->caps_balance ?? 1000);
+
+            abort_if($creatorBalance < $stake, 422, 'Du har ikke nok Caps til den indsats.');
+
+            $now = now()->format('Y-m-d H:i:s');
+            $duelId = (string) Str::uuid();
+
+            DB::table('members')->where('id', $creator->id)->update([
+                'caps_balance' => $creatorBalance - $stake,
+            ]);
+            $duelInsert = [
+                'id' => $duelId,
+                'class_id' => $creator->class_id,
+                'creator_member_id' => $creator->id,
+                'opponent_member_id' => $opponent->id,
+                'challenge' => trim($data['challenge']),
+                'stake_caps' => $stake,
+                'creator_escrow_caps' => $stake,
+                'opponent_escrow_caps' => 0,
+                'status' => 'awaitingOpponent',
+                'deadline_at' => $deadlineAt->format('Y-m-d H:i:s'),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            if (\Illuminate\Support\Facades\Schema::hasColumn('point_duels', 'mode')) {
+                $duelInsert['mode'] = $duelMode;
+            }
+
+            if (Schema::hasColumn('point_duels', 'judge_member_id') && $judge) {
+                $duelInsert['judge_member_id'] = $judge->id;
+            }
+
+            DB::table('point_duels')->insert($duelInsert);
+            $this->recordCapTransaction(
+                $creator->id,
+                $creator->class_id,
+                -$stake,
+                'duel_escrow_hold',
+                'Duel-indsats låst i escrow',
+                'point_duel',
+                $duelId,
+                $creator->id,
+                ['opponentMemberId' => $opponent->id],
+            );
+
+            return $duelId;
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duelId), 201);
+    }
+
+    public function acceptDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+            abort_if($duelRow->status !== 'awaitingOpponent', 422, 'Dysten kan ikke accepteres længere.');
+            abort_if((string) $duelRow->opponent_member_id !== (string) $member->id, 403, 'Kun modstanderen kan acceptere dysten.');
+
+            $opponent = DB::table('members')->where('id', $member->id)->lockForUpdate()->first();
+            $stake = (int) $duelRow->stake_caps;
+            $balance = (int) ($opponent->caps_balance ?? 1000);
+
+            abort_if($balance < $stake, 422, 'Du har ikke nok Caps til at acceptere den indsats.');
+
+            DB::table('members')->where('id', $opponent->id)->update([
+                'caps_balance' => $balance - $stake,
+            ]);
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'opponent_escrow_caps' => $stake,
+                'status' => 'awaitingCreatorConfirm',
+                'accepted_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+            $this->recordCapTransaction(
+                $opponent->id,
+                $opponent->class_id,
+                -$stake,
+                'duel_escrow_hold',
+                'Duel-indsats låst i escrow',
+                'point_duel',
+                $duelRow->id,
+                $opponent->id,
+                ['creatorMemberId' => $duelRow->creator_member_id],
+            );
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function declineDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+            abort_if($duelRow->status !== 'awaitingOpponent', 422, 'Dysten kan ikke afvises længere.');
+            abort_if((string) $duelRow->opponent_member_id !== (string) $member->id, 403, 'Kun modstanderen kan afvise dysten.');
+
+            $this->refundDuelEscrow($duelRow->creator_member_id, $duelRow, (int) $duelRow->creator_escrow_caps, 'duel_declined');
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'creator_escrow_caps' => 0,
+                'status' => 'declined',
+                'declined_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function cancelDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+            abort_if($duelRow->status !== 'awaitingOpponent', 422, 'Dysten kan ikke annulleres længere.');
+            abort_if((string) $duelRow->creator_member_id !== (string) $member->id, 403, 'Kun opretteren kan annullere dysten.');
+
+            $this->refundDuelEscrow($duelRow->creator_member_id, $duelRow, (int) $duelRow->creator_escrow_caps, 'duel_cancelled');
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'creator_escrow_caps' => 0,
+                'status' => 'cancelled',
+                'cancelled_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function confirmDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+            abort_if($duelRow->status !== 'awaitingCreatorConfirm', 422, 'Dysten venter ikke på bekræftelse.');
+            abort_if((string) $duelRow->creator_member_id !== (string) $member->id, 403, 'Kun opretteren kan bekræfte dysten.');
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'status' => 'active',
+                'confirmed_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function completeDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+        $data = $request->validate([
+            'winnerMemberId' => ['nullable', 'string', 'max:36'],
+        ]);
+
+        DB::transaction(function () use ($member, $duel, $data): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+            abort_if($duelRow->status !== 'active', 422, 'Dysten er ikke aktiv.');
+            abort_unless(
+                in_array((string) $member->id, [(string) $duelRow->creator_member_id, (string) $duelRow->opponent_member_id], true),
+                403,
+                'Du kan ikke afslutte denne dyst.',
+            );
+
+            $winnerMemberId = $data['winnerMemberId'] ?? $member->id;
+            abort_unless(
+                in_array((string) $winnerMemberId, [(string) $duelRow->creator_member_id, (string) $duelRow->opponent_member_id], true),
+                422,
+                'Vælg en gyldig vinder.',
+            );
+
+            $pool = (int) $duelRow->creator_escrow_caps + (int) $duelRow->opponent_escrow_caps;
+            abort_if($pool <= 0, 422, 'Dysten har ingen Caps i escrow.');
+
+            if (! blank($duelRow->judge_member_id ?? null)) {
+                DB::table('point_duels')->where('id', $duelRow->id)->update([
+                    'status' => 'awaitingJudgeApproval',
+                    'winner_member_id' => $winnerMemberId,
+                    'completed_by_member_id' => $member->id,
+                    'judge_requested_at' => now()->format('Y-m-d H:i:s'),
+                    'judge_rejected_at' => null,
+                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                ]);
+
+                return;
+            }
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'status' => 'awaitingResultConfirm',
+                'winner_member_id' => $winnerMemberId,
+                'completed_by_member_id' => $member->id,
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+
+            return;
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function approveDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+
+            if ($duelRow->status === 'awaitingResultConfirm') {
+                abort_unless(
+                    in_array((string) $member->id, [(string) $duelRow->creator_member_id, (string) $duelRow->opponent_member_id], true),
+                    403,
+                    'Kun deltagerne kan bekræfte resultatet.',
+                );
+                abort_if((string) ($duelRow->completed_by_member_id ?? '') === (string) $member->id, 422, 'Modparten skal bekræfte resultatet.');
+                abort_unless($duelRow->winner_member_id, 422, 'Dysten mangler en foreslået vinder.');
+
+                $pool = (int) $duelRow->creator_escrow_caps + (int) $duelRow->opponent_escrow_caps;
+                abort_if($pool <= 0, 422, 'Dysten har ingen Caps i escrow.');
+
+                $winner = DB::table('members')->where('id', $duelRow->winner_member_id)->lockForUpdate()->first();
+                abort_unless($winner, 422, 'Vinderen findes ikke længere.');
+
+                $balance = (int) ($winner->caps_balance ?? 1000);
+
+                DB::table('members')->where('id', $winner->id)->update([
+                    'caps_balance' => $balance + $pool,
+                ]);
+                DB::table('point_duels')->where('id', $duelRow->id)->update([
+                    'creator_escrow_caps' => 0,
+                    'opponent_escrow_caps' => 0,
+                    'status' => 'completed',
+                    'completed_at' => now()->format('Y-m-d H:i:s'),
+                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                ]);
+                $this->recordCapTransaction(
+                    $winner->id,
+                    $winner->class_id,
+                    $pool,
+                    'duel_settlement',
+                    'Dyst-pulje udbetalt efter fælles bekræftelse',
+                    'point_duel',
+                    $duelRow->id,
+                    $member->id,
+                    [
+                        'creatorMemberId' => $duelRow->creator_member_id,
+                        'opponentMemberId' => $duelRow->opponent_member_id,
+                        'proposedByMemberId' => $duelRow->completed_by_member_id,
+                    ],
+                );
+
+                return;
+            }
+
+            abort_if($duelRow->status !== 'awaitingJudgeApproval', 422, 'Dysten afventer ikke dommer.');
+            abort_if((string) ($duelRow->judge_member_id ?? '') !== (string) $member->id, 403, 'Kun dommeren kan godkende dysten.');
+            abort_unless($duelRow->winner_member_id, 422, 'Dysten mangler en foreslået vinder.');
+
+            $pool = (int) $duelRow->creator_escrow_caps + (int) $duelRow->opponent_escrow_caps;
+            abort_if($pool <= 0, 422, 'Dysten har ingen Caps i escrow.');
+
+            $winner = DB::table('members')->where('id', $duelRow->winner_member_id)->lockForUpdate()->first();
+            abort_unless($winner, 422, 'Vinderen findes ikke længere.');
+
+            $balance = (int) ($winner->caps_balance ?? 1000);
+
+            DB::table('members')->where('id', $winner->id)->update([
+                'caps_balance' => $balance + $pool,
+            ]);
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'creator_escrow_caps' => 0,
+                'opponent_escrow_caps' => 0,
+                'status' => 'completed',
+                'judge_approved_at' => now()->format('Y-m-d H:i:s'),
+                'completed_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+            $this->recordCapTransaction(
+                $winner->id,
+                $winner->class_id,
+                $pool,
+                'duel_settlement',
+                'Dyst-pulje udbetalt efter dommergodkendelse',
+                'point_duel',
+                $duelRow->id,
+                $member->id,
+                [
+                    'creatorMemberId' => $duelRow->creator_member_id,
+                    'opponentMemberId' => $duelRow->opponent_member_id,
+                    'judgeMemberId' => $member->id,
+                ],
+            );
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function rejectDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+
+            if ($duelRow->status === 'awaitingResultConfirm') {
+                abort_unless(
+                    in_array((string) $member->id, [(string) $duelRow->creator_member_id, (string) $duelRow->opponent_member_id], true),
+                    403,
+                    'Kun deltagerne kan afvise resultatet.',
+                );
+                abort_if((string) ($duelRow->completed_by_member_id ?? '') === (string) $member->id, 422, 'Modparten skal afvise resultatet.');
+
+                DB::table('point_duels')->where('id', $duelRow->id)->update([
+                    'status' => 'active',
+                    'winner_member_id' => null,
+                    'completed_by_member_id' => null,
+                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                ]);
+
+                return;
+            }
+
+            abort_if($duelRow->status !== 'awaitingJudgeApproval', 422, 'Dysten afventer ikke dommer.');
+            abort_if((string) ($duelRow->judge_member_id ?? '') !== (string) $member->id, 403, 'Kun dommeren kan afvise dysten.');
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update([
+                'status' => 'active',
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'judge_rejected_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+        });
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
     public function schools(): JsonResponse
     {
         return response()->json([
@@ -1545,6 +1960,225 @@ class StudosController extends Controller
             'metadata' => empty($metadata) ? null : json_encode($metadata),
             'created_at' => now()->format('Y-m-d H:i:s'),
         ]);
+    }
+
+    private function ensurePointDuelsReady(): void
+    {
+        abort_unless(Schema::hasTable('point_duels'), 500, 'Duel-backend er ikke migreret endnu.');
+        abort_unless(Schema::hasTable('cap_transactions'), 500, 'Caps-transaktioner er ikke klar endnu.');
+    }
+
+    private function duelForMember(string $duelId, object $member, bool $lock = false): object
+    {
+        if ($lock) {
+            $this->expireDueDuelsForMember($member);
+        }
+
+        $hasJudgeColumn = Schema::hasColumn('point_duels', 'judge_member_id');
+        $query = DB::table('point_duels')
+            ->where('id', $duelId)
+            ->where('class_id', $member->class_id)
+            ->where(function ($query) use ($member, $hasJudgeColumn): void {
+                $query
+                    ->where('creator_member_id', $member->id)
+                    ->orWhere('opponent_member_id', $member->id);
+
+                if ($hasJudgeColumn) {
+                    $query->orWhere('judge_member_id', $member->id);
+                }
+            });
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $duel = $query->first();
+
+        abort_unless($duel, 404, 'Dysten findes ikke.');
+
+        return $duel;
+    }
+
+    private function duelsForMember(object $member): array
+    {
+        $hasJudgeColumn = Schema::hasColumn('point_duels', 'judge_member_id');
+
+        return DB::table('point_duels')
+            ->where('class_id', $member->class_id)
+            ->where(function ($query) use ($member, $hasJudgeColumn): void {
+                $query
+                    ->where('creator_member_id', $member->id)
+                    ->orWhere('opponent_member_id', $member->id);
+
+                if ($hasJudgeColumn) {
+                    $query->orWhere('judge_member_id', $member->id);
+                }
+            })
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn (object $duel): array => $this->serializeDuel($duel))
+            ->all();
+    }
+
+    private function duelResponseForMember(object $member, string $duelId): array
+    {
+        $freshMember = DB::table('members')->where('id', $member->id)->first();
+
+        return [
+            'duel' => $this->serializeDuel($this->duelForMember($duelId, $member)),
+            'duels' => $this->duelsForMember($member),
+            'currentMember' => $this->serializeMember($freshMember, true, true, $member->id),
+        ];
+    }
+
+    private function expireDueDuelsForMember(object $member): void
+    {
+        if (! Schema::hasTable('point_duels')) {
+            return;
+        }
+
+        $hasJudgeColumn = Schema::hasColumn('point_duels', 'judge_member_id');
+        $now = now();
+        $nowString = $now->format('Y-m-d H:i:s');
+        $acceptCutoff = $now->copy()->subDay()->format('Y-m-d H:i:s');
+        $expirableStatuses = [
+            'awaitingOpponent',
+            'awaitingCreatorConfirm',
+            'active',
+            'awaitingResultConfirm',
+            'awaitingJudgeApproval',
+        ];
+
+        DB::transaction(function () use ($member, $hasJudgeColumn, $nowString, $acceptCutoff, $expirableStatuses): void {
+            $query = DB::table('point_duels')
+                ->where('class_id', $member->class_id)
+                ->whereIn('status', $expirableStatuses)
+                ->where(function ($query) use ($member, $hasJudgeColumn): void {
+                    $query
+                        ->where('creator_member_id', $member->id)
+                        ->orWhere('opponent_member_id', $member->id);
+
+                    if ($hasJudgeColumn) {
+                        $query->orWhere('judge_member_id', $member->id);
+                    }
+                })
+                ->where(function ($query) use ($nowString, $acceptCutoff): void {
+                    $query
+                        ->where(function ($query) use ($acceptCutoff): void {
+                            $query
+                                ->where('status', 'awaitingOpponent')
+                                ->whereNotNull('created_at')
+                                ->where('created_at', '<=', $acceptCutoff);
+                        })
+                        ->orWhere(function ($query) use ($nowString): void {
+                            $query
+                                ->whereIn('status', [
+                                    'awaitingCreatorConfirm',
+                                    'active',
+                                    'awaitingResultConfirm',
+                                    'awaitingJudgeApproval',
+                                ])
+                                ->whereNotNull('deadline_at')
+                                ->where('deadline_at', '<', $nowString);
+                        });
+                })
+                ->lockForUpdate();
+
+            $query->get()->each(fn (object $duel): mixed => $this->expireDuelRow($duel, $nowString));
+        });
+    }
+
+    private function expireDuelRow(object $duel, string $expiredAt): void
+    {
+        $this->refundDuelEscrow($duel->creator_member_id, $duel, (int) ($duel->creator_escrow_caps ?? 0), 'duel_expired');
+        $this->refundDuelEscrow($duel->opponent_member_id, $duel, (int) ($duel->opponent_escrow_caps ?? 0), 'duel_expired');
+
+        $updates = [
+            'creator_escrow_caps' => 0,
+            'opponent_escrow_caps' => 0,
+            'status' => 'expired',
+            'updated_at' => $expiredAt,
+        ];
+
+        if (Schema::hasColumn('point_duels', 'expired_at')) {
+            $updates['expired_at'] = $expiredAt;
+        }
+
+        DB::table('point_duels')->where('id', $duel->id)->update($updates);
+    }
+
+    private function serializeDuel(object $duel): array
+    {
+        $confirmedBy = [];
+
+        if (in_array($duel->status, ['awaitingCreatorConfirm', 'active', 'completed'], true)) {
+            $confirmedBy[] = 'target';
+        }
+
+        if (in_array($duel->status, ['active', 'completed'], true)) {
+            $confirmedBy[] = 'creator';
+        }
+
+        return [
+            'id' => $duel->id,
+            'classId' => $duel->class_id,
+            'fromMemberId' => $duel->creator_member_id,
+            'toMemberId' => $duel->opponent_member_id,
+            'judgeMemberId' => $duel->judge_member_id ?? null,
+            'mode' => $duel->mode ?? 'versus',
+            'challenge' => $duel->challenge,
+            'stake' => (int) $duel->stake_caps,
+            'creatorEscrowCaps' => (int) ($duel->creator_escrow_caps ?? 0),
+            'opponentEscrowCaps' => (int) ($duel->opponent_escrow_caps ?? 0),
+            'status' => $duel->status,
+            'confirmedBy' => $confirmedBy,
+            'winnerMemberId' => $duel->winner_member_id ?? null,
+            'completedByMemberId' => $duel->completed_by_member_id ?? null,
+            'judgeRequestedAt' => $this->apiDateTime($duel->judge_requested_at ?? null),
+            'judgeApprovedAt' => $this->apiDateTime($duel->judge_approved_at ?? null),
+            'judgeRejectedAt' => $this->apiDateTime($duel->judge_rejected_at ?? null),
+            'deadlineAt' => $this->apiDateTime($duel->deadline_at ?? null),
+            'acceptedAt' => $this->apiDateTime($duel->accepted_at ?? null),
+            'confirmedAt' => $this->apiDateTime($duel->confirmed_at ?? null),
+            'declinedAt' => $this->apiDateTime($duel->declined_at ?? null),
+            'cancelledAt' => $this->apiDateTime($duel->cancelled_at ?? null),
+            'expiredAt' => $this->apiDateTime($duel->expired_at ?? null),
+            'completedAt' => $this->apiDateTime($duel->completed_at ?? null),
+            'createdAt' => $this->apiDateTime($duel->created_at ?? null),
+            'updatedAt' => $this->apiDateTime($duel->updated_at ?? null),
+        ];
+    }
+
+    private function refundDuelEscrow(string $memberId, object $duel, int $amount, string $type): void
+    {
+        if ($amount <= 0) {
+            return;
+        }
+
+        $member = DB::table('members')->where('id', $memberId)->lockForUpdate()->first();
+
+        if (! $member) {
+            return;
+        }
+
+        DB::table('members')->where('id', $member->id)->update([
+            'caps_balance' => (int) ($member->caps_balance ?? 1000) + $amount,
+        ]);
+        $this->recordCapTransaction(
+            $member->id,
+            $member->class_id,
+            $amount,
+            $type,
+            'Dyst-indsats returneret fra escrow',
+            'point_duel',
+            $duel->id,
+            $memberId,
+            [
+                'status' => $duel->status,
+                'creatorMemberId' => $duel->creator_member_id,
+                'opponentMemberId' => $duel->opponent_member_id,
+            ],
+        );
     }
 
     private function profilePhotoPathForSignup(array $data, string $memberId): ?string

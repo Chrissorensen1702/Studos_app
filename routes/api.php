@@ -21,6 +21,15 @@ Route::post('/session/request-code', [StudosController::class, 'requestLoginCode
 Route::post('/session/verify-code', [StudosController::class, 'verifyLoginCode']);
 Route::get('/session/me', [StudosController::class, 'sessionMe']);
 Route::get('/class-battle', [StudosController::class, 'classBattle']);
+Route::get('/duels', [StudosController::class, 'duels']);
+Route::post('/duels', [StudosController::class, 'storeDuel'])->middleware('throttle:20,1');
+Route::post('/duels/{duel}/accept', [StudosController::class, 'acceptDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/decline', [StudosController::class, 'declineDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/cancel', [StudosController::class, 'cancelDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/confirm', [StudosController::class, 'confirmDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/complete', [StudosController::class, 'completeDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/approve', [StudosController::class, 'approveDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/reject', [StudosController::class, 'rejectDuel'])->middleware('throttle:30,1');
 Route::get('/good-deeds/current', [StudosController::class, 'currentGoodDeed']);
 Route::post('/good-deeds/claims', [StudosController::class, 'storeGoodDeedClaim'])->middleware('throttle:20,1');
 Route::get('/check-ins/weekly', [StudosController::class, 'weeklyCheckIn']);

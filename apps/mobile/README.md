@@ -98,7 +98,7 @@ knap nederst paa kalendersiden og beregnes paa lokal dato/tid.
 
 `Overblik` har dynamisk countdown til studenterugen, `Mit Studos`, lokal
 hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste aktivitet`,
-`Klassedueller` og `Dagens stemning`. Dagens stemning gemmes lokalt pr. bruger
+`Klassedyster` og `Dagens stemning`. Dagens stemning gemmes lokalt pr. bruger
 og resetter ved lokal midnat.
 
 ## App-shell og navigation
