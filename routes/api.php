@@ -11,7 +11,7 @@ Route::post('/classes', [StudosController::class, 'storeClass']);
 Route::get('/classes/id/{classId}', [StudosController::class, 'classByPublicId']);
 Route::get('/classes/invite/{code}', [StudosController::class, 'classByInvite']);
 Route::post('/classes/join', [StudosController::class, 'joinClass']);
-Route::get('/members/code/{code}', [StudosController::class, 'memberByPersonalCode']);
+Route::get('/members/code/{code}', [StudosController::class, 'memberByPersonalCode'])->middleware('throttle:30,1');
 Route::get('/members/{member}/connections', [StudosController::class, 'connectionsForMember']);
 Route::post('/connections/request', [StudosController::class, 'requestConnection']);
 Route::post('/connections/{connection}/respond', [StudosController::class, 'respondToConnection']);
@@ -50,6 +50,16 @@ Route::post('/events/{event}/update', [StudosController::class, 'updateEvent'])-
 Route::post('/events/{event}/delete', [StudosController::class, 'destroyEvent'])->middleware('throttle:20,1');
 Route::post('/events/{event}/report', [StudosController::class, 'reportEvent'])->middleware('throttle:10,1');
 Route::post('/events/{event}/rsvp', [StudosController::class, 'respondToEvent'])->middleware('throttle:40,1');
+
+Route::get('/galleries', [StudosController::class, 'getGalleries'])->middleware('throttle:40,1');
+Route::post('/galleries', [StudosController::class, 'storeGallery'])->middleware('throttle:12,1');
+Route::put('/galleries/{gallery}', [StudosController::class, 'updateGallery'])->middleware('throttle:20,1');
+Route::delete('/galleries/{gallery}', [StudosController::class, 'destroyGallery'])->middleware('throttle:20,1');
+Route::post('/galleries/{gallery}/report', [StudosController::class, 'reportGallery'])->middleware('throttle:10,1');
+Route::get('/galleries/{gallery}/photos', [StudosController::class, 'getGalleryPhotos'])->middleware('throttle:60,1');
+Route::post('/galleries/{gallery}/photos', [StudosController::class, 'storeGalleryPhoto'])->middleware('throttle:20,1');
+Route::delete('/gallery-photos/{photo}', [StudosController::class, 'destroyGalleryPhoto'])->middleware('throttle:20,1');
+Route::post('/gallery-photos/{photo}/report', [StudosController::class, 'reportGalleryPhoto'])->middleware('throttle:10,1');
 
 Route::get('/chat/conversations', [ChatController::class, 'conversations']);
 Route::post('/chat/realtime/auth', [ChatController::class, 'authorizeRealtimeChannel']);

@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-06 efter Dyst v1-polish, Challenge-regler,
-Caps-escrow, dommerflow, realtime/polling, scheduler og publish-checkliste.
+Status er opdateret 2026-05-06 efter Walls/galleri v1, UX-forbedringer,
+device adaptation og sikkerhedsstramninger.
 
 Se ogsaa:
 
@@ -25,7 +25,7 @@ Se ogsaa:
 - FAQ ligger som offentlig Laravel-side paa `/faq`.
 - Cloud ligger paa `https://studos.laravel.cloud`.
 - Cloud API ligger paa `https://studos.laravel.cloud/api`.
-- Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.83.
+- Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.74.
 - Caps er nu en dynamisk backend-enhed via `members.caps_balance` og
   `cap_transactions`.
 - Dyst vurderes v1-klar i kodebasen. Flowet mangler stadig fuld QA paa to
@@ -48,9 +48,18 @@ Se ogsaa:
 - Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
   er paa plads.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
-- Medlems-email er nu entydig på tværs af systemet; én email kan kun knyttes til
-  én klasse. Dette håndhæves i backend-validering og database-indekset
+- Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
+  til én klasse. Dette haandhaeves i backend-validering og database-indekset
   `members.email`.
+- Walls v1 er implementeret: klassegallerier med synlighedsregler, fotoupload,
+  billedvisning og rapportering. Backend bruger `galleries` og `gallery_photos`.
+- Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
+  (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
+  dimensionsbaseret inset-beregning uden externe biblioteker.
+- iOS push-token registrering er aabnet: backend accepterer nu baade `android`
+  og `ios` som platform.
+- Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
+  nu throttlet 30/min.
 
 ## Struktur
 
@@ -154,7 +163,9 @@ Kernen er:
 - Connections via personlig Studos-kode.
 - Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
   Klassedyst, ugens gode gerning og weekly check-in.
-- Android push-token registrering og chat-push.
+- Android og iOS push-token registrering og chat-push.
+- Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
+  synlighedsregler (`private`/`class`/`public`), soft-delete og rapportering.
 
 Roller pr. 2026-04-29:
 
@@ -210,6 +221,15 @@ DELETE /api/chat/messages/{message}
 DELETE /api/members/me
 POST /api/notifications/push-token
 POST /api/notifications/test
+GET  /api/galleries
+POST /api/galleries
+PUT  /api/galleries/{gallery}
+DELETE /api/galleries/{gallery}
+POST /api/galleries/{gallery}/report
+GET  /api/galleries/{gallery}/photos
+POST /api/galleries/{gallery}/photos
+DELETE /api/gallery-photos/{photo}
+POST /api/gallery-photos/{photo}/report
 ```
 
 ## Public Landing Page
@@ -399,6 +419,18 @@ Dyst:
 - Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
   er paa plads.
 
+Walls:
+
+- Walls er klassens billedgalleri, opdelt i navngivne albums (gallerier).
+- Gallerioversigten viser cover-billede, navn, antal fotos og oprettelsesdato.
+- Et galleri kan oprettes med navn og synlighed; synlighedsregler styrer hvem
+  der kan se albummet.
+- Album-skærmen viser alle fotos i et grid og har upload-knap.
+- Fotoupload bruger expo-image-picker og sender til `POST /api/galleries/{gallery}/photos`.
+- Enkeltfotovisning aabner i en fullscreen viewer med download/slet/rapport-actions.
+- Rapportering og sletning er tilgaengelig for uploader og klasse-admin.
+- Backend soft-deleter gallerier og fotos og gemmer `deleted_by_member_id`.
+
 Optjen Caps:
 
 - Siden bruger samme headerstil som de andre app-sider.
@@ -494,7 +526,6 @@ Release-blokkere foer Apple/Google:
 
 - Wallet.
 - Blaa bog.
-- Walls/feed/galleri.
 - Klasseawards/afstemninger.
 - Push-notifikationer for dyster.
 - Backend-persistens for Dagens stemning og hueklip.
@@ -527,19 +558,22 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-06 efter Dyst v1-polish:
+Senest koert 2026-05-06 efter Walls v1, UX og device adaptation:
 
 ```bash
 node --check apps/mobile/App.js
-php artisan tinker --execute="/* oprettede lokale test-dyster til Chris */"
+php -l app/Http/Controllers/StudosController.php
 ```
 
 Resultat:
 
 - `apps/mobile/App.js` parser OK.
-- Lokale testdata for `awaitingResultConfirm` blev oprettet og verificeret:
-  en `Mod hinanden` uden dommer og en `Challenge` uden dommer, hvor Chris
-  Elsborg Soerensen skal godkende foreslaaet vinder/gennemfoersel.
+- `StudosController.php` lint OK.
+- Walls-endpoints og gallery-migrationer verificeret i kodebasen.
+- iOS push-token platform-validering aabnet (`android` + `ios`).
+- Rate limit tilfojet paa `/members/code/{code}` (30/min).
+- Device adaptation verificeret: top-bar og footer bruger nu dimensionsbaserede
+  insets uden externe native biblioteker.
 
 Tidligere koert 2026-05-03 efter login/ email-regel/ Caps/Klassedyst/Optjen Caps-arbejdet:
 
@@ -577,16 +611,18 @@ Resultat:
 
 ## Naeste Gode Skridt
 
-1. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
+1. QA Walls paa to brugere/enheder: opret galleri, upload foto, vis fullscreen,
+   slet, rapporter og synlighedsregler.
+2. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
    Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
    realtime/polling og Caps-refundering.
-2. Koer to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
-3. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
+3. Koer to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
+4. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
    backups og production env.
-4. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
-5. Faa account deletion/support-flow helt review-klar.
-6. Lav admin/moderationsside til rapporter, blocks og violations.
-7. Goer Dagens stemning/hueklip rigtige i backend.
-8. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
+5. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
+6. Faa account deletion/support-flow helt review-klar.
+7. Lav admin/moderationsside til rapporter, blocks og violations.
+8. Goer Dagens stemning/hueklip rigtige i backend.
+9. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
    review notes.
-9. Lav production iOS/TestFlight build og Android production AAB.
+10. Lav production iOS/TestFlight build og Android production AAB.

@@ -40,15 +40,28 @@ const FOOTER_CALENDAR_ICON = require('./assets/footer-calendar.png');
 const FOOTER_CHAT_ICON = require('./assets/footer-chat.png');
 const FOOTER_WALLS_ICON = require('./assets/footer-walls.png');
 const APP_WINDOW_WIDTH = Dimensions.get('window').width;
+const APP_WINDOW_HEIGHT = Dimensions.get('window').height;
 const IS_WEB = Platform.OS === 'web';
 const IS_MOBILE_WEB = IS_WEB && APP_WINDOW_WIDTH <= 768;
 const USE_IOS_SAFE_FRAME = Platform.OS === 'ios' || IS_MOBILE_WEB;
 const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0;
-const APP_TOP_BAR_HEIGHT = USE_IOS_SAFE_FRAME ? 100 : 58 + ANDROID_STATUS_BAR_HEIGHT;
-const APP_TOP_BAR_PADDING_TOP = USE_IOS_SAFE_FRAME ? 42 : ANDROID_STATUS_BAR_HEIGHT;
+// iOS safe area insets udregnet fra skærmhøjde (ingen extern library nødvendig)
+// <750: iPhone SE/8 (ingen notch) | 750-860: notch-enheder | >860: Dynamic Island
+const IOS_TOP_INSET = Platform.OS === 'ios'
+  ? (APP_WINDOW_HEIGHT >= 860 ? 59 : APP_WINDOW_HEIGHT >= 750 ? 50 : 20)
+  : 0;
+const IOS_BOTTOM_INSET = Platform.OS === 'ios' && APP_WINDOW_HEIGHT >= 750 ? 34 : 0;
+const APP_TOP_BAR_HEIGHT = USE_IOS_SAFE_FRAME ? (IOS_TOP_INSET + 58) : 58 + ANDROID_STATUS_BAR_HEIGHT;
+const APP_TOP_BAR_PADDING_TOP = USE_IOS_SAFE_FRAME ? IOS_TOP_INSET : ANDROID_STATUS_BAR_HEIGHT;
 const APP_TOP_BAR_PADDING_BOTTOM = USE_IOS_SAFE_FRAME ? 8 : 0;
 const APP_MOBILE_WEB_FOOTER_SAFE_AREA = IS_MOBILE_WEB ? 34 : 0;
-const APP_FOOTER_PADDING_BOTTOM = Platform.OS === 'android' ? 54 : IS_MOBILE_WEB ? APP_MOBILE_WEB_FOOTER_SAFE_AREA : 8;
+// Android: screen.height - window.height = nav-bar højde. >30 → knap-nav, ellers gesture-nav
+const ANDROID_NAV_BAR_HEIGHT = Platform.OS === 'android'
+  ? Math.max(0, Dimensions.get('screen').height - APP_WINDOW_HEIGHT - ANDROID_STATUS_BAR_HEIGHT)
+  : 0;
+const APP_FOOTER_PADDING_BOTTOM = Platform.OS === 'android'
+  ? (ANDROID_NAV_BAR_HEIGHT > 30 ? ANDROID_NAV_BAR_HEIGHT : 16)
+  : IS_MOBILE_WEB ? APP_MOBILE_WEB_FOOTER_SAFE_AREA : IOS_BOTTOM_INSET;
 const APP_FOOTER_BOTTOM_PULL = IS_MOBILE_WEB ? -APP_MOBILE_WEB_FOOTER_SAFE_AREA : 0;
 const APP_SCREEN_PADDING = 20;
 const APP_SCREEN_TOP_PADDING = 30;
@@ -193,6 +206,81 @@ function ChatConversationChevron({ unread }) {
   }
 
   return <MaterialCommunityIcons name="chevron-right" size={30} color={STUDOS_THEME.red} style={styles.chatConversationChevronUnreadIcon} />;
+}
+
+function useScaleAnim(scaleDown = 0.97) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const spring = (v) => Animated.spring(scale, { toValue: v, useNativeDriver: true, tension: 220, friction: 18 }).start();
+  return { scale, onPressIn: () => spring(scaleDown), onPressOut: () => spring(1) };
+}
+
+function ChatConversationRow({ conversation, isMemberOnline, lastMessagePreview, lastMessageTime, onLongPress, onPress, otherMember }) {
+  const { scale, onPressIn, onPressOut } = useScaleAnim(0.97);
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Pressable
+        accessibilityHint="Hold inde for chatindstillinger"
+        accessibilityRole="button"
+        delayLongPress={280}
+        onLongPress={onLongPress}
+        onPress={onPress}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        style={styles.chatConversationRow}
+      >
+        {({ pressed }) => (
+          <>
+            <View pointerEvents="none" style={styles.chatConversationTail} />
+            {conversation.unreadCount > 0 ? (
+              <View style={styles.chatUnreadBadge}>
+                <Text numberOfLines={1} style={styles.chatUnreadText}>{conversation.unreadCount}</Text>
+              </View>
+            ) : null}
+            {conversation.type === 'direct' && otherMember ? (
+              <View style={styles.chatConversationAvatarStatusWrap}>
+                <Avatar profile={otherMember} variant="chatCircle" />
+                {isMemberOnline ? <View style={styles.chatConversationOnlineDot} /> : null}
+              </View>
+            ) : (
+              <View style={styles.chatConversationIcon}>
+                {conversation.groupPhotoUrl ? (
+                  <Image source={{ uri: conversation.groupPhotoUrl }} style={styles.chatConversationGroupPhoto} />
+                ) : (
+                  <Ionicons name="people" size={18} color={STUDOS_THEME.red} />
+                )}
+              </View>
+            )}
+            <View style={styles.chatConversationCopy}>
+              <Text
+                numberOfLines={1}
+                style={[styles.chatConversationTitle, conversation.unreadCount > 0 ? styles.chatConversationTitleUnread : null]}
+              >
+                {conversation.title}
+              </Text>
+              <View style={styles.chatConversationPreviewRow}>
+                <Text numberOfLines={1} style={styles.chatConversationPreview}>{lastMessagePreview}</Text>
+                {lastMessageTime ? (
+                  <>
+                    <View style={styles.chatConversationPreviewDot} />
+                    <Text numberOfLines={1} style={styles.chatConversationPreviewTime}>{lastMessageTime}</Text>
+                  </>
+                ) : null}
+              </View>
+            </View>
+            <View style={styles.chatConversationMeta}>
+              <ChatConversationChevron unread={conversation.unreadCount > 0} />
+            </View>
+            {pressed ? (
+              <View pointerEvents="none" style={styles.chatConversationHoldIndicator}>
+                <Ionicons name="settings-sharp" size={15} color="#FFFFFF" />
+              </View>
+            ) : null}
+          </>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
 }
 
 const isConversationMuted = (conversation) => {
@@ -1715,6 +1803,7 @@ export default function App() {
     loading: false,
     testLoading: false,
   });
+  const [topBarHeight, setTopBarHeight] = useState(APP_TOP_BAR_HEIGHT);
   const appScrollRef = useRef(null);
   const weeklyCheckInAutoRef = useRef('');
 
@@ -2842,6 +2931,7 @@ export default function App() {
               className={activeClass.className}
               menuOpen={sidebarOpen}
               schoolName={activeClass.schoolName}
+              onLayout={(e) => setTopBarHeight(e.nativeEvent.layout.height)}
               onToggleMenu={() => setSidebarOpen((current) => !current)}
             />
             {appContentDetached ? (
@@ -2957,6 +3047,7 @@ export default function App() {
               activeMembers={activeMembers}
               activeRoute={activeTab}
               profile={profile}
+              topBarHeight={topBarHeight}
               visible={sidebarOpen}
               onClose={() => setSidebarOpen(false)}
               onSelect={(route) => {
@@ -3211,12 +3302,10 @@ function AppTabScreen({
 
   if (activeTab === 'walls') {
     return (
-      <FeatureScreen
-        icon="images"
-        kicker={schoolClass.className}
-        title="Galleri"
-        emptyTitle="Galleriet er tomt endnu"
-        emptyText="Billeder, minder og opslag fra klassen lander her."
+      <WallsScreen
+        activeMember={activeMember}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
       />
     );
   }
@@ -3259,32 +3348,6 @@ function AppTabScreen({
         onReportEvent={onReportEvent}
         onRespondToEvent={onRespondToEvent}
         onUpdateEvent={onUpdateEvent}
-      />
-    );
-  }
-
-  if (activeTab === 'wallet') {
-    return (
-      <FeatureScreen
-        icon="wallet"
-        locked
-        kicker={schoolClass.className}
-        title="Wallet"
-        emptyTitle="Kommer snart"
-        emptyText="Wallet åbner senere med rabatkort, elevbevis og fordele."
-      />
-    );
-  }
-
-  if (activeTab === 'bluebook') {
-    return (
-      <FeatureScreen
-        icon="book"
-        locked
-        kicker={schoolClass.className}
-        title="Blå bog"
-        emptyTitle="Kommer snart"
-        emptyText="Blå bog åbner senere med klasseprofiler, historier og de små legendariske detaljer."
       />
     );
   }
@@ -4969,77 +5032,16 @@ function ChatScreen({
           const lastMessageTime = formatChatListTime(conversation.lastMessage?.createdAt);
 
           return (
-            <Pressable
-              accessibilityHint="Hold inde for chatindstillinger"
-              accessibilityRole="button"
-              delayLongPress={280}
+            <ChatConversationRow
               key={conversation.id}
+              conversation={conversation}
+              isMemberOnline={isMemberOnline(otherMember)}
+              lastMessagePreview={lastMessagePreview}
+              lastMessageTime={lastMessageTime}
               onLongPress={() => openChatConversationActionMenu(conversation)}
               onPress={() => openChatConversation(conversation)}
-              style={({ pressed }) => [
-                styles.chatConversationRow,
-                pressed ? styles.footerItemPressed : null,
-              ]}
-            >
-              {({ pressed }) => (
-                <>
-                  <View pointerEvents="none" style={styles.chatConversationTail} />
-                  {conversation.unreadCount > 0 ? (
-                    <View style={styles.chatUnreadBadge}>
-                      <Text numberOfLines={1} style={styles.chatUnreadText}>
-                        {conversation.unreadCount}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {conversation.type === 'direct' && otherMember ? (
-                    <View style={styles.chatConversationAvatarStatusWrap}>
-                      <Avatar profile={otherMember} variant="chatCircle" />
-                      {isMemberOnline(otherMember) ? <View style={styles.chatConversationOnlineDot} /> : null}
-                    </View>
-                  ) : (
-                    <View style={styles.chatConversationIcon}>
-                      {conversation.groupPhotoUrl ? (
-                        <Image source={{ uri: conversation.groupPhotoUrl }} style={styles.chatConversationGroupPhoto} />
-                      ) : (
-                        <Ionicons name="people" size={18} color={STUDOS_THEME.red} />
-                      )}
-                    </View>
-                  )}
-                  <View style={styles.chatConversationCopy}>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.chatConversationTitle,
-                        conversation.unreadCount > 0 ? styles.chatConversationTitleUnread : null,
-                      ]}
-                    >
-                      {conversation.title}
-                    </Text>
-                    <View style={styles.chatConversationPreviewRow}>
-                      <Text numberOfLines={1} style={styles.chatConversationPreview}>
-                        {lastMessagePreview}
-                      </Text>
-                      {lastMessageTime ? (
-                        <>
-                          <View style={styles.chatConversationPreviewDot} />
-                          <Text numberOfLines={1} style={styles.chatConversationPreviewTime}>
-                            {lastMessageTime}
-                          </Text>
-                        </>
-                      ) : null}
-                    </View>
-                  </View>
-                  <View style={styles.chatConversationMeta}>
-                    <ChatConversationChevron unread={conversation.unreadCount > 0} />
-                  </View>
-                  {pressed ? (
-                    <View pointerEvents="none" style={styles.chatConversationHoldIndicator}>
-                      <Ionicons name="settings-sharp" size={15} color="#FFFFFF" />
-                    </View>
-                  ) : null}
-                </>
-              )}
-            </Pressable>
+              otherMember={otherMember}
+            />
           );
         }) : conversations.length ? (
           <Text style={styles.chatConversationEmptyText}>
@@ -8796,6 +8798,1573 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolCl
   );
 }
 
+const WALLS_VISIBILITY = {
+  private: 'private',
+  public: 'public',
+};
+
+const WALLS_AUDIENCE = {
+  class: 'class',
+  crew: 'crew',
+  specific: 'specific',
+};
+
+const WALLS_PERMISSION = {
+  view: 'view',
+  add: 'add',
+  addDelete: 'addDelete',
+};
+
+function WallsCreateOverlay({ activeMember, initialGallery, onClose, onSave, schoolClass, sessionToken, visible }) {
+  const isEditing = Boolean(initialGallery);
+
+  // Swipe-back animation state
+  const wallsDragX = useRef(new Animated.Value(APP_WINDOW_WIDTH)).current;
+  const wallsWidthRef = useRef(APP_WINDOW_WIDTH);
+  const wallsTouchStartRef = useRef(null);
+  const wallsTouchLatestRef = useRef(null);
+  const wallsSwipeActiveRef = useRef(false);
+  const dragStyle = useMemo(() => ({ transform: [{ translateX: wallsDragX }] }), [wallsDragX]);
+
+  const [name, setName] = useState('');
+  const [visibility, setVisibility] = useState(WALLS_VISIBILITY.private);
+  const [audience, setAudience] = useState(WALLS_AUDIENCE.class);
+  const [permission, setPermission] = useState(WALLS_PERMISSION.view);
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
+  const [memberPickerOpen, setMemberPickerOpen] = useState(false);
+  const [pendingMemberIds, setPendingMemberIds] = useState([]);
+  const [memberPickerSearch, setMemberPickerSearch] = useState('');
+  const [coverImageUri, setCoverImageUri] = useState('');
+  const [coverImageData, setCoverImageData] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const memberSheetY = useRef(new Animated.Value(700)).current;
+  const memberSheetStyle = useMemo(() => ({ transform: [{ translateY: memberSheetY }] }), [memberSheetY]);
+
+  const activeMembers = useMemo(
+    () => (schoolClass?.members ?? [])
+      .filter((m) => m.status === 'active' && String(m.id) !== String(activeMember?.id))
+      .sort((a, b) => (a.displayName ?? '').localeCompare(b.displayName ?? '', 'da')),
+    [schoolClass, activeMember],
+  );
+
+  const filteredPickerMembers = useMemo(() => {
+    const q = memberPickerSearch.trim().toLowerCase();
+    if (!q) return activeMembers;
+    return activeMembers.filter((m) =>
+      (m.displayName ?? '').toLowerCase().includes(q)
+      || (m.firstName ?? '').toLowerCase().includes(q)
+      || (m.lastName ?? '').toLowerCase().includes(q),
+    );
+  }, [activeMembers, memberPickerSearch]);
+
+  const resetForm = useCallback(() => {
+    setName('');
+    setVisibility(WALLS_VISIBILITY.private);
+    setAudience(WALLS_AUDIENCE.class);
+    setPermission(WALLS_PERMISSION.view);
+    setSelectedMemberIds([]);
+    setMemberPickerOpen(false);
+    setPendingMemberIds([]);
+    setMemberPickerSearch('');
+    setCoverImageUri('');
+    setCoverImageData('');
+    setSaving(false);
+    setError('');
+  }, []);
+
+  const resetDrag = useCallback(() => {
+    wallsSwipeActiveRef.current = false;
+    Animated.spring(wallsDragX, {
+      toValue: 0,
+      tension: 135,
+      friction: 19,
+      useNativeDriver: false,
+    }).start();
+  }, [wallsDragX]);
+
+  const returnFromOverlay = useCallback((afterClose) => {
+    Keyboard.dismiss();
+    Animated.timing(wallsDragX, {
+      toValue: Math.max(wallsWidthRef.current, APP_WINDOW_WIDTH),
+      duration: 245,
+      easing: Easing.out(Easing.poly(4)),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      wallsSwipeActiveRef.current = false;
+      wallsDragX.setValue(APP_WINDOW_WIDTH);
+      afterClose?.();
+    });
+  }, [wallsDragX]);
+
+  const handleClose = useCallback(() => {
+    if (saving) return;
+    returnFromOverlay(() => { resetForm(); onClose?.(); });
+  }, [saving, returnFromOverlay, resetForm, onClose]);
+
+  const openMemberPicker = useCallback(() => {
+    setPendingMemberIds([...selectedMemberIds]);
+    setMemberPickerSearch('');
+    setMemberPickerOpen(true);
+    Animated.spring(memberSheetY, {
+      toValue: 0,
+      tension: 180,
+      friction: 22,
+      useNativeDriver: true,
+    }).start();
+  }, [selectedMemberIds, memberSheetY]);
+
+  const closeMemberPicker = useCallback((save) => {
+    Keyboard.dismiss();
+    Animated.timing(memberSheetY, {
+      toValue: 700,
+      duration: 220,
+      easing: Easing.out(Easing.poly(3)),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      memberSheetY.setValue(700);
+      setMemberPickerOpen(false);
+      if (save) {
+        setSelectedMemberIds(pendingMemberIds);
+      } else {
+        setAudience(WALLS_AUDIENCE.class);
+        setSelectedMemberIds([]);
+      }
+    });
+  }, [memberSheetY, pendingMemberIds]);
+
+  const togglePending = useCallback((id) => {
+    setPendingMemberIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }, []);
+
+  const buildTouchHandlers = useCallback(() => {
+    const touchFromEvent = (e) => e.nativeEvent.touches?.[0] ?? e.nativeEvent;
+    const releaseSwipe = () => {
+      const latest = wallsTouchLatestRef.current;
+      const start = wallsTouchStartRef.current;
+      if (!latest || !start || !wallsSwipeActiveRef.current) {
+        wallsTouchStartRef.current = null;
+        wallsTouchLatestRef.current = null;
+        wallsSwipeActiveRef.current = false;
+        return;
+      }
+      const elapsed = Math.max(1, latest.time - start.time);
+      const velocityX = latest.dx / elapsed;
+      const movedFarEnough = latest.dx > Math.max(CHAT_THREAD_BACK_SWIPE_DISTANCE, wallsWidthRef.current * 0.08);
+      const flickedRight = latest.dx > CHAT_THREAD_BACK_SWIPE_FAST_DISTANCE && velocityX > CHAT_THREAD_BACK_SWIPE_VELOCITY;
+      wallsTouchStartRef.current = null;
+      wallsTouchLatestRef.current = null;
+      wallsSwipeActiveRef.current = false;
+      if (movedFarEnough || flickedRight) {
+        returnFromOverlay(() => { onClose?.(); });
+        return;
+      }
+      resetDrag();
+    };
+    return {
+      onTouchStart: (e) => {
+        const t = touchFromEvent(e);
+        if (!Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
+        wallsTouchStartRef.current = { x: t.pageX, y: t.pageY, time: Date.now() };
+        wallsTouchLatestRef.current = null;
+        wallsSwipeActiveRef.current = false;
+      },
+      onTouchMove: (e) => {
+        const start = wallsTouchStartRef.current;
+        const t = touchFromEvent(e);
+        if (!start || !Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
+        const dx = t.pageX - start.x;
+        const dy = t.pageY - start.y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        if (dx <= CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE) return;
+        const isSwipe = wallsSwipeActiveRef.current || (absDx > CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE && absDx > absDy * CHAT_THREAD_BACK_SWIPE_VERTICAL_RATIO);
+        if (!isSwipe) return;
+        if (!wallsSwipeActiveRef.current) {
+          Keyboard.dismiss();
+          wallsDragX.stopAnimation();
+          wallsSwipeActiveRef.current = true;
+        }
+        wallsTouchLatestRef.current = { dx, dy, time: Date.now() };
+        wallsDragX.setValue(Math.min(Math.max(dx, 0), wallsWidthRef.current));
+      },
+      onTouchEnd: releaseSwipe,
+      onTouchCancel: releaseSwipe,
+    };
+  }, [wallsDragX, resetDrag, returnFromOverlay, onClose]);
+
+  useEffect(() => {
+    if (visible) {
+      wallsDragX.setValue(APP_WINDOW_WIDTH);
+      if (initialGallery) {
+        setName(initialGallery.name ?? '');
+        setVisibility(initialGallery.visibility ?? WALLS_VISIBILITY.private);
+        setAudience(initialGallery.audience ?? WALLS_AUDIENCE.class);
+        setPermission(initialGallery.permission ?? WALLS_PERMISSION.view);
+        setSelectedMemberIds(initialGallery.memberIds ?? []);
+        setCoverImageUri(initialGallery.coverUri ?? '');
+        setCoverImageData('');
+      } else {
+        resetForm();
+      }
+      setError('');
+      Animated.timing(wallsDragX, {
+        toValue: 0,
+        duration: 280,
+        easing: Easing.out(Easing.poly(4)),
+        useNativeDriver: false,
+      }).start();
+    }
+  }, [visible, initialGallery]);
+
+
+  const pickCoverImage = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setError('Giv adgang til dit fotobibliotek i indstillinger.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.75,
+      base64: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (!asset?.base64) {
+      setError('Billedet kunne ikke læses. Prøv et andet.');
+      return;
+    }
+    const mimeType = asset.mimeType ?? 'image/jpeg';
+    setCoverImageUri(asset.uri);
+    setCoverImageData(`data:${mimeType};base64,${asset.base64}`);
+    setError('');
+  }, []);
+
+  const saveGallery = useCallback(async () => {
+    setError('');
+    if (!name.trim() || name.trim().length > 60) {
+      setError('Giv albummet et navn på maks. 60 tegn.');
+      return;
+    }
+    if (visibility === WALLS_VISIBILITY.public && audience === WALLS_AUDIENCE.specific && selectedMemberIds.length === 0) {
+      setError('Vælg mindst ét klassemedlem.');
+      return;
+    }
+    setSaving(true);
+    const body = {
+      name: name.trim(),
+      visibility,
+      audience: visibility === WALLS_VISIBILITY.public ? audience : undefined,
+      permission: visibility === WALLS_VISIBILITY.public ? permission : undefined,
+      memberIds: visibility === WALLS_VISIBILITY.public && audience === WALLS_AUDIENCE.specific
+        ? selectedMemberIds : undefined,
+      coverImageData: coverImageData || undefined,
+    };
+    try {
+      let result;
+      if (isEditing && initialGallery?.id) {
+        result = await apiFetch(`/galleries/${encodeURIComponent(initialGallery.id)}`, {
+          authToken: sessionToken, method: 'PUT', body: JSON.stringify(body),
+        });
+      } else {
+        result = await apiFetch('/galleries', {
+          authToken: sessionToken, method: 'POST', body: JSON.stringify(body),
+        });
+      }
+      onSave?.(result?.gallery);
+      returnFromOverlay(() => { resetForm(); onClose?.(); });
+    } catch (err) {
+      setError(err?.message || 'Noget gik galt. Prøv igen.');
+      setSaving(false);
+    }
+  }, [name, visibility, audience, permission, selectedMemberIds, coverImageData, isEditing, initialGallery, sessionToken, onSave, returnFromOverlay, resetForm, onClose]);
+
+  const displayCoverUri = coverImageUri || (isEditing ? initialGallery?.coverUri : null) || null;
+  const saveLabel = saving ? (isEditing ? 'Gemmer…' : 'Opretter…') : (isEditing ? 'Gem ændringer' : 'Opret album');
+  const touchHandlers = buildTouchHandlers();
+
+  return (
+    <>
+      <Modal
+        animationType="none"
+        onRequestClose={saving ? undefined : handleClose}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={visible}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.calendarSubpageModalHost}
+        >
+          <View
+            onLayout={(e) => { wallsWidthRef.current = Math.max(e.nativeEvent.layout.width, 1); }}
+            style={styles.calendarSubpageModalContent}
+          >
+            <Animated.View
+              {...touchHandlers}
+              style={[styles.calendarSubpageFullscreen, styles.calendarSubpageDraggable, dragStyle]}
+            >
+              <ScrollView
+                {...touchHandlers}
+                contentContainerStyle={[styles.calendarScreenScrollContent, styles.wallsOverlayScrollPad]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                style={styles.calendarScreenScroll}
+              >
+                <View {...touchHandlers} style={styles.calendarCreatePageHeader}>
+                  <Pressable
+                    accessibilityLabel="Tilbage til Galleri"
+                    accessibilityRole="button"
+                    disabled={saving}
+                    hitSlop={10}
+                    onPress={handleClose}
+                    style={({ pressed }) => [
+                      styles.calendarCreateBackButton,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+                    <Text style={styles.calendarCreateBackText}>Galleri</Text>
+                  </Pressable>
+                  <Text style={styles.calendarCreatePageTitle}>
+                    {isEditing ? 'Rediger album' : 'Opret et album'}
+                  </Text>
+                </View>
+
+                {/* Navn */}
+                <View style={styles.calendarCreatePageCard}>
+                  <View style={styles.chatModalSearchField}>
+                    <Ionicons name="folder-outline" size={18} color="#8a9bb0" />
+                    <TextInput
+                      accessibilityLabel="Navn på album"
+                      autoFocus
+                      maxLength={60}
+                      onChangeText={(v) => { setName(v); setError(''); }}
+                      placeholder="Navn på album"
+                      placeholderTextColor="#8a9bb0"
+                      returnKeyType="done"
+                      style={styles.chatModalSearchInput}
+                      value={name}
+                    />
+                  </View>
+                </View>
+
+                {/* Synlighed */}
+                <View style={styles.wallsOverlaySection}>
+                  <Text style={styles.wallsOverlaySectionLabel}>Synlighed</Text>
+                  <View style={styles.wallsVisibilityRow}>
+                    {[
+                      { id: WALLS_VISIBILITY.private, label: 'Privat', icon: 'lock-closed-outline', desc: 'Kun dig selv' },
+                      { id: WALLS_VISIBILITY.public, label: 'Offentlig', icon: 'earth-outline', desc: 'Delt med andre' },
+                    ].map((opt) => {
+                      const active = visibility === opt.id;
+                      return (
+                        <Pressable
+                          accessibilityLabel={opt.label}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: active }}
+                          key={opt.id}
+                          onPress={() => { setVisibility(opt.id); setError(''); }}
+                          style={({ pressed }) => [
+                            styles.wallsVisibilityOption,
+                            active ? styles.wallsVisibilityOptionActive : null,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Ionicons name={opt.icon} size={22} color={active ? STUDOS_THEME.blue : '#8a9bb0'} />
+                          <Text style={[styles.wallsVisibilityLabel, active ? styles.wallsVisibilityLabelActive : null]}>
+                            {opt.label}
+                          </Text>
+                          <Text style={styles.wallsVisibilityDesc}>{opt.desc}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* Hvem har adgang (kun hvis offentlig) */}
+                {visibility === WALLS_VISIBILITY.public && (
+                  <View style={styles.wallsOverlaySection}>
+                    <Text style={styles.wallsOverlaySectionLabel}>Hvem har adgang?</Text>
+                    <View style={styles.wallsAudienceList}>
+                      {[
+                        { id: WALLS_AUDIENCE.class, label: 'Hele klassen', icon: 'school-outline', desc: 'Alle i din klasse' },
+                        { id: WALLS_AUDIENCE.crew, label: 'Hele mit crew', icon: 'people-outline', desc: 'Kun dine crew-medlemmer' },
+                        { id: WALLS_AUDIENCE.specific, label: 'Personspecifikt', icon: 'person-add-outline', desc: 'Du vælger selv hvem' },
+                      ].map((opt) => {
+                        const active = audience === opt.id;
+                        return (
+                          <Pressable
+                            accessibilityLabel={opt.label}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: active }}
+                            key={opt.id}
+                            onPress={() => {
+                              if (opt.id === WALLS_AUDIENCE.specific) {
+                                setAudience(opt.id);
+                                setError('');
+                                openMemberPicker();
+                              } else {
+                                setAudience(opt.id);
+                                setSelectedMemberIds([]);
+                                setError('');
+                              }
+                            }}
+                            style={({ pressed }) => [
+                              styles.wallsAudienceRow,
+                              active ? styles.wallsAudienceRowActive : null,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <View style={[styles.wallsAudienceIcon, active ? styles.wallsAudienceIconActive : null]}>
+                              <Ionicons name={opt.icon} size={18} color={active ? '#FFFFFF' : '#8a9bb0'} />
+                            </View>
+                            <View style={styles.wallsAudienceText}>
+                              <Text style={[styles.wallsAudienceLabel, active ? styles.wallsAudienceLabelActive : null]}>
+                                {opt.label}
+                              </Text>
+                              <Text style={styles.wallsAudienceDesc}>{opt.desc}</Text>
+                            </View>
+                            <View style={[styles.chatModalCheck, active ? styles.chatModalCheckSelected : null]}>
+                              {active && <Ionicons name="checkmark" size={13} color="#FFFFFF" />}
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    {audience === WALLS_AUDIENCE.specific && (
+                      <Pressable
+                        accessibilityLabel="Vælg personer"
+                        accessibilityRole="button"
+                        onPress={openMemberPicker}
+                        style={({ pressed }) => [
+                          styles.wallsMemberPickerTrigger,
+                          pressed ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <Text style={styles.wallsMemberPickerTriggerLabel}>
+                          {selectedMemberIds.length === 0
+                            ? 'Ingen valgt endnu'
+                            : `${selectedMemberIds.length} ${selectedMemberIds.length === 1 ? 'person' : 'personer'} valgt`}
+                        </Text>
+                        <View style={styles.wallsMemberPickerTriggerRight}>
+                          <Text style={styles.wallsMemberPickerTriggerAction}>
+                            {selectedMemberIds.length === 0 ? 'Vælg' : 'Rediger'}
+                          </Text>
+                          <Ionicons name="chevron-forward" size={16} color={STUDOS_THEME.blue} />
+                        </View>
+                      </Pressable>
+                    )}
+                  </View>
+                )}
+
+                {/* Tilladelser (kun hvis offentlig) */}
+                {visibility === WALLS_VISIBILITY.public && (
+                  <View style={styles.wallsOverlaySection}>
+                    <Text style={styles.wallsOverlaySectionLabel}>Tilladelser</Text>
+                    <View style={styles.wallsPermissionList}>
+                      {[
+                        { id: WALLS_PERMISSION.view, label: 'Må kun se', icon: 'eye-outline', desc: 'Kan se billeder, men ikke bidrage' },
+                        { id: WALLS_PERMISSION.add, label: 'Må tilføje', icon: 'add-circle-outline', desc: 'Kan se og tilføje billeder' },
+                        { id: WALLS_PERMISSION.addDelete, label: 'Må tilføje og slette', icon: 'trash-outline', desc: 'Fuld adgang til albummet' },
+                      ].map((opt) => {
+                        const active = permission === opt.id;
+                        return (
+                          <Pressable
+                            accessibilityLabel={opt.label}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: active }}
+                            key={opt.id}
+                            onPress={() => { setPermission(opt.id); setError(''); }}
+                            style={({ pressed }) => [
+                              styles.wallsPermissionRow,
+                              active ? styles.wallsPermissionRowActive : null,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <View style={[styles.wallsPermissionIcon, active ? styles.wallsPermissionIconActive : null]}>
+                              <Ionicons name={opt.icon} size={18} color={active ? '#FFFFFF' : '#8a9bb0'} />
+                            </View>
+                            <View style={styles.wallsAudienceText}>
+                              <Text style={[styles.wallsAudienceLabel, active ? styles.wallsAudienceLabelActive : null]}>
+                                {opt.label}
+                              </Text>
+                              <Text style={styles.wallsAudienceDesc}>{opt.desc}</Text>
+                            </View>
+                            <View style={[styles.chatModalCheck, active ? styles.chatModalCheckSelected : null]}>
+                              {active && <Ionicons name="checkmark" size={13} color="#FFFFFF" />}
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+
+                {/* Kortbillede */}
+                <View style={styles.wallsOverlaySection}>
+                  <Text style={styles.wallsOverlaySectionLabel}>Kortbillede (valgfrit)</Text>
+                  <Pressable
+                    accessibilityLabel={displayCoverUri ? 'Skift kortbillede' : 'Vælg kortbillede'}
+                    accessibilityRole="button"
+                    onPress={pickCoverImage}
+                    style={({ pressed }) => [
+                      styles.calendarCoverPicker,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    {displayCoverUri ? (
+                      <Image
+                        accessibilityIgnoresInvertColors
+                        resizeMode="cover"
+                        source={{ uri: displayCoverUri }}
+                        style={styles.calendarCoverPreview}
+                      />
+                    ) : (
+                      <View style={styles.calendarCoverPlaceholder}>
+                        <Ionicons name="image" size={24} color={STUDOS_THEME.ink} />
+                      </View>
+                    )}
+                    <View style={styles.calendarCoverCopy}>
+                      <Text style={styles.calendarCoverTitle}>
+                        {displayCoverUri ? 'Billede valgt' : 'Vælg et billede'}
+                      </Text>
+                      <Text style={styles.calendarCoverText}>
+                        Billedet vises på albumkortet.
+                      </Text>
+                    </View>
+                    <View style={styles.calendarCoverAction}>
+                      <Ionicons name={displayCoverUri ? 'swap-horizontal' : 'add'} size={18} color="#FFFFFF" />
+                    </View>
+                  </Pressable>
+                </View>
+
+                {error ? <Text style={[styles.errorText, styles.wallsOverlayError]}>{error}</Text> : null}
+
+                <Pressable
+                  accessibilityLabel={saveLabel}
+                  accessibilityRole="button"
+                  disabled={saving}
+                  onPress={saveGallery}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    styles.wallsOverlayNextButton,
+                    pressed && !saving ? styles.primaryButtonPressed : null,
+                    saving ? styles.primaryButtonDisabled : null,
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>{saveLabel}</Text>
+                </Pressable>
+              </ScrollView>
+
+              {/* Person-vælger bottom sheet */}
+              {memberPickerOpen && (
+                <View pointerEvents="box-none" style={styles.wallsMemberSheetRoot}>
+                  <Pressable
+                    style={styles.wallsMemberSheetBackdrop}
+                    onPress={() => closeMemberPicker(false)}
+                  />
+                  <Animated.View style={[styles.wallsMemberSheet, memberSheetStyle]}>
+                    <View style={styles.wallsMemberSheetHeader}>
+                      <Text style={styles.wallsMemberSheetTitle}>Vælg personer</Text>
+                      <Pressable
+                        accessibilityLabel="Gem valg"
+                        accessibilityRole="button"
+                        hitSlop={12}
+                        onPress={() => closeMemberPicker(true)}
+                      >
+                        <Text style={styles.wallsMemberPickerDone}>Gem</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.chatModalSearchField}>
+                      <Ionicons name="search-outline" size={16} color="#8a9bb0" />
+                      <TextInput
+                        autoFocus
+                        accessibilityLabel="Søg efter klassemedlem"
+                        onChangeText={setMemberPickerSearch}
+                        placeholder="Søg efter klassemedlem"
+                        placeholderTextColor="#8a9bb0"
+                        returnKeyType="search"
+                        style={styles.chatModalSearchInput}
+                        value={memberPickerSearch}
+                      />
+                    </View>
+                    <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                      {filteredPickerMembers.length === 0 ? (
+                        <Text style={styles.chatModalEmptyText}>Ingen match</Text>
+                      ) : filteredPickerMembers.map((m) => {
+                        const selected = pendingMemberIds.includes(String(m.id));
+                        const displayName = m.displayName || [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email || 'Ukendt';
+                        return (
+                          <Pressable
+                            accessibilityLabel={displayName}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: selected }}
+                            key={m.id}
+                            onPress={() => togglePending(String(m.id))}
+                            style={({ pressed }) => [
+                              styles.chatModalMemberRow,
+                              selected ? styles.chatModalMemberRowSelected : null,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Text numberOfLines={1} style={styles.chatModalMemberName}>{displayName}</Text>
+                            <View style={[styles.chatModalCheck, selected ? styles.chatModalCheckSelected : null]}>
+                              {selected && <Ionicons name="checkmark" size={13} color="#FFFFFF" />}
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </Animated.View>
+                </View>
+              )}
+            </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </>
+  );
+}
+
+function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, sessionToken, visible }) {
+  const wallsDragX = useRef(new Animated.Value(APP_WINDOW_WIDTH)).current;
+  const wallsWidthRef = useRef(APP_WINDOW_WIDTH);
+  const wallsTouchStartRef = useRef(null);
+  const wallsTouchLatestRef = useRef(null);
+  const wallsSwipeActiveRef = useRef(false);
+  const dragStyle = useMemo(() => ({ transform: [{ translateX: wallsDragX }] }), [wallsDragX]);
+
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [viewerPhoto, setViewerPhoto] = useState(null);
+  const viewerOpacity = useRef(new Animated.Value(0)).current;
+  const [actionPhoto, setActionPhoto] = useState(null);
+  const [deleteConfirmPhoto, setDeleteConfirmPhoto] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [reportConfirmPhoto, setReportConfirmPhoto] = useState(null);
+  const [reporting, setReporting] = useState(false);
+  const [reportError, setReportError] = useState('');
+
+  const isOwner = gallery && String(gallery.creatorId) === String(activeMember?.id);
+  const canAddPhoto = isOwner || (
+    gallery?.visibility === 'public' && ['add', 'add_delete'].includes(gallery?.permission ?? '')
+  );
+  const canDeletePhoto = useCallback((photo) => {
+    if (!photo || !activeMember) return false;
+    if (String(photo.memberId) === String(activeMember.id)) return true;
+    if (isOwner) return true;
+    if (['owner', 'moderator'].includes(activeMember?.role ?? '')) return true;
+    return gallery?.visibility === 'public' && gallery?.permission === 'add_delete';
+  }, [activeMember, isOwner, gallery]);
+  const canReportPhoto = useCallback((photo) => {
+    if (!photo || !activeMember) return false;
+    return String(photo.memberId ?? '') !== String(activeMember.id);
+  }, [activeMember]);
+
+  const photoColWidth = useMemo(() => {
+    const inner = APP_WINDOW_WIDTH - APP_SCREEN_PADDING * 2;
+    return Math.floor((inner - 4) / 3);
+  }, []);
+
+  useEffect(() => {
+    if (!visible || !gallery?.id || !sessionToken) return;
+    setLoading(true);
+    setLoadError('');
+    setPhotos([]);
+    apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, { authToken: sessionToken })
+      .then((data) => setPhotos(Array.isArray(data?.photos) ? data.photos : []))
+      .catch((err) => setLoadError(err?.message || 'Kunne ikke hente billeder.'))
+      .finally(() => setLoading(false));
+  }, [visible, gallery?.id, sessionToken]);
+
+  useEffect(() => {
+    if (visible) {
+      wallsDragX.setValue(APP_WINDOW_WIDTH);
+      Animated.timing(wallsDragX, {
+        toValue: 0, duration: 280, easing: Easing.out(Easing.poly(4)), useNativeDriver: false,
+      }).start();
+    }
+  }, [visible]);
+
+  const resetDrag = useCallback(() => {
+    wallsSwipeActiveRef.current = false;
+    Animated.spring(wallsDragX, { toValue: 0, tension: 135, friction: 19, useNativeDriver: false }).start();
+  }, [wallsDragX]);
+
+  const returnFromScreen = useCallback((afterClose) => {
+    Keyboard.dismiss();
+    Animated.timing(wallsDragX, {
+      toValue: Math.max(wallsWidthRef.current, APP_WINDOW_WIDTH),
+      duration: 245, easing: Easing.out(Easing.poly(4)), useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      wallsSwipeActiveRef.current = false;
+      wallsDragX.setValue(APP_WINDOW_WIDTH);
+      afterClose?.();
+    });
+  }, [wallsDragX]);
+
+  const handleClose = useCallback(() => {
+    returnFromScreen(() => {
+      setPhotos([]); setViewerPhoto(null); setActionPhoto(null);
+      setUploadError(''); setDeleteConfirmPhoto(null); setReportConfirmPhoto(null);
+      onClose?.();
+    });
+  }, [returnFromScreen, onClose]);
+
+  const buildTouchHandlers = useCallback(() => {
+    const tf = (e) => e.nativeEvent.touches?.[0] ?? e.nativeEvent;
+    const release = () => {
+      const latest = wallsTouchLatestRef.current;
+      const start = wallsTouchStartRef.current;
+      if (!latest || !start || !wallsSwipeActiveRef.current) {
+        wallsTouchStartRef.current = null; wallsTouchLatestRef.current = null;
+        wallsSwipeActiveRef.current = false; return;
+      }
+      const elapsed = Math.max(1, latest.time - start.time);
+      const vx = latest.dx / elapsed;
+      const far = latest.dx > Math.max(CHAT_THREAD_BACK_SWIPE_DISTANCE, wallsWidthRef.current * 0.08);
+      const flick = latest.dx > CHAT_THREAD_BACK_SWIPE_FAST_DISTANCE && vx > CHAT_THREAD_BACK_SWIPE_VELOCITY;
+      wallsTouchStartRef.current = null; wallsTouchLatestRef.current = null; wallsSwipeActiveRef.current = false;
+      if (far || flick) { returnFromScreen(() => onClose?.()); return; }
+      resetDrag();
+    };
+    return {
+      onTouchStart: (e) => {
+        const t = tf(e);
+        if (!Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
+        wallsTouchStartRef.current = { x: t.pageX, y: t.pageY, time: Date.now() };
+        wallsTouchLatestRef.current = null; wallsSwipeActiveRef.current = false;
+      },
+      onTouchMove: (e) => {
+        const start = wallsTouchStartRef.current; const t = tf(e);
+        if (!start || !Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
+        const dx = t.pageX - start.x; const dy = t.pageY - start.y;
+        const absDx = Math.abs(dx); const absDy = Math.abs(dy);
+        if (dx <= CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE) return;
+        const sw = wallsSwipeActiveRef.current || (absDx > CHAT_THREAD_BACK_SWIPE_ACTIVATION_DISTANCE && absDx > absDy * CHAT_THREAD_BACK_SWIPE_VERTICAL_RATIO);
+        if (!sw) return;
+        if (!wallsSwipeActiveRef.current) { Keyboard.dismiss(); wallsDragX.stopAnimation(); wallsSwipeActiveRef.current = true; }
+        wallsTouchLatestRef.current = { dx, dy, time: Date.now() };
+        wallsDragX.setValue(Math.min(Math.max(dx, 0), wallsWidthRef.current));
+      },
+      onTouchEnd: release, onTouchCancel: release,
+    };
+  }, [wallsDragX, resetDrag, returnFromScreen, onClose]);
+
+  const openViewer = useCallback((photo) => {
+    setViewerPhoto(photo);
+    viewerOpacity.setValue(0);
+    Animated.timing(viewerOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+  }, [viewerOpacity]);
+
+  const closeViewer = useCallback(() => {
+    Animated.timing(viewerOpacity, { toValue: 0, duration: 160, useNativeDriver: true })
+      .start(({ finished }) => { if (finished) setViewerPhoto(null); });
+  }, [viewerOpacity]);
+
+  const uploadPhoto = useCallback(async () => {
+    setUploadError('');
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { setUploadError('Giv adgang til dit fotobibliotek i indstillinger.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsEditing: false, quality: 0.82, base64: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (!asset?.base64) { setUploadError('Billedet kunne ikke læses. Prøv et andet.'); return; }
+    const mimeType = asset.mimeType ?? 'image/jpeg';
+    setUploading(true);
+    try {
+      const data = await apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, {
+        authToken: sessionToken, method: 'POST',
+        body: JSON.stringify({ imageData: `data:${mimeType};base64,${asset.base64}` }),
+      });
+      setPhotos((prev) => [data.photo, ...prev]);
+    } catch (err) {
+      setUploadError(err?.message || 'Billedet kunne ikke uploades. Prøv igen.');
+    } finally {
+      setUploading(false);
+    }
+  }, [gallery?.id, sessionToken]);
+
+  const handleDeletePhoto = useCallback(async () => {
+    if (!deleteConfirmPhoto) return;
+    setDeleting(true); setDeleteError('');
+    try {
+      await apiFetch(`/gallery-photos/${encodeURIComponent(deleteConfirmPhoto.id)}`, {
+        authToken: sessionToken, method: 'DELETE',
+      });
+      setPhotos((prev) => prev.filter((p) => p.id !== deleteConfirmPhoto.id));
+      if (viewerPhoto?.id === deleteConfirmPhoto.id) closeViewer();
+      setDeleteConfirmPhoto(null);
+    } catch (err) {
+      setDeleteError(err?.message || 'Kunne ikke slette billedet. Prøv igen.');
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteConfirmPhoto, sessionToken, viewerPhoto, closeViewer]);
+
+  const handleReportPhoto = useCallback(async () => {
+    if (!reportConfirmPhoto) return;
+    setReporting(true); setReportError('');
+    try {
+      await apiFetch(`/gallery-photos/${encodeURIComponent(reportConfirmPhoto.id)}/report`, {
+        authToken: sessionToken, method: 'POST',
+        body: JSON.stringify({ reason: 'Foto rapporteret', details: 'Rapporteret fra albummet i Studos.' }),
+      });
+      setReportConfirmPhoto(null);
+    } catch (err) {
+      setReportError(err?.message || 'Kunne ikke sende rapport. Prøv igen.');
+    } finally {
+      setReporting(false);
+    }
+  }, [reportConfirmPhoto, sessionToken]);
+
+  const uploaderName = (photo) => {
+    const m = (schoolClass?.members ?? []).find((x) => String(x.id) === String(photo.memberId ?? ''));
+    return m?.displayName || [m?.firstName, m?.lastName].filter(Boolean).join(' ') || 'Ukendt';
+  };
+
+  const touchHandlers = buildTouchHandlers();
+
+  return (
+    <Modal
+      animationType="none"
+      onRequestClose={handleClose}
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      transparent
+      visible={visible}
+    >
+      <View
+        onLayout={(e) => { wallsWidthRef.current = Math.max(e.nativeEvent.layout.width, 1); }}
+        style={styles.calendarSubpageModalContent}
+      >
+        <Animated.View
+          {...touchHandlers}
+          style={[styles.calendarSubpageFullscreen, styles.calendarSubpageDraggable, dragStyle]}
+        >
+          {/* Header */}
+          <View {...touchHandlers} style={styles.wallsAlbumHeader}>
+            <Pressable
+              accessibilityLabel="Tilbage til Galleri"
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={handleClose}
+              style={({ pressed }) => [styles.calendarCreateBackButton, pressed ? styles.footerItemPressed : null]}
+            >
+              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
+              <Text style={styles.calendarCreateBackText}>Galleri</Text>
+            </Pressable>
+            <Text numberOfLines={1} style={styles.wallsAlbumTitle}>{gallery?.name ?? ''}</Text>
+          </View>
+
+          {uploadError ? <Text style={[styles.errorText, { marginBottom: 6 }]}>{uploadError}</Text> : null}
+
+          {/* Fotogrid */}
+          <ScrollView
+            {...touchHandlers}
+            contentContainerStyle={styles.wallsAlbumScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {loading ? (
+              <View style={styles.wallsEmptyState}>
+                <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
+              </View>
+            ) : loadError ? (
+              <View style={styles.wallsEmptyState}>
+                <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
+                <Text style={styles.wallsEmptyTitle}>Kunne ikke hente billeder</Text>
+                <Text style={styles.wallsEmptyBody}>{loadError}</Text>
+              </View>
+            ) : photos.length === 0 ? (
+              <View style={styles.wallsEmptyState}>
+                <Ionicons name="images-outline" size={56} color="#b0c4be" />
+                <Text style={styles.wallsEmptyTitle}>Ingen billeder endnu</Text>
+                <Text style={styles.wallsEmptyBody}>
+                  {canAddPhoto
+                    ? 'Tryk på + for at tilføje det første billede.'
+                    : 'Der er ikke tilføjet billeder til dette album endnu.'}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.wallsAlbumGrid}>
+                {photos.map((photo) => (
+                  <Pressable
+                    accessibilityHint="Hold inde for indstillinger"
+                    accessibilityLabel="Se billede"
+                    accessibilityRole="button"
+                    key={photo.id}
+                    onLongPress={() => setActionPhoto(photo)}
+                    onPress={() => openViewer(photo)}
+                    style={[styles.wallsAlbumPhotoCell, { width: photoColWidth, height: photoColWidth }]}
+                  >
+                    <Image
+                      accessibilityIgnoresInvertColors
+                      resizeMode="cover"
+                      source={{ uri: photo.imageUri }}
+                      style={styles.wallsAlbumPhoto}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </ScrollView>
+
+          {/* Upload-knap */}
+          {canAddPhoto && (
+            <Pressable
+              accessibilityLabel={uploading ? 'Uploader…' : 'Tilføj billede'}
+              accessibilityRole="button"
+              disabled={uploading}
+              onPress={uploadPhoto}
+              style={({ pressed }) => [
+                styles.wallsAlbumUploadButton,
+                pressed && !uploading ? styles.primaryButtonPressed : null,
+                uploading ? styles.primaryButtonDisabled : null,
+              ]}
+            >
+              {uploading
+                ? <ActivityIndicator color={STUDOS_THEME.blue} size="small" />
+                : <Ionicons name="add" size={28} color={STUDOS_THEME.blue} />}
+            </Pressable>
+          )}
+
+          {/* Fuldskærms-viewer */}
+          {viewerPhoto && (
+            <Animated.View style={[styles.wallsPhotoViewerRoot, { opacity: viewerOpacity }]}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={closeViewer} />
+              <Image
+                accessibilityIgnoresInvertColors
+                resizeMode="contain"
+                source={{ uri: viewerPhoto.imageUri }}
+                style={styles.wallsPhotoViewerImage}
+              />
+              <View style={styles.wallsPhotoViewerBar}>
+                <Text style={styles.wallsPhotoViewerMetaText}>
+                  {`Uploadet af ${uploaderName(viewerPhoto)}`}
+                </Text>
+                <View style={styles.wallsPhotoViewerActions}>
+                  {canDeletePhoto(viewerPhoto) && (
+                    <Pressable
+                      accessibilityLabel="Slet billede"
+                      hitSlop={10}
+                      onPress={() => { closeViewer(); setTimeout(() => setDeleteConfirmPhoto(viewerPhoto), 200); }}
+                      style={({ pressed }) => [styles.wallsPhotoViewerAction, pressed ? styles.footerItemPressed : null]}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={STUDOS_THEME.red} />
+                    </Pressable>
+                  )}
+                  {canReportPhoto(viewerPhoto) && (
+                    <Pressable
+                      accessibilityLabel="Rapportér billede"
+                      hitSlop={10}
+                      onPress={() => { closeViewer(); setTimeout(() => setReportConfirmPhoto(viewerPhoto), 200); }}
+                      style={({ pressed }) => [styles.wallsPhotoViewerAction, pressed ? styles.footerItemPressed : null]}
+                    >
+                      <Ionicons name="flag-outline" size={20} color="#8a9bb0" />
+                    </Pressable>
+                  )}
+                  <Pressable
+                    accessibilityLabel="Luk"
+                    hitSlop={10}
+                    onPress={closeViewer}
+                    style={({ pressed }) => [styles.wallsPhotoViewerAction, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <Ionicons name="close" size={22} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* Long-press handlinger */}
+          {actionPhoto && (
+            <View pointerEvents="box-none" style={styles.wallsMemberSheetRoot}>
+              <Pressable style={styles.wallsMemberSheetBackdrop} onPress={() => setActionPhoto(null)} />
+              <View style={styles.wallsPhotoActionSheet}>
+                <View style={styles.wallsPhotoActionHeader}>
+                  <Text style={styles.wallsPhotoActionTitle}>Billede</Text>
+                  <Pressable hitSlop={10} onPress={() => setActionPhoto(null)}>
+                    <Ionicons name="close" size={20} color={STUDOS_THEME.ink} />
+                  </Pressable>
+                </View>
+                {canDeletePhoto(actionPhoto) && (
+                  <Pressable
+                    onPress={() => { setActionPhoto(null); setDeleteConfirmPhoto(actionPhoto); }}
+                    style={({ pressed }) => [styles.wallsPhotoActionRow, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconDanger]}>
+                      <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                    </View>
+                    <Text style={styles.chatConversationActionMenuText}>Slet billede</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                  </Pressable>
+                )}
+                {canReportPhoto(actionPhoto) && (
+                  <Pressable
+                    onPress={() => { setActionPhoto(null); setReportConfirmPhoto(actionPhoto); }}
+                    style={({ pressed }) => [styles.wallsPhotoActionRow, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <View style={[styles.chatConversationActionMenuIcon, styles.chatConversationActionMenuIconCalm]}>
+                      <Ionicons name="flag-outline" size={18} color="#FFFFFF" />
+                    </View>
+                    <Text style={styles.chatConversationActionMenuText}>Rapportér billede</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Slet-bekræftelse */}
+          {deleteConfirmPhoto && (
+            <View pointerEvents="box-none" style={styles.wallsMemberSheetRoot}>
+              <Pressable disabled={deleting} style={styles.wallsMemberSheetBackdrop}
+                onPress={() => { setDeleteConfirmPhoto(null); setDeleteError(''); }} />
+              <View style={styles.wallsPhotoConfirmSheet}>
+                <Ionicons name="trash-outline" size={34} color={STUDOS_THEME.red} />
+                <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>Slet billede?</Text>
+                <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+                  Billedet slettes permanent og kan ikke gendannes.
+                </Text>
+                {deleteError ? <Text style={styles.errorText}>{deleteError}</Text> : null}
+                <View style={styles.luckyAddModalActions}>
+                  <Pressable
+                    disabled={deleting}
+                    onPress={() => { setDeleteConfirmPhoto(null); setDeleteError(''); }}
+                    style={({ pressed }) => [styles.luckyAddModalGhostButton, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <Text style={styles.luckyAddModalGhostButtonText}>Annuller</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={deleting}
+                    onPress={handleDeletePhoto}
+                    style={({ pressed }) => [
+                      styles.primaryButton, styles.wallsDeleteButton,
+                      pressed && !deleting ? styles.primaryButtonPressed : null,
+                      deleting ? styles.primaryButtonDisabled : null,
+                    ]}
+                  >
+                    <Text style={styles.primaryButtonText}>{deleting ? 'Sletter…' : 'Slet billede'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Rapportér-bekræftelse */}
+          {reportConfirmPhoto && (
+            <View pointerEvents="box-none" style={styles.wallsMemberSheetRoot}>
+              <Pressable disabled={reporting} style={styles.wallsMemberSheetBackdrop}
+                onPress={() => { setReportConfirmPhoto(null); setReportError(''); }} />
+              <View style={styles.wallsPhotoConfirmSheet}>
+                <Ionicons name="flag-outline" size={34} color={STUDOS_THEME.blue} />
+                <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>Rapportér billede?</Text>
+                <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+                  Tak fordi du hjælper med at holde Studos trygt. Vi gennemgår rapporten hurtigst muligt.
+                </Text>
+                {reportError ? <Text style={styles.errorText}>{reportError}</Text> : null}
+                <Pressable
+                  disabled={reporting}
+                  onPress={handleReportPhoto}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && !reporting ? styles.primaryButtonPressed : null,
+                    reporting ? styles.primaryButtonDisabled : null,
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>{reporting ? 'Sender…' : 'Send rapport'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+function WallsGalleryCard({ gallery, longPressHandledRef, onLongPress, onPress }) {
+  const isPrivate = gallery.visibility === WALLS_VISIBILITY.private;
+  const photoCount = gallery.photoCount ?? 0;
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = () => {
+    Animated.spring(scale, {
+      toValue: 0.93,
+      useNativeDriver: true,
+      tension: 220,
+      friction: 18,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      tension: 220,
+      friction: 18,
+    }).start();
+  };
+
+  return (
+    <Animated.View style={[styles.wallsCardOuter, { transform: [{ scale }] }]}>
+      <Pressable
+        accessibilityLabel={gallery.name}
+        accessibilityHint="Hold inde for indstillinger"
+        accessibilityRole="button"
+        onLongPress={() => onLongPress?.(gallery)}
+        onPress={() => {
+          if (longPressHandledRef?.current) {
+            longPressHandledRef.current = false;
+            return;
+          }
+          onPress?.(gallery);
+        }}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        style={styles.wallsCard}
+      >
+        <View style={styles.wallsCardCover}>
+          {gallery.coverUri ? (
+            <Image
+              accessibilityIgnoresInvertColors
+              resizeMode="cover"
+              source={{ uri: gallery.coverUri }}
+              style={styles.wallsCardCoverImage}
+            />
+          ) : (
+            <View style={styles.wallsCardCoverPlaceholder}>
+              <Ionicons name="images-outline" size={28} color="#b0c4be" />
+            </View>
+          )}
+          <View style={styles.wallsCardBadge}>
+            <Ionicons
+              name={isPrivate ? 'lock-closed' : 'earth'}
+              size={11}
+              color={STUDOS_THEME.ink}
+            />
+          </View>
+        </View>
+        <View style={styles.wallsCardMeta}>
+          <Text numberOfLines={1} style={styles.wallsCardName}>{gallery.name}</Text>
+          <Text style={styles.wallsCardCount}>
+            {photoCount === 0 ? 'Tomt' : `${photoCount} ${photoCount === 1 ? 'billede' : 'billeder'}`}
+          </Text>
+        </View>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+function WallsScreen({ activeMember, schoolClass, sessionToken }) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [selectedGallery, setSelectedGallery] = useState(null);
+  const [editingGallery, setEditingGallery] = useState(null);
+  const [actionGallery, setActionGallery] = useState(null);
+  const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [reportConfirmGallery, setReportConfirmGallery] = useState(null);
+  const [reporting, setReporting] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [galleries, setGalleries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [scrolled, setScrolled] = useState(false);
+  const longPressHandledRef = useRef(false);
+  const isEmpty = galleries.length === 0 && !loading;
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    setLoading(true);
+    setLoadError('');
+    apiFetch('/galleries', { authToken: sessionToken })
+      .then((data) => {
+        setGalleries(Array.isArray(data?.galleries) ? data.galleries : []);
+      })
+      .catch((err) => {
+        setLoadError(err?.message || 'Kunne ikke hente gallerier.');
+      })
+      .finally(() => setLoading(false));
+  }, [sessionToken]);
+
+  const handleCreate = useCallback((gallery) => {
+    if (!gallery) return;
+    setGalleries((prev) => [gallery, ...prev]);
+  }, []);
+
+  const handleEdit = useCallback((updated) => {
+    if (!updated) return;
+    setGalleries((prev) => prev.map((g) => g.id === updated.id ? updated : g));
+  }, []);
+
+  const openActionMenu = useCallback((gallery) => {
+    longPressHandledRef.current = true;
+    setTimeout(() => { longPressHandledRef.current = false; }, 450);
+    setActionGallery(gallery);
+  }, []);
+
+  const closeActionMenu = useCallback(() => setActionGallery(null), []);
+
+  const isOwner = (gallery) => String(gallery.creatorId) === String(activeMember?.id);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteConfirmGallery) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await apiFetch(`/galleries/${encodeURIComponent(deleteConfirmGallery.id)}`, {
+        authToken: sessionToken,
+        method: 'DELETE',
+      });
+      setGalleries((prev) => prev.filter((g) => g.id !== deleteConfirmGallery.id));
+      setDeleteConfirmGallery(null);
+    } catch (err) {
+      setDeleteError(err?.message || 'Kunne ikke slette galleriet. Prøv igen.');
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteConfirmGallery, sessionToken]);
+
+  const handleReportConfirm = useCallback(async () => {
+    if (!reportConfirmGallery) return;
+    setReporting(true);
+    setReportError('');
+    try {
+      await apiFetch(`/galleries/${encodeURIComponent(reportConfirmGallery.id)}/report`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({
+          reason: 'Galleri rapporteret',
+          details: 'Rapporteret fra galleriet i Studos.',
+        }),
+      });
+      setReportConfirmGallery(null);
+    } catch (err) {
+      setReportError(err?.message || 'Kunne ikke sende rapport. Prøv igen.');
+    } finally {
+      setReporting(false);
+    }
+  }, [reportConfirmGallery, sessionToken]);
+
+  const wallsActions = actionGallery ? [
+    ...(isOwner(actionGallery) ? [
+      {
+        type: 'edit',
+        label: 'Rediger galleri',
+        icon: 'pencil-outline',
+        tone: 'warning',
+      },
+      {
+        type: 'delete',
+        label: 'Slet galleri',
+        icon: 'trash-outline',
+        tone: 'danger',
+      },
+    ] : [
+      {
+        type: 'report',
+        label: 'Rapportér galleri',
+        icon: 'flag-outline',
+        tone: 'calm',
+      },
+    ]),
+  ] : [];
+
+  const selectWallsAction = useCallback((type) => {
+    const gallery = actionGallery;
+    closeActionMenu();
+    if (type === 'edit') {
+      setEditingGallery(gallery);
+    } else if (type === 'delete') {
+      setDeleteConfirmGallery(gallery);
+    } else if (type === 'report') {
+      setReportConfirmGallery(gallery);
+    }
+  }, [actionGallery, closeActionMenu]);
+
+  return (
+    <View style={styles.wallsRoot}>
+      <View style={[styles.wallsFloatingHeader, scrolled ? styles.wallsFloatingHeaderScrolled : null]}>
+        <View style={styles.overviewTopLine}>
+          <GalleriTitle />
+          <Pressable
+            accessibilityLabel="Opret galleri"
+            accessibilityRole="button"
+            onPress={() => setCreateOpen(true)}
+            style={({ pressed }) => [
+              styles.wallsAddButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Ionicons name="add" size={23} color={STUDOS_THEME.ink} />
+          </Pressable>
+        </View>
+        <Text style={styles.wallsSubtitle}>Hold nede på et album for at redigere, slette eller rapportere denne.</Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[
+          styles.wallsScrollContent,
+          (isEmpty || loading || loadError) ? styles.wallsScrollContentEmpty : null,
+        ]}
+        onScroll={(e) => setScrolled(e.nativeEvent.contentOffset.y > 6)}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+      >
+        {loading ? (
+          <View style={styles.wallsEmptyState}>
+            <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
+          </View>
+        ) : loadError ? (
+          <View style={styles.wallsEmptyState}>
+            <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
+            <Text style={styles.wallsEmptyTitle}>Kunne ikke hente gallerier</Text>
+            <Text style={styles.wallsEmptyBody}>{loadError}</Text>
+          </View>
+        ) : isEmpty ? (
+          <View style={styles.wallsEmptyState}>
+            <View style={styles.wallsEmptyIconWrap}>
+              <GalleriEmptyIcon />
+              <View style={styles.wallsEmptySlash} />
+            </View>
+            <Text style={styles.wallsEmptyTitle}>Du har ingen gallerier</Text>
+            <Text style={styles.wallsEmptyBody}>
+              Tryk på + øverst til højre for at oprette dit første galleri. Du kan vælge om det er privat eller deles med klassen.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.wallsGrid}>
+            {galleries.map((g) => (
+              <WallsGalleryCard
+                key={g.id}
+                gallery={g}
+                longPressHandledRef={longPressHandledRef}
+                onLongPress={openActionMenu}
+                onPress={setSelectedGallery}
+              />
+            ))}
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Opret */}
+      <WallsCreateOverlay
+        activeMember={activeMember}
+        onClose={() => setCreateOpen(false)}
+        onSave={handleCreate}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
+        visible={createOpen}
+      />
+
+      {/* Rediger */}
+      <WallsCreateOverlay
+        activeMember={activeMember}
+        initialGallery={editingGallery}
+        onClose={() => setEditingGallery(null)}
+        onSave={handleEdit}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
+        visible={Boolean(editingGallery)}
+      />
+
+      {/* Album */}
+      <WallsAlbumScreen
+        activeMember={activeMember}
+        gallery={selectedGallery}
+        onClose={() => setSelectedGallery(null)}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
+        visible={Boolean(selectedGallery)}
+      />
+
+      {/* Action menu */}
+      <Modal
+        animationType="fade"
+        onRequestClose={closeActionMenu}
+        transparent
+        visible={Boolean(actionGallery)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk"
+            style={styles.chatModalBackdrop}
+            onPress={closeActionMenu}
+          />
+          <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatConversationActionMenuHeading}>
+                <Text style={styles.chatModalKicker}>Galleri</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  {actionGallery?.name ?? ''}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={closeActionMenu}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={20} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <View style={styles.chatConversationActionMenuList}>
+              {wallsActions.map((action) => (
+                <Pressable
+                  accessibilityLabel={action.label}
+                  accessibilityRole="button"
+                  key={action.type}
+                  onPress={() => selectWallsAction(action.type)}
+                  style={({ pressed }) => [
+                    styles.chatConversationActionMenuItem,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <View style={[
+                    styles.chatConversationActionMenuIcon,
+                    action.tone === 'danger' ? styles.chatConversationActionMenuIconDanger : null,
+                    action.tone === 'warning' ? styles.chatConversationActionMenuIconWarning : null,
+                    action.tone === 'calm' ? styles.chatConversationActionMenuIconCalm : null,
+                  ]}>
+                    <Ionicons
+                      name={action.icon}
+                      size={18}
+                      color={action.tone === 'warning' ? STUDOS_THEME.ink : '#FFFFFF'}
+                    />
+                  </View>
+                  <Text style={styles.chatConversationActionMenuText}>{action.label}</Text>
+                  <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Slet bekræftelse */}
+      <Modal
+        animationType="fade"
+        onRequestClose={deleting ? undefined : () => { setDeleteConfirmGallery(null); setDeleteError(''); }}
+        transparent
+        visible={Boolean(deleteConfirmGallery)}
+      >
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
+          <Pressable
+            accessibilityLabel="Luk"
+            disabled={deleting}
+            style={styles.chatModalBackdrop}
+            onPress={() => { setDeleteConfirmGallery(null); setDeleteError(''); }}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <Ionicons name="trash-outline" size={34} color={STUDOS_THEME.red} />
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+              Slet galleri?
+            </Text>
+            <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+              {`"${deleteConfirmGallery?.name ?? ''}" slettes permanent. Billeder i galleriet forsvinder for alle med adgang.`}
+            </Text>
+            {deleteError ? <Text style={styles.errorText}>{deleteError}</Text> : null}
+            <View style={styles.luckyAddModalActions}>
+              <Pressable
+                accessibilityLabel="Annuller"
+                accessibilityRole="button"
+                disabled={deleting}
+                onPress={() => { setDeleteConfirmGallery(null); setDeleteError(''); }}
+                style={({ pressed }) => [
+                  styles.luckyAddModalGhostButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.luckyAddModalGhostButtonText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Slet galleri"
+                accessibilityRole="button"
+                disabled={deleting}
+                onPress={handleDeleteConfirm}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.wallsDeleteButton,
+                  pressed && !deleting ? styles.primaryButtonPressed : null,
+                  deleting ? styles.primaryButtonDisabled : null,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {deleting ? 'Sletter…' : 'Slet galleri'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rapportér bekræftelse */}
+      <Modal
+        animationType="fade"
+        onRequestClose={reporting ? undefined : () => { setReportConfirmGallery(null); setReportError(''); }}
+        transparent
+        visible={Boolean(reportConfirmGallery)}
+      >
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
+          <Pressable
+            accessibilityLabel="Luk"
+            disabled={reporting}
+            style={styles.chatModalBackdrop}
+            onPress={() => { setReportConfirmGallery(null); setReportError(''); }}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <Ionicons name="flag-outline" size={34} color={STUDOS_THEME.blue} />
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+              Rapportér galleri?
+            </Text>
+            <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+              Tak fordi du hjælper med at holde Studos trygt. Vi gennemgår rapporten hurtigst muligt.
+            </Text>
+            {reportError ? <Text style={styles.errorText}>{reportError}</Text> : null}
+            <Pressable
+              accessibilityLabel="Send rapport"
+              accessibilityRole="button"
+              disabled={reporting}
+              onPress={handleReportConfirm}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                pressed && !reporting ? styles.primaryButtonPressed : null,
+                reporting ? styles.primaryButtonDisabled : null,
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>
+                {reporting ? 'Sender…' : 'Send rapport'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
 function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, title }) {
   return (
     <View style={styles.flowStack}>
@@ -11985,18 +13554,6 @@ function EarnCapsScreen({
       onPress: claimEarnCapsGoodDeed,
     },
     {
-      id: 'check-in',
-      actionAlignRight: true,
-      actionDisabled: true,
-      actionIconRight: 'camera',
-      actionLabel: 'Kommer snart',
-      icon: 'qr-code',
-      reward: '+50',
-      subtitle: 'Tjek ind ved fitness, klubber og events ved at scanne QR-koden.',
-      title: 'Check-in',
-      onPress: () => {},
-    },
-    {
       id: 'duels',
       actionAlignRight: true,
       actionIconRight: 'shield',
@@ -13544,9 +15101,9 @@ function CrewScreen({
   );
 }
 
-function AppTopBar({ className, menuOpen, onToggleMenu, schoolName }) {
+function AppTopBar({ className, menuOpen, onLayout, onToggleMenu, schoolName }) {
   return (
-    <View style={styles.topBar}>
+    <View onLayout={onLayout} style={styles.topBar}>
       <View style={styles.topBarSide}>
         <Pressable
           accessibilityLabel={menuOpen ? 'Luk menu' : 'Åbn menu'}
@@ -13687,19 +15244,6 @@ function SidebarMenuIcon({ active = false, item }) {
         <View style={styles.sidebarBadgeMedal}>
           <View style={styles.sidebarBadgeMedalDot} />
         </View>
-      </View>
-    );
-  }
-
-  if (item.id === 'bluebook') {
-    return (
-      <View style={styles.sidebarMenuIconWrap}>
-        <View style={styles.sidebarBookIcon}>
-          <View style={styles.sidebarBookSpine} />
-          <View style={styles.sidebarBookBookmark} />
-          <View style={styles.sidebarBookLine} />
-        </View>
-        {item.locked ? <LockBadge style={styles.sidebarLockBadge} /> : null}
       </View>
     );
   }
@@ -13929,7 +15473,7 @@ function GoodDeedClaimRewardModal({ reward, visible, onDismiss }) {
   );
 }
 
-function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, visible }) {
+function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, topBarHeight, visible }) {
   const [isRendered, setIsRendered] = useState(visible);
   const sidebarProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const sidebarMembers = Array.isArray(activeMembers) ? activeMembers : [];
@@ -13989,7 +15533,7 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
   }
 
   return (
-    <View style={styles.sidebarRoot}>
+    <View style={[styles.sidebarRoot, topBarHeight != null ? { top: topBarHeight } : null]}>
       <Animated.View
         pointerEvents="none"
         style={[styles.sidebarDim, { opacity: backdropOpacity }]}
@@ -16503,6 +18047,39 @@ function ClassBattleTitle() {
     <View accessible accessibilityLabel="Leaderboard" style={[styles.overviewPageTitleWrap, styles.classBattlePageTitleWrap]}>
       <Text style={[styles.overviewPageTitleRest, styles.classBattlePageTitleText]}>Leaderboard</Text>
       <ClassBattleTitleGraphic />
+    </View>
+  );
+}
+
+function GalleriTitleGraphic({ style }) {
+  return (
+    <View style={[styles.galleriTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.galleriTitleGraphicBack} />
+      <View style={styles.galleriTitleGraphicFace}>
+        <Ionicons name="images" size={18} color={STUDOS_THEME.ink} />
+      </View>
+      <View style={styles.galleriTitleGraphicDot} />
+    </View>
+  );
+}
+
+function GalleriEmptyIcon() {
+  return (
+    <View style={styles.galleriEmptyIcon} pointerEvents="none">
+      <View style={styles.galleriEmptyIconBack} />
+      <View style={styles.galleriEmptyIconFace}>
+        <Ionicons name="images" size={38} color={STUDOS_THEME.ink} />
+      </View>
+      <View style={styles.galleriEmptyIconDot} />
+    </View>
+  );
+}
+
+function GalleriTitle() {
+  return (
+    <View accessible accessibilityLabel="Galleri" style={styles.overviewPageTitleWrap}>
+      <Text style={styles.overviewPageTitleRest}>Galleri</Text>
+      <GalleriTitleGraphic />
     </View>
   );
 }
@@ -22355,6 +23932,677 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: STUDOS_THEME.blue,
   },
+  wallsRoot: {
+    flex: 1,
+  },
+  wallsFloatingHeader: {
+    position: 'absolute',
+    top: -APP_SCREEN_TOP_PADDING,
+    left: -APP_SCREEN_PADDING,
+    right: -APP_SCREEN_PADDING,
+    zIndex: 8,
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingTop: APP_SCREEN_TOP_PADDING,
+    paddingBottom: 12,
+    backgroundColor: '#F1FBF8',
+  },
+  wallsAddButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: STUDOS_THEME.yellow,
+    shadowColor: '#D9A83B',
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  wallsOverlayScrollPad: {
+    paddingTop: 36,
+  },
+  wallsOverlaySection: {
+    gap: 12,
+  },
+  wallsOverlaySectionLabel: {
+    color: '#526078',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+    marginTop: 4,
+  },
+  wallsOverlayError: {
+    marginTop: -8,
+  },
+  wallsOverlayNextButton: {
+    marginTop: 4,
+  },
+  wallsMemberSheetRoot: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  wallsMemberSheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(23, 33, 67, 0.45)',
+  },
+  wallsMemberSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '68%',
+    backgroundColor: '#F1FBF8',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingTop: 22,
+    paddingBottom: APP_FOOTER_PADDING_BOTTOM || 16,
+  },
+  wallsMemberSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  wallsMemberSheetTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  wallsMemberPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  wallsMemberPickerTriggerLabel: {
+    color: '#526078',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  wallsMemberPickerTriggerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  wallsMemberPickerTriggerAction: {
+    color: STUDOS_THEME.blue,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  wallsMemberPickerModal: {
+    flex: 1,
+    backgroundColor: '#F1FBF8',
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingTop: APP_SCREEN_TOP_PADDING + 10,
+  },
+  wallsMemberPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  wallsMemberPickerTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  wallsMemberPickerDone: {
+    color: STUDOS_THEME.blue,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  wallsOverlayCoverHint: {
+    color: '#526078',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  wallsOverlayCoverPicker: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    aspectRatio: 4 / 3,
+    backgroundColor: '#E5EDE9',
+  },
+  wallsOverlayCoverImage: {
+    width: '100%',
+    height: '100%',
+  },
+  wallsOverlayCoverPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  wallsOverlayCoverPlaceholderText: {
+    color: '#8a9bb0',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  wallsOverlayCoverOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(23,33,67,0.45)',
+    alignItems: 'flex-end',
+  },
+  wallsOverlayCoverOverlayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(23,33,67,0.55)',
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  wallsOverlayCoverOverlayText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  wallsVisibilityRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  wallsVisibilityOption: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    minHeight: 96,
+    borderColor: '#DDE8E5',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    backgroundColor: '#F7FAFA',
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+  },
+  wallsVisibilityOptionActive: {
+    borderColor: STUDOS_THEME.blue,
+    backgroundColor: '#EDF9F7',
+  },
+  wallsVisibilityLabel: {
+    color: '#8a9bb0',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  wallsVisibilityLabelActive: {
+    color: STUDOS_THEME.ink,
+  },
+  wallsVisibilityDesc: {
+    color: '#8a9bb0',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  wallsAudienceList: {
+    gap: 8,
+  },
+  wallsAudienceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 60,
+    borderColor: '#DDE8E5',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+  },
+  wallsAudienceRowActive: {
+    borderColor: STUDOS_THEME.blue,
+    backgroundColor: '#EDF9F7',
+  },
+  wallsAudienceIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#E5EDE9',
+  },
+  wallsAudienceIconActive: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  wallsAudienceText: {
+    flex: 1,
+    gap: 2,
+  },
+  wallsAudienceLabel: {
+    color: '#8a9bb0',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsAudienceLabelActive: {
+    color: STUDOS_THEME.ink,
+  },
+  wallsAudienceDesc: {
+    color: '#8a9bb0',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  wallsPermissionList: {
+    gap: 8,
+  },
+  wallsPermissionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 60,
+    borderColor: '#DDE8E5',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+  },
+  wallsPermissionRowActive: {
+    borderColor: STUDOS_THEME.blue,
+    backgroundColor: '#EDF9F7',
+  },
+  wallsPermissionIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#E5EDE9',
+  },
+  wallsPermissionIconActive: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  wallsDeleteButton: {
+    flex: 1,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  wallsFloatingHeaderScrolled: {
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.14,
+    shadowRadius: 15,
+    elevation: 8,
+  },
+  wallsSubtitle: {
+    fontSize: 11.5,
+    color: '#526078',
+    fontWeight: '800',
+    lineHeight: 16,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  wallsScrollContent: {
+    paddingTop: 104,
+    paddingBottom: 24,
+  },
+  wallsScrollContentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  wallsEmptyState: {
+    alignItems: 'center',
+    paddingHorizontal: 26,
+    paddingTop: 16,
+    paddingBottom: 40,
+  },
+  wallsEmptyIconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 120,
+    height: 106,
+    marginBottom: 20,
+  },
+  galleriEmptyIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 92,
+    height: 80,
+  },
+  galleriEmptyIconBack: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 65,
+    height: 65,
+    borderRadius: 20,
+    backgroundColor: STUDOS_THEME.blue,
+    transform: [{ rotate: '8deg' }],
+  },
+  galleriEmptyIconFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    width: 72,
+    height: 72,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 20,
+    borderWidth: 2.5,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 4,
+    transform: [{ rotate: '-4deg' }],
+  },
+  galleriEmptyIconDot: {
+    position: 'absolute',
+    right: 2,
+    top: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 16,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  wallsEmptySlash: {
+    position: 'absolute',
+    width: 100,
+    height: 8,
+    borderColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+    transform: [{ rotate: '-34deg' }],
+  },
+  wallsEmptyTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  wallsEmptyBody: {
+    color: '#65748b',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
+    maxWidth: 280,
+    textAlign: 'center',
+  },
+  wallsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  wallsCardOuter: {
+    width: '47.5%',
+  },
+  wallsCard: {
+    borderRadius: 12,
+    borderColor: '#DDE8E5',
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  wallsCardCover: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 110,
+    backgroundColor: '#EDF3F1',
+    position: 'relative',
+  },
+  wallsCardCoverImage: {
+    width: '100%',
+    height: '100%',
+  },
+  wallsCardCoverPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+  },
+  wallsCardBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.88)',
+  },
+  wallsCardMeta: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 2,
+  },
+  wallsCardName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsCardCount: {
+    color: '#8a9bb0',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  wallsAlbumHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: 12,
+    gap: 8,
+  },
+  wallsAlbumTitle: {
+    flex: 1,
+    color: STUDOS_THEME.ink,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: -0.3,
+  },
+  wallsAlbumScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
+    gap: 16,
+  },
+  wallsAlbumGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  wallsAlbumPhotoCell: {
+    borderRadius: 4,
+    overflow: 'hidden',
+    backgroundColor: '#EDF3F1',
+  },
+  wallsAlbumPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  wallsAlbumUploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: STUDOS_THEME.blue,
+    borderStyle: 'dashed',
+    paddingVertical: 14,
+    backgroundColor: 'rgba(39,174,127,0.04)',
+  },
+  wallsAlbumUploadButtonText: {
+    color: STUDOS_THEME.blue,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  wallsPhotoViewerRoot: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0a0e14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  wallsPhotoViewerImage: {
+    width: '100%',
+    flex: 1,
+  },
+  wallsPhotoViewerBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingBottom: (APP_FOOTER_PADDING_BOTTOM || 16) + 4,
+    paddingTop: 12,
+    gap: 8,
+    backgroundColor: 'rgba(10,14,20,0.72)',
+  },
+  wallsPhotoViewerMetaText: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  wallsPhotoViewerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  wallsPhotoViewerAction: {
+    padding: 8,
+    borderRadius: 20,
+  },
+  wallsPhotoActionSheet: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingBottom: (APP_FOOTER_PADDING_BOTTOM || 16) + 4,
+    paddingTop: 8,
+    overflow: 'hidden',
+  },
+  wallsPhotoActionHeader: {
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF3F1',
+    marginBottom: 4,
+  },
+  wallsPhotoActionTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  wallsPhotoActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 22,
+    paddingVertical: 15,
+  },
+  wallsPhotoActionRowText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: STUDOS_THEME.ink,
+  },
+  wallsPhotoActionRowTextDanger: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#E05858',
+  },
+  wallsPhotoConfirmSheet: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 22,
+    paddingBottom: (APP_FOOTER_PADDING_BOTTOM || 16) + 8,
+    paddingTop: 20,
+    gap: 10,
+  },
+  wallsPhotoConfirmTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 17,
+    fontWeight: '900',
+    marginBottom: 2,
+  },
+  wallsPhotoConfirmBody: {
+    color: '#526078',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  wallsPhotoConfirmError: {
+    color: '#E05858',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  galleriTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 44,
+    height: 38,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  galleriTitleGraphicBack: {
+    position: 'absolute',
+    right: 1,
+    bottom: 1,
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.blue,
+    transform: [{ rotate: '8deg' }],
+  },
+  galleriTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 35,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  galleriTitleGraphicDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
   studentCap: {
     position: 'absolute',
     top: -19,
@@ -27521,7 +29769,7 @@ const styles = StyleSheet.create({
     color: '#FF6F73',
   },
   footerItemPressed: {
-    opacity: 0.72,
+    opacity: 0.7,
   },
   footerIconWrap: {
     flexShrink: 0,

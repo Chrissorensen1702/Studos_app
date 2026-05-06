@@ -1521,7 +1521,7 @@ class StudosController extends Controller
         $member = $this->authenticatedMemberFromRequest($request);
         $data = $request->validate([
             'expoPushToken' => ['required', 'string', 'max:255'],
-            'platform' => ['required', Rule::in(['android'])],
+            'platform' => ['required', Rule::in(['android', 'ios'])],
             'deviceName' => ['nullable', 'string', 'max:190'],
             'projectId' => ['nullable', 'string', 'max:190'],
             'appVariant' => ['nullable', 'string', 'max:64'],
@@ -3710,6 +3710,505 @@ class StudosController extends Controller
         $text = (string) $value;
 
         return str_contains($text, 'T') ? $text : str_replace(' ', 'T', $text).'.000Z';
+    }
+
+    // -------------------------------------------------------------------------
+    // Galleries
+    // -------------------------------------------------------------------------
+
+    private const GALLERY_VISIBILITY_VALUES = ['private', 'public'];
+    private const GALLERY_AUDIENCE_VALUES   = ['class', 'crew', 'specific'];
+    private const GALLERY_PERMISSION_VALUES = ['view', 'add', 'add_delete'];
+
+    private function galleryApiShape(object $gallery): array
+    {
+        $memberIds = [];
+
+        if (! blank($gallery->member_ids)) {
+            $decoded = json_decode($gallery->member_ids, true);
+            $memberIds = is_array($decoded) ? $decoded : [];
+        }
+
+        return [
+            'id'                  => $gallery->id,
+            'name'                => $gallery->name,
+            'visibility'          => $gallery->visibility,
+            'audience'            => $gallery->audience,
+            'permission'          => $gallery->permission,
+            'memberIds'           => $memberIds,
+            'photoCount'          => (int) ($gallery->photo_count ?? 0),
+            'coverUri'            => UploadedImage::publicUrl($gallery->cover_image_url ?? null, request()),
+            'creatorId'           => $gallery->created_by_member_id ?? null,
+            'createdAt'           => $this->apiDateTime($gallery->created_at),
+            'updatedAt'           => $this->apiDateTime($gallery->updated_at),
+        ];
+    }
+
+    private function galleryIsVisibleToMember(object $gallery, object $member): bool
+    {
+        if ($gallery->visibility === 'private') {
+            return (string) $gallery->created_by_member_id === (string) $member->id;
+        }
+
+        return match ($gallery->audience) {
+            'class'    => true,
+            'crew'     => true,
+            'specific' => in_array((string) $member->id, json_decode($gallery->member_ids ?? '[]', true) ?? [], true)
+                || (string) $gallery->created_by_member_id === (string) $member->id,
+            default    => false,
+        };
+    }
+
+    public function getGalleries(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $galleries = DB::table('galleries')
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->orderByDesc('created_at')
+            ->get();
+
+        $visible = $galleries->filter(fn ($g) => $this->galleryIsVisibleToMember($g, $member));
+
+        return response()->json([
+            'galleries' => $visible->values()->map(fn ($g) => $this->galleryApiShape($g))->all(),
+        ]);
+    }
+
+    public function storeGallery(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $data = $request->validate([
+            'name'            => ['required', 'string', 'max:190'],
+            'visibility'      => ['required', 'string', Rule::in(self::GALLERY_VISIBILITY_VALUES)],
+            'audience'        => ['nullable', 'string', Rule::in(self::GALLERY_AUDIENCE_VALUES)],
+            'permission'      => ['nullable', 'string', Rule::in(self::GALLERY_PERMISSION_VALUES)],
+            'memberIds'       => ['nullable', 'array', 'max:250'],
+            'memberIds.*'     => ['string', 'max:36'],
+            'coverImageData'  => ['nullable', 'string', 'max:7000000'],
+        ]);
+
+        $isPublic = $data['visibility'] === 'public';
+
+        abort_if($isPublic && blank($data['audience'] ?? null), 422, 'Audience er påkrævet for offentlige gallerier.');
+        abort_if($isPublic && blank($data['permission'] ?? null), 422, 'Permission er påkrævet for offentlige gallerier.');
+        abort_if(
+            $isPublic && ($data['audience'] ?? null) === 'specific' && empty($data['memberIds'] ?? []),
+            422,
+            'Vælg mindst ét klassemedlem.'
+        );
+
+        $name = ContentModeration::cleanText(
+            trim($data['name']),
+            'title',
+            'Galleri navn',
+            ['source' => 'gallery', 'member_id' => $member->id, 'class_id' => $member->class_id]
+        );
+
+        abort_if(blank($name), 422, 'Galleriets navn indeholder ugyldigt indhold.');
+
+        $memberIds = [];
+
+        if ($isPublic && ($data['audience'] ?? null) === 'specific') {
+            $validIds = DB::table('members')
+                ->where('class_id', $member->class_id)
+                ->where('status', 'active')
+                ->whereIn('id', $data['memberIds'] ?? [])
+                ->pluck('id')
+                ->map(fn ($id) => (string) $id)
+                ->all();
+
+            abort_if(empty($validIds), 422, 'Ingen gyldige klassemedlemmer valgt.');
+            $memberIds = $validIds;
+        }
+
+        $now = now()->format('Y-m-d H:i:s');
+        $id  = (string) Str::uuid();
+
+        $coverImagePath = null;
+        if (! blank($data['coverImageData'] ?? null)) {
+            $coverImagePath = UploadedImage::storeBase64(
+                $data['coverImageData'],
+                'gallery-covers',
+                $id,
+                'Gallery cover',
+            );
+        }
+
+        DB::table('galleries')->insert([
+            'id'                   => $id,
+            'class_id'             => $member->class_id,
+            'name'                 => $name,
+            'visibility'           => $data['visibility'],
+            'audience'             => $isPublic ? $data['audience'] : null,
+            'permission'           => $isPublic ? $data['permission'] : null,
+            'member_ids'           => $isPublic && $memberIds ? json_encode($memberIds) : null,
+            'photo_count'          => 0,
+            'cover_image_url'      => $coverImagePath,
+            'created_by_member_id' => $member->id,
+            'deleted_at'           => null,
+            'deleted_by_member_id' => null,
+            'created_at'           => $now,
+            'updated_at'           => $now,
+        ]);
+
+        $gallery = DB::table('galleries')->where('id', $id)->first();
+
+        return response()->json(['gallery' => $this->galleryApiShape($gallery)], 201);
+    }
+
+    public function updateGallery(Request $request, string $gallery): JsonResponse
+    {
+        $member      = $this->authenticatedMemberFromRequest($request);
+        $memberRole  = $this->normalizeRole($member->role ?? null);
+        $canModerate = in_array($memberRole, ['owner', 'moderator'], true);
+
+        $existing = DB::table('galleries')
+            ->where('id', $gallery)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Galleriet findes ikke.');
+        abort_unless(
+            (string) $existing->created_by_member_id === (string) $member->id || $canModerate,
+            403,
+            'Du har ikke adgang til at redigere dette galleri.'
+        );
+
+        $data = $request->validate([
+            'name'            => ['required', 'string', 'max:190'],
+            'visibility'      => ['required', 'string', Rule::in(self::GALLERY_VISIBILITY_VALUES)],
+            'audience'        => ['nullable', 'string', Rule::in(self::GALLERY_AUDIENCE_VALUES)],
+            'permission'      => ['nullable', 'string', Rule::in(self::GALLERY_PERMISSION_VALUES)],
+            'memberIds'       => ['nullable', 'array', 'max:250'],
+            'memberIds.*'     => ['string', 'max:36'],
+            'coverImageData'  => ['nullable', 'string', 'max:7000000'],
+        ]);
+
+        $isPublic = $data['visibility'] === 'public';
+
+        abort_if($isPublic && blank($data['audience'] ?? null), 422, 'Audience er påkrævet for offentlige gallerier.');
+        abort_if($isPublic && blank($data['permission'] ?? null), 422, 'Permission er påkrævet for offentlige gallerier.');
+        abort_if(
+            $isPublic && ($data['audience'] ?? null) === 'specific' && empty($data['memberIds'] ?? []),
+            422,
+            'Vælg mindst ét klassemedlem.'
+        );
+
+        $name = ContentModeration::cleanText(
+            trim($data['name']),
+            'title',
+            'Galleri navn',
+            ['source' => 'gallery_update', 'member_id' => $member->id, 'class_id' => $member->class_id]
+        );
+
+        abort_if(blank($name), 422, 'Galleriets navn indeholder ugyldigt indhold.');
+
+        $memberIds = [];
+
+        if ($isPublic && ($data['audience'] ?? null) === 'specific') {
+            $validIds = DB::table('members')
+                ->where('class_id', $member->class_id)
+                ->where('status', 'active')
+                ->whereIn('id', $data['memberIds'] ?? [])
+                ->pluck('id')
+                ->map(fn ($id) => (string) $id)
+                ->all();
+
+            abort_if(empty($validIds), 422, 'Ingen gyldige klassemedlemmer valgt.');
+            $memberIds = $validIds;
+        }
+
+        $updatePayload = [
+            'name'       => $name,
+            'visibility' => $data['visibility'],
+            'audience'   => $isPublic ? $data['audience'] : null,
+            'permission' => $isPublic ? $data['permission'] : null,
+            'member_ids' => $isPublic && $memberIds ? json_encode($memberIds) : null,
+            'updated_at' => now()->format('Y-m-d H:i:s'),
+        ];
+
+        if (! blank($data['coverImageData'] ?? null)) {
+            $updatePayload['cover_image_url'] = UploadedImage::storeBase64(
+                $data['coverImageData'],
+                'gallery-covers',
+                $existing->id,
+                'Gallery cover update',
+            );
+        }
+
+        DB::table('galleries')->where('id', $existing->id)->update($updatePayload);
+
+        $updated = DB::table('galleries')->where('id', $existing->id)->first();
+
+        return response()->json(['gallery' => $this->galleryApiShape($updated)]);
+    }
+
+    public function destroyGallery(Request $request, string $gallery): JsonResponse
+    {
+        $member      = $this->authenticatedMemberFromRequest($request);
+        $memberRole  = $this->normalizeRole($member->role ?? null);
+        $canModerate = in_array($memberRole, ['owner', 'moderator'], true);
+
+        $existing = DB::table('galleries')
+            ->where('id', $gallery)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Galleriet findes ikke.');
+        abort_unless(
+            (string) $existing->created_by_member_id === (string) $member->id || $canModerate,
+            403,
+            'Du har ikke adgang til at slette dette galleri.'
+        );
+
+        DB::table('galleries')->where('id', $existing->id)->update([
+            'deleted_at'           => now()->format('Y-m-d H:i:s'),
+            'deleted_by_member_id' => $member->id,
+            'updated_at'           => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function reportGallery(Request $request, string $gallery): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $existing = DB::table('galleries')
+            ->where('id', $gallery)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Galleriet findes ikke.');
+        abort_if(
+            (string) ($existing->created_by_member_id ?? '') === (string) $member->id,
+            422,
+            'Du kan ikke rapportere dit eget galleri.'
+        );
+
+        $data = $request->validate([
+            'reason'  => ['nullable', 'string', 'max:190'],
+            'details' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $reason  = trim($data['reason'] ?? '') ?: 'Galleri rapporteret';
+        $details = trim($data['details'] ?? '') ?: null;
+        $now     = now()->format('Y-m-d H:i:s');
+
+        DB::table('member_reports')->insert([
+            'id'                 => (string) Str::uuid(),
+            'reporter_member_id' => $member->id,
+            'reported_member_id' => $existing->created_by_member_id ?? null,
+            'target_type'        => 'gallery',
+            'target_id'          => $existing->id,
+            'reason'             => $reason,
+            'details'            => $details,
+            'status'             => 'pending',
+            'reviewed_at'        => null,
+            'created_at'         => $now,
+            'updated_at'         => $now,
+        ]);
+
+        return response()->json(['ok' => true]);
+    }
+
+    // ─── Gallery photos ───────────────────────────────────────────────────────
+
+    private function galleryPhotoApiShape(object $photo): array
+    {
+        return [
+            'id'        => $photo->id,
+            'galleryId' => $photo->gallery_id,
+            'memberId'  => $photo->member_id ?? null,
+            'imageUri'  => UploadedImage::publicUrl($photo->image_url, request()),
+            'createdAt' => $this->apiDateTime($photo->created_at),
+        ];
+    }
+
+    private function resolveGalleryForMember(string $galleryId, object $member): object
+    {
+        $gallery = DB::table('galleries')
+            ->where('id', $galleryId)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($gallery, 404, 'Galleriet findes ikke.');
+        abort_unless($this->galleryIsVisibleToMember($gallery, $member), 403, 'Du har ikke adgang til dette galleri.');
+
+        return $gallery;
+    }
+
+    private function memberCanAddPhoto(object $gallery, object $member): bool
+    {
+        if ((string) $gallery->created_by_member_id === (string) $member->id) {
+            return true;
+        }
+
+        if ($gallery->visibility !== 'public') {
+            return false;
+        }
+
+        return in_array($gallery->permission ?? '', ['add', 'add_delete'], true);
+    }
+
+    private function memberCanDeletePhoto(object $photo, object $gallery, object $member): bool
+    {
+        if ((string) ($photo->member_id ?? '') === (string) $member->id) {
+            return true;
+        }
+
+        if ((string) $gallery->created_by_member_id === (string) $member->id) {
+            return true;
+        }
+
+        $memberRole  = $this->normalizeRole($member->role ?? null);
+        $canModerate = in_array($memberRole, ['owner', 'moderator'], true);
+
+        if ($canModerate) {
+            return true;
+        }
+
+        return $gallery->visibility === 'public' && $gallery->permission === 'add_delete';
+    }
+
+    public function getGalleryPhotos(Request $request, string $gallery): JsonResponse
+    {
+        $member  = $this->authenticatedMemberFromRequest($request);
+        $gallery = $this->resolveGalleryForMember($gallery, $member);
+
+        $photos = DB::table('gallery_photos')
+            ->where('gallery_id', $gallery->id)
+            ->whereNull('deleted_at')
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json([
+            'photos' => $photos->map(fn ($p) => $this->galleryPhotoApiShape($p))->all(),
+        ]);
+    }
+
+    public function storeGalleryPhoto(Request $request, string $gallery): JsonResponse
+    {
+        $member  = $this->authenticatedMemberFromRequest($request);
+        $gallery = $this->resolveGalleryForMember($gallery, $member);
+
+        abort_unless($this->memberCanAddPhoto($gallery, $member), 403, 'Du har ikke tilladelse til at tilføje billeder til dette galleri.');
+
+        $data = $request->validate([
+            'imageData' => ['required', 'string', 'max:8000000'],
+        ]);
+
+        $id        = (string) Str::uuid();
+        $imagePath = UploadedImage::storeBase64($data['imageData'], 'gallery-photos', $id, 'Gallery photo');
+        $now       = now()->format('Y-m-d H:i:s');
+
+        DB::table('gallery_photos')->insert([
+            'id'         => $id,
+            'gallery_id' => $gallery->id,
+            'member_id'  => $member->id,
+            'image_url'  => $imagePath,
+            'created_at' => $now,
+        ]);
+
+        DB::table('galleries')
+            ->where('id', $gallery->id)
+            ->increment('photo_count');
+
+        $photo = DB::table('gallery_photos')->where('id', $id)->first();
+
+        return response()->json(['photo' => $this->galleryPhotoApiShape($photo)], 201);
+    }
+
+    public function destroyGalleryPhoto(Request $request, string $photo): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $existing = DB::table('gallery_photos')
+            ->where('id', $photo)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Billedet findes ikke.');
+
+        $gallery = DB::table('galleries')
+            ->where('id', $existing->gallery_id)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($gallery, 404, 'Galleriet findes ikke.');
+        abort_unless($this->memberCanDeletePhoto($existing, $gallery, $member), 403, 'Du har ikke tilladelse til at slette dette billede.');
+
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::table('gallery_photos')->where('id', $existing->id)->update([
+            'deleted_at'           => $now,
+            'deleted_by_member_id' => $member->id,
+        ]);
+
+        DB::table('galleries')
+            ->where('id', $gallery->id)
+            ->where('photo_count', '>', 0)
+            ->decrement('photo_count');
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function reportGalleryPhoto(Request $request, string $photo): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $existing = DB::table('gallery_photos')
+            ->where('id', $photo)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Billedet findes ikke.');
+
+        $gallery = DB::table('galleries')
+            ->where('id', $existing->gallery_id)
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($gallery, 404, 'Galleriet findes ikke.');
+        abort_if(
+            (string) ($existing->member_id ?? '') === (string) $member->id,
+            422,
+            'Du kan ikke rapportere dit eget billede.'
+        );
+
+        $data = $request->validate([
+            'reason'  => ['nullable', 'string', 'max:190'],
+            'details' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $reason  = trim($data['reason'] ?? '') ?: 'Foto rapporteret';
+        $details = trim($data['details'] ?? '') ?: null;
+        $now     = now()->format('Y-m-d H:i:s');
+
+        DB::table('member_reports')->insert([
+            'id'                 => (string) Str::uuid(),
+            'reporter_member_id' => $member->id,
+            'reported_member_id' => $existing->member_id ?? null,
+            'target_type'        => 'gallery_photo',
+            'target_id'          => $existing->id,
+            'reason'             => $reason,
+            'details'            => $details,
+            'status'             => 'pending',
+            'reviewed_at'        => null,
+            'created_at'         => $now,
+            'updated_at'         => $now,
+        ]);
+
+        return response()->json(['ok' => true]);
     }
 
     private function isDuplicateEmailConstraintError(QueryException $exception): bool
