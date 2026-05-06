@@ -596,10 +596,16 @@ class ChatController extends Controller
         ]);
         $channelName = $data['channel_name'];
 
-        abort_unless(Str::startsWith($channelName, 'private-chat.'), 403, 'Ugyldig realtime-kanal.');
+        if (Str::startsWith($channelName, 'private-chat.')) {
+            $conversationId = Str::after($channelName, 'private-chat.');
+            $this->conversationForMember($conversationId, $member);
+        } elseif (Str::startsWith($channelName, 'private-duels.member.')) {
+            $memberId = Str::after($channelName, 'private-duels.member.');
 
-        $conversationId = Str::after($channelName, 'private-chat.');
-        $this->conversationForMember($conversationId, $member);
+            abort_unless((string) $memberId === (string) $member->id, 403, 'Ugyldig realtime-kanal.');
+        } else {
+            abort(403, 'Ugyldig realtime-kanal.');
+        }
 
         $signature = hash_hmac(
             'sha256',

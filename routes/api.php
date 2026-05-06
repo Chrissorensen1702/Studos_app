@@ -28,6 +28,7 @@ Route::post('/duels/{duel}/decline', [StudosController::class, 'declineDuel'])->
 Route::post('/duels/{duel}/cancel', [StudosController::class, 'cancelDuel'])->middleware('throttle:30,1');
 Route::post('/duels/{duel}/confirm', [StudosController::class, 'confirmDuel'])->middleware('throttle:30,1');
 Route::post('/duels/{duel}/complete', [StudosController::class, 'completeDuel'])->middleware('throttle:30,1');
+Route::post('/duels/{duel}/forfeit', [StudosController::class, 'forfeitDuel'])->middleware('throttle:30,1');
 Route::post('/duels/{duel}/approve', [StudosController::class, 'approveDuel'])->middleware('throttle:30,1');
 Route::post('/duels/{duel}/reject', [StudosController::class, 'rejectDuel'])->middleware('throttle:30,1');
 Route::get('/good-deeds/current', [StudosController::class, 'currentGoodDeed']);

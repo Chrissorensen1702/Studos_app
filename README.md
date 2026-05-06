@@ -4,12 +4,13 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-05 efter Dyst-backend, Caps-escrow,
-dommerflow, native dato/tid og 24 timers svarfrist paa dystanmodninger.
+Status er opdateret 2026-05-06 efter Dyst v1-polish, Challenge-regler,
+Caps-escrow, dommerflow, realtime/polling, scheduler og publish-checkliste.
 
 Se ogsaa:
 
 - `DETTE_MANGLER_VI.md` for korte produktnoter, der ikke maa glemmes.
+- `PUBLISH_CHECKLIST.md` for VIGTIG publish-/release-tjekliste.
 - `apps/mobile/README.md` for mobil-specifikke build- og pushnoter.
 - `docs/blueprint.md` og `docs/decisions.md` for tidlige produktbeslutninger.
 
@@ -27,6 +28,8 @@ Se ogsaa:
 - Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.83.
 - Caps er nu en dynamisk backend-enhed via `members.caps_balance` og
   `cap_transactions`.
+- Dyst vurderes v1-klar i kodebasen. Flowet mangler stadig fuld QA paa to
+  fysiske enheder og production/staging smoke-test foer publish.
 - Klassedyst bruger API-data og rangerer klasser efter Caps pr. aktiv elev.
 - Optjen Caps-siden samler weekly streak, ugens gode gerning, QR-check-in og
   duel-indgange.
@@ -40,6 +43,8 @@ Se ogsaa:
   afhaengige af lokal dev-server.
 - Dyst-siden i mobilappen er koblet paa backend med oprettelse, accept/afvis,
   Caps-escrow, resultatbekraeftelse, dommerflow, arkiv og 24 timers svarfrist.
+- Dyst opdaterer nu mere levende via Reverb realtime, polling fallback,
+  foreground-refresh og optimistisk action-feedback i knapperne.
 - Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
   er paa plads.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
@@ -186,6 +191,7 @@ POST /api/duels/{duel}/decline
 POST /api/duels/{duel}/cancel
 POST /api/duels/{duel}/confirm
 POST /api/duels/{duel}/complete
+POST /api/duels/{duel}/forfeit
 POST /api/duels/{duel}/approve
 POST /api/duels/{duel}/reject
 POST /api/events
@@ -337,25 +343,59 @@ Dyst:
   samme maade som chat-overlayet.
 - Der kan oprettes to typer: `Mod hinanden` til 1:1-konkurrencer og `Challenge`
   til envejs-udfordringer.
-- Opret-flowet har kollapset modstandervalg, native dato- og tidsvaelger,
-  Caps-indsats, deadline og valgfri tredjepartsdommer.
+- Opret-flowet er poleret til v1: `Vaelg din dyst`, tydelige type-ikoner,
+  dynamisk `Vaelg modstander`/`Vaelg person`, native dato- og tidsvaelger,
+  Caps-indsats/beloenning med capcoin, deadline og valgfri dommer.
+- Dommer kan kun vaelges paa `Mod hinanden`. Naar togglen slaas til, aabner en
+  centreret dommermodal med soegefelt; lukker man uden valg, slaas dommer fra
+  igen.
+- `Mod hinanden` er gensidig indsats: begge parter laaser samme antal Caps i
+  escrow, og vinderen faar puljen.
+- `Challenge` er envejs-bounty: opretteren laaser beloenningen i escrow,
+  modtageren betaler ingen Caps, og opretteren faar beloenningen retur ved
+  afvisning, annullering eller udloeb.
+- Challenge har ingen dommer og kan ikke give Caps begge veje. Modtageren faar
+  kun beloenningen, hvis opretteren godkender gennemfoerslen.
 - Afventende dystanmodninger viser en 24 timers svarfrist i status-pill i stedet
   for en statisk `Afventer svar` tekst.
 - Afventende dystkort bruger lyseblaa container, mens svarfrist-pill kan vaere
   gul eller roed, naar fristen er taet paa at udloebe.
+- Sendte dyster vises adskilt fra indkommende afventede dyster. Brugeren ser
+  modtagerens navn/billede, en groenne pil-retning, annuller-knap og svarfrist.
 - Aktive `Mod hinanden`-dyster bruger `Vaelg vinder`. Uden dommer skal begge
   parter bekraefte resultatet, foer Caps udbetales.
-- Aktive `Challenge`-dyster bruger gennemfoert-flow; uden dommer kraever
-  resultatet ogsaa modpartens bekraeftelse.
-- Hvis der er dommer paa en dyst, sendes resultatet til dommergodkendelse, og
-  dommeren kan godkende eller afvise via en separat dommermodal.
+- Aktive `Challenge`-dyster kan kun markeres gennemfoert af modtageren og har
+  ikke dommer. Resultatet kraever opretterens bekraeftelse, foer beloenningen
+  udbetales.
+- Modtageren kan bruge `Giv op` paa en aktiv `Challenge`; challengen lukkes som
+  tabt for modtageren, og opretteren faar beloenningen retur med det samme.
+- Top-right status-pills er forenklet: `I GANG`, `GENNEMFOERT` og, naar det er
+  brugerens tur til sidste godkendelse, `BEKRAEFT VINDER`.
+- Foreslaaet vinder vises som groent meta-element. De nederste action/info-felter
+  fortaeller, om resultatet ligger hos modpart, opretter eller dommer.
+- Alle Dyst- og Challenge-resultater skal vaere godkendt foer deadline. Hvis
+  deadline passerer, mens en dyst stadig er aktiv eller afventer godkendelse,
+  udloeber den, og escrow-Caps returneres.
+- Hvis der er dommer paa en `Mod hinanden`-dyst, sendes resultatet til
+  dommergodkendelse, og dommeren kan godkende eller afvise via en separat
+  dommermodal.
 - Dommeropgaver vises kun, naar brugeren faktisk har afventende
   dommergodkendelser, med lille badge/tal paa Dyst-siden.
+- Dyst-ikonet i footeren viser en lille badge med antal handlinger, der kraever
+  brugerens input: indkommende dyster og dommergodkendelser.
+- Afventede og aktive hovedsektioner kan foldes ind/ud. Afventede er som
+  udgangspunkt lukket, aktive er aaben, naar der er aktive dyster.
 - Afsluttede, afviste, annullerede og udloebne dyster ligger i arkivmodalen.
-- Backend gemmer dyster i `point_duels`, validerer Caps-balance, laaser indsats i
-  escrow og skriver bevaegelser i `cap_transactions`.
+- Backend gemmer dyster i `point_duels`, validerer Caps-balance, laaser
+  indsats/beloenning i escrow og skriver bevaegelser i `cap_transactions`.
 - Udlober en aktiv dyst, eller udlober en anmodning efter 24 timer uden accept,
   arkiveres den som udloebet og escrow-Caps refunderes.
+- Dyst-udloeb koeres via `php artisan duels:expire`, som er registreret i
+  Laravel Scheduler hvert minut. Ved publish skal scheduler/cron vaere aktiv,
+  ellers koerer udloeb kun, naar en involveret bruger rammer duel-endpoints.
+- Realtime bruger private Reverb-kanaler pr. medlem, med polling fallback og
+  foreground-refresh, saa Dyst-siden opdaterer uden at brugeren skal forlade
+  siden.
 - Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
   er paa plads.
 
@@ -424,6 +464,11 @@ Det der ser godt ud:
 - Android push er feature-gated og ikke aktiv for iOS.
 - Android mikrofonpermission er nu fjernet/blokeret.
 - Backend koerer paa HTTPS i Cloud.
+- Caps har ingen pengevaerdi, kan ikke koebes, saelges, veksles eller bruges til
+  praemier. Dette skal skrives tydeligt i vilkaar/politik foer publish, saa Dyst
+  ikke kan misforstaas som gambling eller real-money contest.
+- Dyst/Caps er socialt og internt til Studos, men review notes boer forklare
+  kort, hvordan Caps, Dyst, Challenge og escrow virker.
 
 Release-blokkere foer Apple/Google:
 
@@ -458,6 +503,8 @@ Release-blokkere foer Apple/Google:
 - Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
 - Admin/moderationsside.
+- Offentlige privacy/terms/EULA/support-sider til store review.
+- Endelig moderation-haandtering for rapporter i web/admin.
 - Data-export flow.
 
 ## Testdata
@@ -480,7 +527,21 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-03 efter login/ email-regel/ Caps/Klassedyst/Optjen Caps-arbejdet:
+Senest koert 2026-05-06 efter Dyst v1-polish:
+
+```bash
+node --check apps/mobile/App.js
+php artisan tinker --execute="/* oprettede lokale test-dyster til Chris */"
+```
+
+Resultat:
+
+- `apps/mobile/App.js` parser OK.
+- Lokale testdata for `awaitingResultConfirm` blev oprettet og verificeret:
+  en `Mod hinanden` uden dommer og en `Challenge` uden dommer, hvor Chris
+  Elsborg Soerensen skal godkende foreslaaet vinder/gennemfoersel.
+
+Tidligere koert 2026-05-03 efter login/ email-regel/ Caps/Klassedyst/Optjen Caps-arbejdet:
 
 ```bash
 php -l app/Http/Controllers/StudosController.php
@@ -503,14 +564,29 @@ Resultat:
 - Migration koert lokalt.
 - 5 maalrettede feature-tests passer.
 
+## VIGTIG Publish-Tjekliste
+
+- VIGTIGT: Laravel Scheduler skal vaere aktiv i produktion/cloud. Dyst bruger
+  `php artisan duels:expire` hvert minut til at udloebe gamle dyster og
+  refundere escrow-Caps. Lokalt kan det testes med `php artisan schedule:work`;
+  paa server/cloud skal en scheduler/cron kalde `php artisan schedule:run` hvert
+  minut.
+- Reverb skal koere med production-host/keys, saa chat og Dyst realtime virker.
+- `APP_URL`, `EXPO_PUBLIC_API_URL`, Reverb env og storage/public upload-setup
+  skal pege paa production-domainer.
+
 ## Naeste Gode Skridt
 
-1. Færdiggør offentlig deletion URL + brugergodkendt slette-flow i websupport.
-2. Opdater privacy policy, terms/EULA og supportside med tydelig deletion/anonymisering.
-3. Lav admin/moderationsside.
-4. Kør to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
-5. Gør Dagens stemning/hueklip rigtige i backend.
-6. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
-   dommergodkendelse, udloeb og Caps-refundering.
-7. Lav App Store Connect metadata, screenshots, privacy labels og review notes.
-8. Lav production iOS/TestFlight build og Android production AAB.
+1. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
+   Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
+   realtime/polling og Caps-refundering.
+2. Koer to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
+3. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
+   backups og production env.
+4. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
+5. Faa account deletion/support-flow helt review-klar.
+6. Lav admin/moderationsside til rapporter, blocks og violations.
+7. Goer Dagens stemning/hueklip rigtige i backend.
+8. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
+   review notes.
+9. Lav production iOS/TestFlight build og Android production AAB.

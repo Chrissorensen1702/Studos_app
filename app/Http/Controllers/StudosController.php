@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Support\ContentModeration;
+use App\Support\PointDuelMaintenance;
 use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -348,7 +349,7 @@ class StudosController extends Controller
         $member = $this->authenticatedMemberFromRequest($request);
 
         $this->ensurePointDuelsReady();
-        $this->expireDueDuelsForMember($member);
+        PointDuelMaintenance::expireDueForMember($member);
 
         return response()->json([
             'duels' => $this->duelsForMember($member),
@@ -374,28 +375,36 @@ class StudosController extends Controller
             'stake' => ['required', 'integer', 'min:1', 'max:100000'],
             'deadlineAt' => ['required', 'date'],
         ]);
-        $deadlineAt = Carbon::parse($data['deadlineAt']);
+        $deadlineAt = Carbon::parse($data['deadlineAt'])->utc();
         $duelMode = $data['mode'] ?? 'versus';
+        $judgeMemberId = $duelMode === 'versus' ? ($data['judgeMemberId'] ?? null) : null;
+        $challenge = ContentModeration::cleanText($data['challenge'], 'challenge', 'Dysten', [
+            'member_id' => $member->id,
+            'class_id' => $member->class_id,
+            'source' => 'duel',
+            'ip_address' => $request->ip(),
+            'user_agent' => (string) $request->userAgent(),
+        ]);
 
         abort_if($deadlineAt->isPast(), 422, 'Deadline skal være i fremtiden.');
-        abort_if(! blank($data['judgeMemberId'] ?? null) && ! Schema::hasColumn('point_duels', 'judge_member_id'), 500, 'Dommerfunktionen er ikke migreret endnu.');
+        abort_if($duelMode === 'challenge' && ! blank($data['judgeMemberId'] ?? null), 422, 'Challenge kan ikke have dommer.');
+        abort_if(! blank($judgeMemberId) && ! Schema::hasColumn('point_duels', 'judge_member_id'), 500, 'Dommerfunktionen er ikke migreret endnu.');
 
-        $duelId = DB::transaction(function () use ($member, $data, $deadlineAt, $duelMode): string {
-            $creator = DB::table('members')
-                ->where('id', $member->id)
-                ->where('status', 'active')
-                ->lockForUpdate()
-                ->first();
-            $opponent = DB::table('members')
-                ->where('id', $data['toMemberId'])
+        $duelId = DB::transaction(function () use ($member, $data, $deadlineAt, $duelMode, $judgeMemberId, $challenge): string {
+            $lockedMembers = DB::table('members')
+                ->whereIn('id', collect([$member->id, $data['toMemberId']])->sort()->values()->all())
                 ->where('class_id', $member->class_id)
                 ->where('status', 'active')
+                ->orderBy('id')
                 ->lockForUpdate()
-                ->first();
-            $judge = blank($data['judgeMemberId'] ?? null)
+                ->get()
+                ->keyBy('id');
+            $creator = $lockedMembers->get($member->id);
+            $opponent = $lockedMembers->get($data['toMemberId']);
+            $judge = blank($judgeMemberId)
                 ? null
                 : DB::table('members')
-                    ->where('id', $data['judgeMemberId'])
+                    ->where('id', $judgeMemberId)
                     ->where('class_id', $member->class_id)
                     ->where('status', 'active')
                     ->first();
@@ -410,9 +419,9 @@ class StudosController extends Controller
 
             $creatorBalance = (int) ($creator->caps_balance ?? 1000);
 
-            abort_if($creatorBalance < $stake, 422, 'Du har ikke nok Caps til den indsats.');
+            abort_if($creatorBalance < $stake, 422, $duelMode === 'challenge' ? 'Du har ikke nok Caps til den belønning.' : 'Du har ikke nok Caps til den indsats.');
 
-            $now = now()->format('Y-m-d H:i:s');
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
             $duelId = (string) Str::uuid();
 
             DB::table('members')->where('id', $creator->id)->update([
@@ -423,7 +432,7 @@ class StudosController extends Controller
                 'class_id' => $creator->class_id,
                 'creator_member_id' => $creator->id,
                 'opponent_member_id' => $opponent->id,
-                'challenge' => trim($data['challenge']),
+                'challenge' => $challenge,
                 'stake_caps' => $stake,
                 'creator_escrow_caps' => $stake,
                 'opponent_escrow_caps' => 0,
@@ -442,12 +451,15 @@ class StudosController extends Controller
             }
 
             DB::table('point_duels')->insert($duelInsert);
+            $escrowDescription = $duelMode === 'challenge'
+                ? 'Challenge-belønning låst i escrow'
+                : 'Duel-indsats låst i escrow';
             $this->recordCapTransaction(
                 $creator->id,
                 $creator->class_id,
                 -$stake,
                 'duel_escrow_hold',
-                'Duel-indsats låst i escrow',
+                $escrowDescription,
                 'point_duel',
                 $duelId,
                 $creator->id,
@@ -455,7 +467,9 @@ class StudosController extends Controller
             );
 
             return $duelId;
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duelId);
 
         return response()->json($this->duelResponseForMember($member, $duelId), 201);
     }
@@ -464,6 +478,7 @@ class StudosController extends Controller
     {
         $member = $this->authenticatedMemberFromRequest($request);
         $this->ensurePointDuelsReady();
+        PointDuelMaintenance::expireDueForMember($member);
 
         DB::transaction(function () use ($member, $duel): void {
             $duelRow = $this->duelForMember($duel, $member, true);
@@ -472,31 +487,41 @@ class StudosController extends Controller
 
             $opponent = DB::table('members')->where('id', $member->id)->lockForUpdate()->first();
             $stake = (int) $duelRow->stake_caps;
+            $isChallenge = ($duelRow->mode ?? 'versus') === 'challenge';
             $balance = (int) ($opponent->caps_balance ?? 1000);
 
-            abort_if($balance < $stake, 422, 'Du har ikke nok Caps til at acceptere den indsats.');
+            if (! $isChallenge) {
+                abort_if($balance < $stake, 422, 'Du har ikke nok Caps til at acceptere den indsats.');
 
-            DB::table('members')->where('id', $opponent->id)->update([
-                'caps_balance' => $balance - $stake,
-            ]);
+                DB::table('members')->where('id', $opponent->id)->update([
+                    'caps_balance' => $balance - $stake,
+                ]);
+            }
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+
             DB::table('point_duels')->where('id', $duelRow->id)->update([
-                'opponent_escrow_caps' => $stake,
-                'status' => 'awaitingCreatorConfirm',
-                'accepted_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'opponent_escrow_caps' => $isChallenge ? 0 : $stake,
+                'status' => 'active',
+                'accepted_at' => $now,
+                'confirmed_at' => $now,
+                'updated_at' => $now,
             ]);
-            $this->recordCapTransaction(
-                $opponent->id,
-                $opponent->class_id,
-                -$stake,
-                'duel_escrow_hold',
-                'Duel-indsats låst i escrow',
-                'point_duel',
-                $duelRow->id,
-                $opponent->id,
-                ['creatorMemberId' => $duelRow->creator_member_id],
-            );
-        });
+            if (! $isChallenge) {
+                $this->recordCapTransaction(
+                    $opponent->id,
+                    $opponent->class_id,
+                    -$stake,
+                    'duel_escrow_hold',
+                    'Duel-indsats låst i escrow',
+                    'point_duel',
+                    $duelRow->id,
+                    $opponent->id,
+                    ['creatorMemberId' => $duelRow->creator_member_id],
+                );
+            }
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -513,13 +538,17 @@ class StudosController extends Controller
 
             $this->refundDuelEscrow($duelRow->creator_member_id, $duelRow, (int) $duelRow->creator_escrow_caps, 'duel_declined');
 
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+
             DB::table('point_duels')->where('id', $duelRow->id)->update([
                 'creator_escrow_caps' => 0,
                 'status' => 'declined',
-                'declined_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'declined_at' => $now,
+                'updated_at' => $now,
             ]);
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -536,13 +565,17 @@ class StudosController extends Controller
 
             $this->refundDuelEscrow($duelRow->creator_member_id, $duelRow, (int) $duelRow->creator_escrow_caps, 'duel_cancelled');
 
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+
             DB::table('point_duels')->where('id', $duelRow->id)->update([
                 'creator_escrow_caps' => 0,
                 'status' => 'cancelled',
-                'cancelled_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'cancelled_at' => $now,
+                'updated_at' => $now,
             ]);
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -557,12 +590,16 @@ class StudosController extends Controller
             abort_if($duelRow->status !== 'awaitingCreatorConfirm', 422, 'Dysten venter ikke på bekræftelse.');
             abort_if((string) $duelRow->creator_member_id !== (string) $member->id, 403, 'Kun opretteren kan bekræfte dysten.');
 
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+
             DB::table('point_duels')->where('id', $duelRow->id)->update([
                 'status' => 'active',
-                'confirmed_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'confirmed_at' => $now,
+                'updated_at' => $now,
             ]);
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -571,6 +608,7 @@ class StudosController extends Controller
     {
         $member = $this->authenticatedMemberFromRequest($request);
         $this->ensurePointDuelsReady();
+        PointDuelMaintenance::expireDueForMember($member);
         $data = $request->validate([
             'winnerMemberId' => ['nullable', 'string', 'max:36'],
         ]);
@@ -584,6 +622,9 @@ class StudosController extends Controller
                 'Du kan ikke afslutte denne dyst.',
             );
 
+            $isChallenge = ($duelRow->mode ?? 'versus') === 'challenge';
+            abort_if($isChallenge && (string) $member->id !== (string) $duelRow->opponent_member_id, 403, 'Kun modtageren kan markere challengen gennemført.');
+
             $winnerMemberId = $data['winnerMemberId'] ?? $member->id;
             abort_unless(
                 in_array((string) $winnerMemberId, [(string) $duelRow->creator_member_id, (string) $duelRow->opponent_member_id], true),
@@ -591,17 +632,20 @@ class StudosController extends Controller
                 'Vælg en gyldig vinder.',
             );
 
+            $winnerMemberId = $isChallenge ? $duelRow->opponent_member_id : $winnerMemberId;
+
             $pool = (int) $duelRow->creator_escrow_caps + (int) $duelRow->opponent_escrow_caps;
             abort_if($pool <= 0, 422, 'Dysten har ingen Caps i escrow.');
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
 
-            if (! blank($duelRow->judge_member_id ?? null)) {
+            if (! $isChallenge && ! blank($duelRow->judge_member_id ?? null)) {
                 DB::table('point_duels')->where('id', $duelRow->id)->update([
                     'status' => 'awaitingJudgeApproval',
                     'winner_member_id' => $winnerMemberId,
                     'completed_by_member_id' => $member->id,
-                    'judge_requested_at' => now()->format('Y-m-d H:i:s'),
+                    'judge_requested_at' => $now,
                     'judge_rejected_at' => null,
-                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                    'updated_at' => $now,
                 ]);
 
                 return;
@@ -611,11 +655,51 @@ class StudosController extends Controller
                 'status' => 'awaitingResultConfirm',
                 'winner_member_id' => $winnerMemberId,
                 'completed_by_member_id' => $member->id,
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => $now,
             ]);
 
             return;
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
+
+        return response()->json($this->duelResponseForMember($member, $duel));
+    }
+
+    public function forfeitDuel(Request $request, string $duel): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->ensurePointDuelsReady();
+        PointDuelMaintenance::expireDueForMember($member);
+
+        DB::transaction(function () use ($member, $duel): void {
+            $duelRow = $this->duelForMember($duel, $member, true);
+
+            abort_if(($duelRow->mode ?? 'versus') !== 'challenge', 422, 'Kun challenges kan opgives.');
+            abort_if($duelRow->status !== 'active', 422, 'Challengen kan ikke opgives længere.');
+            abort_if((string) $duelRow->opponent_member_id !== (string) $member->id, 403, 'Kun modtageren kan give op.');
+
+            $this->refundDuelEscrow($duelRow->creator_member_id, $duelRow, (int) $duelRow->creator_escrow_caps, 'duel_forfeited');
+
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+
+            $updates = [
+                'creator_escrow_caps' => 0,
+                'opponent_escrow_caps' => 0,
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'status' => 'expired',
+                'updated_at' => $now,
+            ];
+
+            if (Schema::hasColumn('point_duels', 'expired_at')) {
+                $updates['expired_at'] = $now;
+            }
+
+            DB::table('point_duels')->where('id', $duelRow->id)->update($updates);
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -624,6 +708,7 @@ class StudosController extends Controller
     {
         $member = $this->authenticatedMemberFromRequest($request);
         $this->ensurePointDuelsReady();
+        PointDuelMaintenance::expireDueForMember($member);
 
         DB::transaction(function () use ($member, $duel): void {
             $duelRow = $this->duelForMember($duel, $member, true);
@@ -644,6 +729,10 @@ class StudosController extends Controller
                 abort_unless($winner, 422, 'Vinderen findes ikke længere.');
 
                 $balance = (int) ($winner->caps_balance ?? 1000);
+                $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+                $settlementDescription = ($duelRow->mode ?? 'versus') === 'challenge'
+                    ? 'Challenge-belønning udbetalt efter bekræftelse'
+                    : 'Dyst-pulje udbetalt efter fælles bekræftelse';
 
                 DB::table('members')->where('id', $winner->id)->update([
                     'caps_balance' => $balance + $pool,
@@ -652,15 +741,15 @@ class StudosController extends Controller
                     'creator_escrow_caps' => 0,
                     'opponent_escrow_caps' => 0,
                     'status' => 'completed',
-                    'completed_at' => now()->format('Y-m-d H:i:s'),
-                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                    'completed_at' => $now,
+                    'updated_at' => $now,
                 ]);
                 $this->recordCapTransaction(
                     $winner->id,
                     $winner->class_id,
                     $pool,
                     'duel_settlement',
-                    'Dyst-pulje udbetalt efter fælles bekræftelse',
+                    $settlementDescription,
                     'point_duel',
                     $duelRow->id,
                     $member->id,
@@ -685,6 +774,10 @@ class StudosController extends Controller
             abort_unless($winner, 422, 'Vinderen findes ikke længere.');
 
             $balance = (int) ($winner->caps_balance ?? 1000);
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
+            $settlementDescription = ($duelRow->mode ?? 'versus') === 'challenge'
+                ? 'Challenge-belønning udbetalt efter dommergodkendelse'
+                : 'Dyst-pulje udbetalt efter dommergodkendelse';
 
             DB::table('members')->where('id', $winner->id)->update([
                 'caps_balance' => $balance + $pool,
@@ -693,16 +786,16 @@ class StudosController extends Controller
                 'creator_escrow_caps' => 0,
                 'opponent_escrow_caps' => 0,
                 'status' => 'completed',
-                'judge_approved_at' => now()->format('Y-m-d H:i:s'),
-                'completed_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'judge_approved_at' => $now,
+                'completed_at' => $now,
+                'updated_at' => $now,
             ]);
             $this->recordCapTransaction(
                 $winner->id,
                 $winner->class_id,
                 $pool,
                 'duel_settlement',
-                'Dyst-pulje udbetalt efter dommergodkendelse',
+                $settlementDescription,
                 'point_duel',
                 $duelRow->id,
                 $member->id,
@@ -712,7 +805,9 @@ class StudosController extends Controller
                     'judgeMemberId' => $member->id,
                 ],
             );
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -732,12 +827,13 @@ class StudosController extends Controller
                     'Kun deltagerne kan afvise resultatet.',
                 );
                 abort_if((string) ($duelRow->completed_by_member_id ?? '') === (string) $member->id, 422, 'Modparten skal afvise resultatet.');
+                $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
 
                 DB::table('point_duels')->where('id', $duelRow->id)->update([
                     'status' => 'active',
                     'winner_member_id' => null,
                     'completed_by_member_id' => null,
-                    'updated_at' => now()->format('Y-m-d H:i:s'),
+                    'updated_at' => $now,
                 ]);
 
                 return;
@@ -745,15 +841,18 @@ class StudosController extends Controller
 
             abort_if($duelRow->status !== 'awaitingJudgeApproval', 422, 'Dysten afventer ikke dommer.');
             abort_if((string) ($duelRow->judge_member_id ?? '') !== (string) $member->id, 403, 'Kun dommeren kan afvise dysten.');
+            $now = Carbon::now('UTC')->format('Y-m-d H:i:s');
 
             DB::table('point_duels')->where('id', $duelRow->id)->update([
                 'status' => 'active',
                 'winner_member_id' => null,
                 'completed_by_member_id' => null,
-                'judge_rejected_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
+                'judge_rejected_at' => $now,
+                'updated_at' => $now,
             ]);
-        });
+        }, 3);
+
+        PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -1971,7 +2070,7 @@ class StudosController extends Controller
     private function duelForMember(string $duelId, object $member, bool $lock = false): object
     {
         if ($lock) {
-            $this->expireDueDuelsForMember($member);
+            PointDuelMaintenance::expireDueForMember($member);
         }
 
         $hasJudgeColumn = Schema::hasColumn('point_duels', 'judge_member_id');
@@ -2119,13 +2218,15 @@ class StudosController extends Controller
             $confirmedBy[] = 'creator';
         }
 
+        $mode = $duel->mode ?? 'versus';
+
         return [
             'id' => $duel->id,
             'classId' => $duel->class_id,
             'fromMemberId' => $duel->creator_member_id,
             'toMemberId' => $duel->opponent_member_id,
-            'judgeMemberId' => $duel->judge_member_id ?? null,
-            'mode' => $duel->mode ?? 'versus',
+            'judgeMemberId' => $mode === 'challenge' ? null : ($duel->judge_member_id ?? null),
+            'mode' => $mode,
             'challenge' => $duel->challenge,
             'stake' => (int) $duel->stake_caps,
             'creatorEscrowCaps' => (int) ($duel->creator_escrow_caps ?? 0),
@@ -2169,7 +2270,9 @@ class StudosController extends Controller
             $member->class_id,
             $amount,
             $type,
-            'Dyst-indsats returneret fra escrow',
+            ($duel->mode ?? 'versus') === 'challenge'
+                ? 'Challenge-belønning returneret fra escrow'
+                : 'Dyst-indsats returneret fra escrow',
             'point_duel',
             $duel->id,
             $memberId,

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Dimensions,
   Easing,
   Image,
@@ -67,6 +68,15 @@ const CHAT_LIST_SEARCH_COLLAPSE_DISTANCE = 58;
 const CHAT_LIST_HEADER_EXPANDED_HEIGHT = APP_SCREEN_TOP_PADDING + CHAT_LIST_HEADER_SCROLL_PADDING_TOP;
 const CHAT_LIST_HEADER_COLLAPSED_HEIGHT = CHAT_LIST_HEADER_EXPANDED_HEIGHT - CHAT_LIST_SEARCH_COLLAPSE_DISTANCE;
 const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
+const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
+  const progress = index / 39;
+  const opacity = Math.max(0, Math.pow(1 - progress, 2.25) * 0.92);
+
+  return {
+    backgroundColor: `rgba(241, 251, 248, ${opacity.toFixed(3)})`,
+    height: 0.9,
+  };
+});
 const CHAT_THREAD_HEADER_COUNTERS = [
   { id: 'home', icon: 'home', value: '12' },
   { id: 'wave', icon: 'water', value: '8' },
@@ -528,21 +538,25 @@ const duelFinishedTimestamp = (duel) => (
 const DYST_MODE_OPTIONS = [
   {
     id: 'versus',
+    iconName: 'swap-horizontal',
     label: 'Mod hinanden',
     helper: 'Udfordr én fra dit crew til en 1:1 konkurrence.',
     challengeLabel: 'Hvad dystes der om?',
-    placeholder: 'Fx Hvem kan hurtigst bunde en øl?',
+    placeholder: 'Fx Hvem kan tage flest armbøjninger?',
   },
   {
     id: 'challenge',
+    iconName: 'sparkles',
     label: 'Challenge',
-    helper: 'Send en challenge til én, og se om vedkommende gennemfører.',
+    helper: 'Beløn én i dit crew for en indsats',
     challengeLabel: 'Hvad er challengen?',
-    placeholder: 'Fx Spørg om hendes nummer inden midnat',
+    placeholder: 'Fx Hold tale for bordet inden midnat',
   },
 ];
 
 const getDystModeMeta = (mode) => DYST_MODE_OPTIONS.find((option) => option.id === mode) ?? DYST_MODE_OPTIONS[0];
+const getDuelStakeLabel = (duel) => (duel?.mode === 'challenge' ? 'Belønning' : 'Indsats');
+const formatDuelStakeLabel = (duel) => `${getDuelStakeLabel(duel)}: ${Number(duel?.stake ?? 0)} Caps`;
 const DYST_TIME_HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, '0'));
 const DYST_TIME_MINUTES = ['00', '15', '30', '45'];
 
@@ -1626,6 +1640,23 @@ const chatUnreadCountForConversations = (conversations = []) =>
     return total + (Number.isFinite(unreadCount) ? unreadCount : 0);
   }, 0);
 
+const pointDuelActionCountForMember = (duels = [], memberId = '') => {
+  const activeMemberId = String(memberId ?? '');
+
+  if (!activeMemberId || !Array.isArray(duels)) {
+    return 0;
+  }
+
+  return duels.reduce((total, duel) => {
+    const requiresIncomingResponse = duel?.status === 'awaitingOpponent'
+      && String(duel?.toMemberId ?? '') === activeMemberId;
+    const requiresJudgeApproval = duel?.status === 'awaitingJudgeApproval'
+      && String(duel?.judgeMemberId ?? '') === activeMemberId;
+
+    return total + (requiresIncomingResponse || requiresJudgeApproval ? 1 : 0);
+  }, 0);
+};
+
 const formatUnreadBadgeCount = (count) => (count > 99 ? '99+' : String(count));
 
 const profileFromMember = (member) => ({
@@ -1668,6 +1699,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [pointDuelActionCount, setPointDuelActionCount] = useState(0);
   const [pendingDirectChatMemberId, setPendingDirectChatMemberId] = useState('');
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
   const [weeklyCheckInReward, setWeeklyCheckInReward] = useState(null);
@@ -2223,6 +2255,42 @@ export default function App() {
     };
   }, [session?.token, step]);
 
+  useEffect(() => {
+    let isMounted = true;
+    const token = session?.token;
+    const memberId = session?.member?.id;
+
+    if (!token || !memberId || step !== 'overview') {
+      setPointDuelActionCount(0);
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const refreshPointDuelActionCount = async () => {
+      try {
+        const data = await apiFetch('/duels', {
+          authToken: token,
+        });
+
+        if (isMounted) {
+          setPointDuelActionCount(pointDuelActionCountForMember(data.duels ?? [], memberId));
+        }
+      } catch {
+        // The Dyst screen surfaces fetch errors; the footer badge should stay quiet.
+      }
+    };
+
+    refreshPointDuelActionCount();
+    const interval = setInterval(refreshPointDuelActionCount, 20000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [session?.member?.id, session?.token, step]);
+
   const clearSession = async () => {
     await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
     setSession(null);
@@ -2233,6 +2301,7 @@ export default function App() {
     setActiveTab('overview');
     setSidebarOpen(false);
     setChatUnreadCount(0);
+    setPointDuelActionCount(0);
     setWeeklyCheckInSnapshot(null);
     setWeeklyCheckInReward(null);
     setNotificationState((current) => ({
@@ -2798,6 +2867,7 @@ export default function App() {
                   loading={loading}
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
+                  onPointDuelActionCountChange={setPointDuelActionCount}
                   onDirectChatHandled={clearPendingDirectChatMemberId}
                   initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
@@ -2845,6 +2915,7 @@ export default function App() {
                   loading={loading}
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
+                  onPointDuelActionCountChange={setPointDuelActionCount}
                   onDirectChatHandled={clearPendingDirectChatMemberId}
                   initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
@@ -2878,6 +2949,7 @@ export default function App() {
             <FooterNav
               activeTab={activeTab}
               chatUnreadCount={chatUnreadCount}
+              pointDuelActionCount={pointDuelActionCount}
               onChangeTab={setActiveTab}
             />
             <AppSidebar
@@ -3063,6 +3135,7 @@ function AppTabScreen({
   nextEvent,
   initialDirectChatMemberId,
   onChatUnreadCountChange,
+  onPointDuelActionCountChange,
   onDirectChatHandled,
   onChangeTab,
   onOpenCalendar,
@@ -3284,6 +3357,7 @@ function AppTabScreen({
         activeMember={activeMember}
         activeMembers={activeMembers}
         onCapsBalanceChange={onCapsBalanceChange}
+        onPointDuelActionCountChange={onPointDuelActionCountChange}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
       />
@@ -8873,6 +8947,7 @@ function DuelScreen({
   activeMember,
   activeMembers = [],
   onCapsBalanceChange,
+  onPointDuelActionCountChange,
   schoolClass,
   sessionToken,
 }) {
@@ -8926,17 +9001,22 @@ function DuelScreen({
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [finishedDuelsOpen, setFinishedDuelsOpen] = useState(false);
   const [judgeDuelsOpen, setJudgeDuelsOpen] = useState(false);
+  const [sentDuelsOpen, setSentDuelsOpen] = useState(false);
+  const [pendingDuelsExpanded, setPendingDuelsExpanded] = useState(false);
+  const [activeDuelsExpanded, setActiveDuelsExpanded] = useState(true);
   const [winnerPickerDuelId, setWinnerPickerDuelId] = useState('');
   const [duelInfoOpen, setDuelInfoOpen] = useState(false);
   const [duelError, setDuelError] = useState('');
   const [duelLoading, setDuelLoading] = useState(false);
   const [duelSubmitting, setDuelSubmitting] = useState(false);
   const [duelActionLoadingId, setDuelActionLoadingId] = useState('');
+  const [duelRealtimeReady, setDuelRealtimeReady] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [opponentPickerOpen, setOpponentPickerOpen] = useState(false);
   const [selectedOpponentId, setSelectedOpponentId] = useState('');
   const [judgeEnabled, setJudgeEnabled] = useState(false);
   const [judgePickerOpen, setJudgePickerOpen] = useState(false);
+  const [judgeSearchQuery, setJudgeSearchQuery] = useState('');
   const [selectedJudgeId, setSelectedJudgeId] = useState('');
   const [duelMode, setDuelMode] = useState('versus');
   const [duelChallengeText, setDuelChallengeText] = useState('');
@@ -8948,7 +9028,9 @@ function DuelScreen({
   const [timePickerDraftHour, setTimePickerDraftHour] = useState('18');
   const [timePickerDraftMinute, setTimePickerDraftMinute] = useState('00');
   const [deadlineCalendarMonth, setDeadlineCalendarMonth] = useState(defaultDeadlineDate.slice(0, 7));
+  const judgeAvailable = duelMode === 'versus';
   const duelModeMeta = getDystModeMeta(duelMode);
+  const opponentPickerLabel = duelMode === 'challenge' ? 'Vælg person' : 'Vælg modstander';
   const selectedOpponent = selectedOpponentId ? opponentById[String(selectedOpponentId)] : null;
   const selectedOpponentName = selectedOpponent ? getMemberName(selectedOpponent) : '';
   const selectedJudge = selectedJudgeId ? opponentById[String(selectedJudgeId)] : null;
@@ -8956,6 +9038,16 @@ function DuelScreen({
   const winnerPickerDuel = useMemo(() => (
     duels.find((duel) => String(duel.id) === String(winnerPickerDuelId)) ?? null
   ), [duels, winnerPickerDuelId]);
+
+  useEffect(() => {
+    if (judgeAvailable) {
+      return;
+    }
+
+    setJudgeEnabled(false);
+    setJudgePickerOpen(false);
+    setSelectedJudgeId('');
+  }, [judgeAvailable]);
   const deadlineDateLabel = useMemo(() => {
     const parsed = new Date(`${deadlineDate}T12:00:00`);
 
@@ -9023,7 +9115,23 @@ function DuelScreen({
   const createScreenSwipeActiveRef = useRef(false);
   const createScreenTouchStartRef = useRef(null);
   const createScreenTouchLatestRef = useRef(null);
+  const duelRealtimeEchoRef = useRef(null);
+  const duelRealtimeChannelRef = useRef('');
+  const duelMountedRef = useRef(true);
+  const duelLoadSeqRef = useRef(0);
+  const duelRefreshTimeoutsRef = useRef([]);
+  const activeDuelsPanelTouchedRef = useRef(false);
   const [duelCountdownNow, setDuelCountdownNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    duelMountedRef.current = true;
+
+    return () => {
+      duelMountedRef.current = false;
+      duelRefreshTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
+      duelRefreshTimeoutsRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setDuelCountdownNow(Date.now()), 60 * 1000);
@@ -9036,21 +9144,20 @@ function DuelScreen({
       label: 'Afventer svar',
       style: styles.duelStatusPillWarning,
     },
-    awaitingCreatorConfirm: {
-      label: 'Kræver din bekræftelse',
-      style: styles.duelStatusPillWarning,
-    },
     awaitingResultConfirm: {
-      label: 'Afventer modpart',
-      style: styles.duelStatusPillWarning,
+      label: 'GENNEMFØRT',
+      style: styles.duelStatusPillCompleted,
+      textStyle: styles.duelStatusPillTextLight,
     },
     active: {
-      label: 'I spil',
+      label: 'I GANG',
       style: styles.duelStatusPillSuccess,
+      textStyle: styles.duelStatusPillTextLight,
     },
     awaitingJudgeApproval: {
-      label: 'Afventer dommer',
-      style: styles.duelStatusPillWarning,
+      label: 'GENNEMFØRT',
+      style: styles.duelStatusPillCompleted,
+      textStyle: styles.duelStatusPillTextLight,
     },
     completed: {
       label: 'Afsluttet',
@@ -9107,10 +9214,6 @@ function DuelScreen({
       return getAwaitingOpponentStatus(duel);
     }
 
-    if (duel.status === 'awaitingCreatorConfirm') {
-      return statusMeta.awaitingCreatorConfirm;
-    }
-
     if (duel.status === 'awaitingResultConfirm') {
       return statusMeta.awaitingResultConfirm;
     }
@@ -9145,12 +9248,28 @@ function DuelScreen({
   const judgeRows = useMemo(() => (
     normalizedOpponents.filter((member) => String(member.id) !== String(selectedOpponentId))
   ), [normalizedOpponents, selectedOpponentId]);
+  const filteredJudgeRows = useMemo(() => {
+    const normalizedQuery = judgeSearchQuery.trim().toLowerCase();
+
+    return judgeRows.filter((member) => {
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      return getMemberName(member).toLowerCase().includes(normalizedQuery);
+    });
+  }, [judgeRows, judgeSearchQuery]);
 
   const pendingDuels = useMemo(() => (
     duels
-      .filter((duel) => duel.status === 'awaitingOpponent' || duel.status === 'awaitingCreatorConfirm')
+      .filter((duel) => duel.status === 'awaitingOpponent' && String(duel.toMemberId) === activeMemberId)
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-  ), [duels]);
+  ), [activeMemberId, duels]);
+  const sentPendingDuels = useMemo(() => (
+    duels
+      .filter((duel) => duel.status === 'awaitingOpponent' && String(duel.fromMemberId) === activeMemberId)
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+  ), [activeMemberId, duels]);
   const judgeApprovalDuels = useMemo(() => (
     duels
       .filter((duel) => duel.status === 'awaitingJudgeApproval' && String(duel.judgeMemberId) === activeMemberId)
@@ -9166,6 +9285,25 @@ function DuelScreen({
       .filter((duel) => duel.status === 'completed' || duel.status === 'declined' || duel.status === 'cancelled' || duel.status === 'expired')
       .sort((left, right) => new Date(duelFinishedTimestamp(right)).getTime() - new Date(duelFinishedTimestamp(left)).getTime())
   ), [duels]);
+
+  useEffect(() => {
+    onPointDuelActionCountChange?.(pendingDuels.length + judgeApprovalDuels.length);
+  }, [judgeApprovalDuels.length, onPointDuelActionCountChange, pendingDuels.length]);
+
+  useEffect(() => {
+    if (!activeDuelsPanelTouchedRef.current && !duelLoading) {
+      setActiveDuelsExpanded(activeDuels.length > 0);
+    }
+  }, [activeDuels.length, duelLoading]);
+
+  const togglePendingDuelsExpanded = useCallback(() => {
+    setPendingDuelsExpanded((current) => !current);
+  }, []);
+
+  const toggleActiveDuelsExpanded = useCallback(() => {
+    activeDuelsPanelTouchedRef.current = true;
+    setActiveDuelsExpanded((current) => !current);
+  }, []);
 
   const applyDuelPayload = useCallback((data) => {
     if (Array.isArray(data?.duels)) {
@@ -9190,37 +9328,131 @@ function DuelScreen({
     }
   }, [onCapsBalanceChange]);
 
-  useEffect(() => {
+  const loadDuels = useCallback(async ({ silent = false } = {}) => {
     if (!sessionToken) {
       setDuels([]);
+      return;
+    }
+
+    const requestSeq = duelLoadSeqRef.current + 1;
+    duelLoadSeqRef.current = requestSeq;
+
+    if (!silent) {
+      setDuelLoading(true);
+      setDuelError('');
+    }
+
+    try {
+      const data = await apiFetch('/duels', { authToken: sessionToken });
+
+      if (!duelMountedRef.current || requestSeq !== duelLoadSeqRef.current) {
+        return;
+      }
+
+      applyDuelPayload(data);
+    } catch (apiError) {
+      if (!duelMountedRef.current || requestSeq !== duelLoadSeqRef.current) {
+        return;
+      }
+
+      if (!silent) {
+        setDuelError(apiError.message || 'Dyster kunne ikke hentes.');
+      }
+    } finally {
+      if (!duelMountedRef.current) {
+        return;
+      }
+
+      if (!silent) {
+        setDuelLoading(false);
+      }
+    }
+  }, [applyDuelPayload, sessionToken]);
+
+  useEffect(() => {
+    loadDuels();
+  }, [loadDuels]);
+
+  const queueDuelRefresh = useCallback((delays = [350, 1400]) => {
+    duelRefreshTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
+    duelRefreshTimeoutsRef.current = delays.map((delay) => setTimeout(() => {
+      if (duelMountedRef.current) {
+        loadDuels({ silent: true });
+      }
+    }, delay));
+  }, [loadDuels]);
+
+  useEffect(() => {
+    setDuelRealtimeReady(false);
+
+    if (!sessionToken || !activeMemberId) {
       return undefined;
     }
 
-    let isMounted = true;
-    setDuelLoading(true);
-    setDuelError('');
+    duelRealtimeEchoRef.current = createChatEcho(sessionToken);
+    setDuelRealtimeReady(Boolean(duelRealtimeEchoRef.current));
 
-    apiFetch('/duels', { authToken: sessionToken })
-      .then((data) => {
-        if (isMounted) {
-          applyDuelPayload(data);
-        }
-      })
-      .catch((apiError) => {
-        if (isMounted) {
-          setDuelError(apiError.message || 'Dyster kunne ikke hentes.');
-        }
-      })
-      .finally(() => {
-        if (isMounted) {
-          setDuelLoading(false);
-        }
+    return () => {
+      if (duelRealtimeChannelRef.current && duelRealtimeEchoRef.current) {
+        duelRealtimeEchoRef.current.leave(duelRealtimeChannelRef.current);
+      }
+
+      duelRealtimeEchoRef.current?.disconnect();
+      duelRealtimeEchoRef.current = null;
+      duelRealtimeChannelRef.current = '';
+    };
+  }, [activeMemberId, sessionToken]);
+
+  useEffect(() => {
+    if (!duelRealtimeReady || !duelRealtimeEchoRef.current || !activeMemberId) {
+      return undefined;
+    }
+
+    const channelName = `duels.member.${activeMemberId}`;
+    duelRealtimeChannelRef.current = channelName;
+
+    duelRealtimeEchoRef.current
+      .private(channelName)
+      .listen('.duel.updated', () => {
+        loadDuels({ silent: true });
       });
 
     return () => {
-      isMounted = false;
+      if (duelRealtimeEchoRef.current) {
+        duelRealtimeEchoRef.current.leave(channelName);
+      }
+
+      if (duelRealtimeChannelRef.current === channelName) {
+        duelRealtimeChannelRef.current = '';
+      }
     };
-  }, [applyDuelPayload, sessionToken]);
+  }, [activeMemberId, duelRealtimeReady, loadDuels]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      loadDuels({ silent: true });
+    }, duelRealtimeReady ? 10000 : 7000);
+
+    return () => clearInterval(interval);
+  }, [duelRealtimeReady, loadDuels, sessionToken]);
+
+  useEffect(() => {
+    if (IS_WEB || !sessionToken) {
+      return undefined;
+    }
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        loadDuels({ silent: true });
+      }
+    });
+
+    return () => subscription.remove();
+  }, [loadDuels, sessionToken]);
 
   const finishReturnToDuelList = useCallback(() => {
     Keyboard.dismiss();
@@ -9416,19 +9648,19 @@ function DuelScreen({
       return;
     }
 
-    if (judgeEnabled && !selectedJudgeId) {
+    if (judgeAvailable && judgeEnabled && !selectedJudgeId) {
       setDuelError('Vælg en dommer.');
       return;
     }
 
-    if (judgeEnabled && String(selectedJudgeId) === String(selectedOpponentId)) {
+    if (judgeAvailable && judgeEnabled && String(selectedJudgeId) === String(selectedOpponentId)) {
       setDuelError('Dommeren skal være en anden end modstanderen.');
       return;
     }
 
     const stakeValue = Number.parseInt(String(duelStakeText).replace(/[^0-9]/g, ''), 10);
     const normalizedChallenge = duelChallengeText.trim();
-    const deadlineAt = `${deadlineDate}T${deadlineTime}`;
+    const deadlineDateTime = new Date(`${deadlineDate}T${deadlineTime}:00`);
 
     if (!normalizedChallenge) {
       setDuelError('Skriv en udfordringstekst.');
@@ -9440,8 +9672,13 @@ function DuelScreen({
       return;
     }
 
-    if (!deadlineDate || !deadlineTime || Number.isNaN(new Date(deadlineAt).getTime())) {
+    if (!deadlineDate || !deadlineTime || Number.isNaN(deadlineDateTime.getTime())) {
       setDuelError('Sæt en gyldig deadline.');
+      return;
+    }
+
+    if (deadlineDateTime.getTime() <= Date.now()) {
+      setDuelError('Deadline skal være i fremtiden.');
       return;
     }
 
@@ -9454,15 +9691,16 @@ function DuelScreen({
         method: 'POST',
         body: JSON.stringify({
           toMemberId: selectedOpponentId,
-          judgeMemberId: judgeEnabled ? selectedJudgeId : null,
+          judgeMemberId: judgeAvailable && judgeEnabled ? selectedJudgeId : null,
           mode: duelMode,
           challenge: normalizedChallenge,
           stake: stakeValue,
-          deadlineAt,
+          deadlineAt: deadlineDateTime.toISOString(),
         }),
       });
 
       applyDuelPayload(data);
+      queueDuelRefresh([450, 1600]);
       resetDuelFields();
       finishReturnToDuelList();
     } catch (apiError) {
@@ -9481,8 +9719,8 @@ function DuelScreen({
       accept: 'accept',
       decline: 'decline',
       cancel: 'cancel',
-      confirm: 'confirm',
       complete: 'complete',
+      forfeit: 'forfeit',
       approve: 'approve',
       reject: 'reject',
     }[action];
@@ -9491,6 +9729,7 @@ function DuelScreen({
       return;
     }
 
+    duelLoadSeqRef.current += 1;
     setDuelActionLoadingId(`${duelId}:${action}`);
     setDuelError('');
 
@@ -9505,8 +9744,11 @@ function DuelScreen({
       if (action === 'complete') {
         setWinnerPickerDuelId('');
       }
+      await loadDuels({ silent: true });
+      queueDuelRefresh();
     } catch (apiError) {
       setDuelError(apiError.message || 'Dysten kunne ikke opdateres.');
+      await loadDuels({ silent: true });
     } finally {
       setDuelActionLoadingId('');
     }
@@ -9562,17 +9804,72 @@ function DuelScreen({
     setDeadlineCalendarMonth(formatInputDate(nextMonth).slice(0, 7));
   };
 
-  const renderDuelCard = (duel) => {
+  const closeJudgePicker = useCallback(() => {
+    setJudgePickerOpen(false);
+    setJudgeSearchQuery('');
+
+    if (!selectedJudgeId) {
+      setJudgeEnabled(false);
+    }
+  }, [selectedJudgeId]);
+
+  const isDuelActionLoading = (duel, action) => duelActionLoadingId === `${duel.id}:${action}`;
+  const renderDuelActionContent = (duel, action, {
+    iconColor = '#FFFFFF',
+    iconName = '',
+    spinnerColor = iconColor,
+    text,
+    textStyle,
+  }) => {
+    const loading = isDuelActionLoading(duel, action);
+
+    return (
+      <>
+        {loading ? (
+          <ActivityIndicator color={spinnerColor} size="small" style={styles.duelActionInlineSpinner} />
+        ) : iconName ? (
+          <Ionicons name={iconName} size={15} color={iconColor} />
+        ) : null}
+        <Text numberOfLines={1} style={textStyle}>{text}</Text>
+      </>
+    );
+  };
+
+  const renderDuelCard = (duel, options = {}) => {
+    const sentView = options.variant === 'sent';
     const isCreator = String(duel.fromMemberId) === activeMemberId;
+    const isOpponent = String(duel.toMemberId) === activeMemberId;
+    const memberForId = (memberId) => (
+      String(memberId) === activeMemberId ? activeMember : opponentById[String(memberId)]
+    );
     const opponentId = isCreator ? duel.toMemberId : duel.fromMemberId;
-    const opponent = opponentById[String(opponentId)] ?? activeMember;
-    const opponentName = getMemberName(opponent);
-    const actionStatus = getDuelStatus(duel);
+    const opponent = memberForId(opponentId);
+    const creator = memberForId(duel.fromMemberId);
+    const recipient = memberForId(duel.toMemberId);
+    const judge = duel.judgeMemberId ? memberForId(duel.judgeMemberId) : null;
+    const visibleMember = sentView ? recipient : duel.mode === 'challenge' ? creator : opponent;
+    const visibleMemberName = getMemberName(visibleMember);
     const deadlineLabel = formatDateTime(duel.deadlineAt);
-    const creatorName = getMemberName(isCreator ? activeMember : opponentById[String(duel.fromMemberId)] ?? activeMember);
-    const duelTitle = `${creatorName} vs ${opponentName}`;
-    const proposedWinnerName = getMemberName(String(duel.winnerMemberId) === activeMemberId ? activeMember : opponentById[String(duel.winnerMemberId)]);
+    const creatorName = getMemberName(creator);
+    const recipientName = getMemberName(recipient);
+    const judgeName = judge ? getMemberName(judge) : '';
+    const duelTitle = sentView || duel.mode === 'challenge' ? visibleMemberName : `${creatorName} vs ${recipientName}`;
+    const proposedWinnerName = getMemberName(memberForId(duel.winnerMemberId));
     const resultProposerIsMe = String(duel.completedByMemberId ?? '') === activeMemberId;
+    const resultNeedsMyApproval = duel.status === 'awaitingResultConfirm'
+      && !resultProposerIsMe
+      && !duel.judgeMemberId;
+    const actionStatus = resultNeedsMyApproval
+      ? {
+        label: 'BEKRÆFT VINDER',
+        style: styles.duelStatusPillWarning,
+        textStyle: styles.duelCardConfirmMetaText,
+      }
+      : getDuelStatus(duel);
+    const showSentPendingLayout = sentView && duel.status === 'awaitingOpponent' && isCreator;
+    const useStackedVersusLayout = !sentView
+      && duel.mode === 'versus'
+      && (duel.status === 'active' || duel.status === 'awaitingResultConfirm');
 
     return (
                   <View
@@ -9585,57 +9882,110 @@ function DuelScreen({
                     ]}
                   >
         <View style={styles.duelCardHeader}>
-          <Avatar
-            profile={opponent}
-            variant="smallCircle"
-          />
-          <View style={styles.duelCardCopy}>
-            <Text numberOfLines={1} style={styles.duelCardTitle}>
-              {duelTitle}
-            </Text>
+          {useStackedVersusLayout ? (
+            <View style={[styles.duelCardCopy, styles.duelJudgeNameStack]}>
+              <View style={styles.duelJudgeNameRow}>
+                <Avatar profile={creator} variant="smallCircle" />
+                <View style={styles.duelJudgeNameLabelRow}>
+                  <Text numberOfLines={1} style={styles.duelJudgeMemberName}>
+                    {creatorName}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.duelJudgeNameRow}>
+                <Avatar profile={recipient} variant="smallCircle" />
+                <View style={styles.duelJudgeNameLabelRow}>
+                  <Text numberOfLines={1} style={styles.duelJudgeMemberName}>
+                    {recipientName}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <>
+              <Avatar
+                profile={visibleMember}
+                variant="smallCircle"
+              />
+              <View style={styles.duelCardCopy}>
+                <Text numberOfLines={1} style={styles.duelCardTitle}>
+                  {duelTitle}
+                </Text>
+              </View>
+            </>
+          )}
+          {!showSentPendingLayout ? (
+            <View style={[styles.duelStatusPill, actionStatus.style]}>
+              <Text style={[styles.duelStatusPillText, actionStatus.textStyle]}>{actionStatus.label}</Text>
+            </View>
+          ) : (
+            <View style={styles.duelCardSentDirectionIcon}>
+              <Ionicons name="arrow-forward" size={17} color="#1F9D55" />
+            </View>
+          )}
           </View>
-          <View style={[styles.duelStatusPill, actionStatus.style]}>
-            <Text style={styles.duelStatusPillText}>{actionStatus.label}</Text>
-          </View>
-        </View>
 
         <Text numberOfLines={2} style={styles.duelCardChallenge}>{duel.challenge}</Text>
 
           <View style={styles.duelCardMetaRow}>
-            <View style={styles.duelCardMetaItem}>
-              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.ink} />
-              <Text numberOfLines={1} style={styles.duelMetaText}>{getDystModeMeta(duel.mode).label}</Text>
+            <View style={[styles.duelCardMetaItem, styles.duelCardTypeMetaItem]}>
+              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.red} />
+              <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelCardTypeMetaText]}>{getDystModeMeta(duel.mode).label}</Text>
             </View>
+            {duel.mode === 'versus' && judgeName ? (
+              <View style={[styles.duelCardMetaItem, styles.duelCardJudgeMetaItem]}>
+                <Ionicons name="shield-checkmark-outline" size={13} color={STUDOS_THEME.blue} />
+                <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelCardJudgeMetaText]}>Dommer: {judgeName}</Text>
+              </View>
+            ) : null}
             <View style={styles.duelCardMetaItem}>
               <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
-              <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+              <Text numberOfLines={1} style={styles.duelMetaText}>{formatDuelStakeLabel(duel)}</Text>
             </View>
           <View style={styles.duelCardMetaItem}>
             <Ionicons name="time-outline" size={14} color={STUDOS_THEME.blue} />
             <Text numberOfLines={1} style={styles.duelMetaText}>Deadline: {deadlineLabel || 'Ikke sat'}</Text>
           </View>
           {duel.status === 'awaitingResultConfirm' ? (
-            <View style={styles.duelCardMetaItem}>
-              <Ionicons name="trophy-outline" size={14} color={STUDOS_THEME.red} />
-              <Text numberOfLines={1} style={styles.duelMetaText}>Foreslået: {proposedWinnerName}</Text>
+            <View style={[styles.duelCardMetaItem, styles.duelJudgeWinnerMetaItem]}>
+              <Ionicons name="trophy" size={14} color="#1F9D55" />
+              <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelJudgeWinnerMetaText]}>
+                {duel.mode === 'challenge' ? `Vinder: ${proposedWinnerName}` : `Foreslået: ${proposedWinnerName}`}
+              </Text>
             </View>
           ) : null}
         </View>
 
-        <View style={styles.duelCardActionRow}>
+        <View style={[
+          styles.duelCardActionRow,
+          showSentPendingLayout ? styles.duelCardSentActionRow : null,
+        ]}>
           {duel.status === 'awaitingOpponent' ? (
             isCreator ? (
-              <Pressable
-                accessibilityLabel="Annuller denne dyst"
-                disabled={Boolean(duelActionLoadingId)}
-                onPress={() => respondToDuel(duel.id, 'cancel')}
-                style={({ pressed }) => [
-                  styles.duelCardGhostAction,
-                  pressed ? styles.footerItemPressed : null,
-                ]}
-              >
-                <Text style={styles.duelCardGhostActionText}>Annuller</Text>
-              </Pressable>
+              <>
+                <Pressable
+                  accessibilityLabel="Annuller denne dyst"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'cancel')}
+                  style={({ pressed }) => [
+                    styles.duelCardGhostAction,
+                    styles.duelCardCancelAction,
+                    showSentPendingLayout ? styles.duelCardSentCancelAction : null,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  {renderDuelActionContent(duel, 'cancel', {
+                    spinnerColor: STUDOS_THEME.red,
+                    text: 'Annuller',
+                    textStyle: [styles.duelCardGhostActionText, styles.duelCardCancelActionText],
+                  })}
+                </Pressable>
+                {showSentPendingLayout ? (
+                  <View style={[styles.duelStatusPill, actionStatus.style, styles.duelCardSentStatusPill]}>
+                    <Text numberOfLines={1} style={[styles.duelStatusPillText, actionStatus.textStyle, styles.duelCardSentStatusPillText]}>{actionStatus.label}</Text>
+                  </View>
+                ) : null}
+              </>
             ) : (
               <View style={styles.duelCardSplitActionRow}>
                 <Pressable
@@ -9648,7 +9998,11 @@ function DuelScreen({
                     pressed ? styles.footerItemPressed : null,
                   ]}
                 >
-                  <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+                  {renderDuelActionContent(duel, 'decline', {
+                    spinnerColor: STUDOS_THEME.red,
+                    text: 'Afvis',
+                    textStyle: styles.duelCardRejectActionText,
+                  })}
                 </Pressable>
                 <Pressable
                   accessibilityLabel="Accepter dyst"
@@ -9660,36 +10014,59 @@ function DuelScreen({
                     pressed ? styles.footerItemPressed : null,
                   ]}
                 >
-                  <Text style={styles.duelCardAcceptActionText}>Accepter</Text>
+                  {renderDuelActionContent(duel, 'accept', {
+                    text: 'Accepter',
+                    textStyle: styles.duelCardAcceptActionText,
+                  })}
                 </Pressable>
               </View>
             )
           ) : null}
 
-          {duel.status === 'awaitingCreatorConfirm' ? (
-            isCreator ? (
-              <Pressable
-                accessibilityLabel="Bekræft dyst-overførsel"
-                disabled={Boolean(duelActionLoadingId)}
-                onPress={() => respondToDuel(duel.id, 'confirm')}
-                style={({ pressed }) => [
-                  styles.duelCardAction,
-                  pressed ? styles.footerItemPressed : null,
-                ]}
-              >
-                <Text style={styles.duelCardActionText}>Bekræft</Text>
-              </Pressable>
-            ) : (
-              <Pressable
-                disabled
-                style={styles.duelCardGhostAction}
-              >
-                <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer bekræftelse</Text>
-              </Pressable>
-            )
-          ) : null}
-
           {duel.status === 'active' ? (
+            duel.mode === 'challenge' && isCreator && !isOpponent ? (
+              <View style={styles.duelCardResultInfoPill}>
+                <Ionicons name="hourglass-outline" size={14} color="#8a6a16" />
+                <Text numberOfLines={1} style={styles.duelCardResultInfoText}>
+                  Modtageren skal gennemføre challengen
+                </Text>
+              </View>
+            ) : duel.mode === 'challenge' && isOpponent ? (
+              <View style={styles.duelCardSplitActionRow}>
+                <Pressable
+                  accessibilityLabel="Giv op på challenge"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'forfeit')}
+                  style={({ pressed }) => [
+                    styles.duelCardRejectAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  {renderDuelActionContent(duel, 'forfeit', {
+                    spinnerColor: STUDOS_THEME.red,
+                    text: 'Giv op',
+                    textStyle: styles.duelCardRejectActionText,
+                  })}
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Markér challenge som gennemført"
+                  disabled={Boolean(duelActionLoadingId)}
+                  onPress={() => respondToDuel(duel.id, 'complete')}
+                  style={({ pressed }) => [
+                    styles.duelCardWinnerAction,
+                    styles.duelCardSplitAction,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  {renderDuelActionContent(duel, 'complete', {
+                    iconName: 'checkmark-done',
+                    text: duel.judgeMemberId ? 'Send' : 'Gennemført',
+                    textStyle: styles.duelCardWinnerActionText,
+                  })}
+                </Pressable>
+              </View>
+            ) : (
             <Pressable
               accessibilityLabel={duel.mode === 'versus' ? 'Vælg vinder' : 'Markér dyst som gennemført'}
               disabled={Boolean(duelActionLoadingId)}
@@ -9702,25 +10079,39 @@ function DuelScreen({
                 respondToDuel(duel.id, 'complete');
               }}
               style={({ pressed }) => [
-                styles.duelCardGhostAction,
+                styles.duelCardWinnerAction,
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              <Text style={styles.duelCardGhostActionText}>{duel.mode === 'versus' ? 'Vælg vinder' : duel.judgeMemberId ? 'Send til dommer' : 'Markér gennemført'}</Text>
+              {duel.mode === 'versus' ? (
+                <>
+                  <Ionicons name="trophy" size={15} color="#FFFFFF" />
+                  <Text numberOfLines={1} style={styles.duelCardWinnerActionText}>Vælg vinder</Text>
+                </>
+              ) : (
+                <>
+                  {renderDuelActionContent(duel, 'complete', {
+                    iconName: 'checkmark-done',
+                    text: duel.judgeMemberId ? 'Send til dommer' : 'Markér gennemført',
+                    textStyle: styles.duelCardWinnerActionText,
+                  })}
+                </>
+              )}
             </Pressable>
+            )
           ) : null}
           {duel.status === 'awaitingResultConfirm' ? (
             resultProposerIsMe ? (
-              <Pressable
-                disabled
-                style={styles.duelCardGhostAction}
-              >
-                <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer modpart</Text>
-              </Pressable>
+              <View style={styles.duelCardResultInfoPill}>
+                <Ionicons name="hourglass-outline" size={14} color="#8a6a16" />
+                <Text numberOfLines={1} style={styles.duelCardResultInfoText}>
+                  {duel.mode === 'challenge' ? 'Til godkendelse hos opretter' : 'Til godkendelse hos modparten'}
+                </Text>
+              </View>
             ) : (
               <View style={styles.duelCardSplitActionRow}>
                 <Pressable
-                  accessibilityLabel="Afvis foreslået vinder"
+                  accessibilityLabel={duel.mode === 'challenge' ? 'Afvis gennemført challenge' : 'Afvis foreslået vinder'}
                   disabled={Boolean(duelActionLoadingId)}
                   onPress={() => respondToDuel(duel.id, 'reject')}
                   style={({ pressed }) => [
@@ -9729,10 +10120,14 @@ function DuelScreen({
                     pressed ? styles.footerItemPressed : null,
                   ]}
                 >
-                  <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+                  {renderDuelActionContent(duel, 'reject', {
+                    spinnerColor: STUDOS_THEME.red,
+                    text: 'Afvis',
+                    textStyle: styles.duelCardRejectActionText,
+                  })}
                 </Pressable>
                 <Pressable
-                  accessibilityLabel="Bekræft foreslået vinder"
+                  accessibilityLabel={duel.mode === 'challenge' ? 'Godkend gennemført challenge' : 'Bekræft foreslået vinder'}
                   disabled={Boolean(duelActionLoadingId)}
                   onPress={() => respondToDuel(duel.id, 'approve')}
                   style={({ pressed }) => [
@@ -9741,18 +10136,21 @@ function DuelScreen({
                     pressed ? styles.footerItemPressed : null,
                   ]}
                 >
-                  <Text style={styles.duelCardAcceptActionText}>Bekræft</Text>
+                  {renderDuelActionContent(duel, 'approve', {
+                    text: duel.mode === 'challenge' ? 'Godkend' : 'Bekræft',
+                    textStyle: styles.duelCardAcceptActionText,
+                  })}
                 </Pressable>
               </View>
             )
           ) : null}
           {duel.status === 'awaitingJudgeApproval' ? (
-            <Pressable
-              disabled
-              style={styles.duelCardGhostAction}
-            >
-              <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer dommer</Text>
-            </Pressable>
+            <View style={styles.duelCardResultInfoPill}>
+              <Ionicons name="hourglass-outline" size={14} color="#8a6a16" />
+              <Text numberOfLines={1} style={styles.duelCardResultInfoText}>
+                Til godkendelse hos dommer
+              </Text>
+            </View>
           ) : null}
         </View>
       </View>
@@ -9770,14 +10168,23 @@ function DuelScreen({
     return (
       <View key={duel.id} style={[styles.duelCard, styles.duelJudgeApprovalCard]}>
         <View style={styles.duelCardHeader}>
-          <Ionicons name="shield-checkmark-outline" size={24} color={STUDOS_THEME.ink} />
-          <View style={styles.duelCardCopy}>
-            <Text numberOfLines={1} style={styles.duelCardTitle}>
-              {creatorName} vs {opponentName}
-            </Text>
-          </View>
-          <View style={[styles.duelStatusPill, styles.duelStatusPillWarning]}>
-            <Text style={styles.duelStatusPillText}>Du er dommer</Text>
+          <View style={[styles.duelCardCopy, styles.duelJudgeNameStack]}>
+            <View style={styles.duelJudgeNameRow}>
+              <Avatar profile={creator} variant="smallCircle" />
+              <View style={styles.duelJudgeNameLabelRow}>
+                <Text numberOfLines={1} style={styles.duelJudgeMemberName}>
+                  {creatorName}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.duelJudgeNameRow}>
+              <Avatar profile={opponent} variant="smallCircle" />
+              <View style={styles.duelJudgeNameLabelRow}>
+                <Text numberOfLines={1} style={styles.duelJudgeMemberName}>
+                  {opponentName}
+                </Text>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -9785,12 +10192,14 @@ function DuelScreen({
 
         <View style={styles.duelCardMetaRow}>
           <View style={styles.duelCardMetaItem}>
-            <Ionicons name="trophy-outline" size={14} color={STUDOS_THEME.red} />
-            <Text numberOfLines={1} style={styles.duelMetaText}>Vinder: {proposedWinnerName}</Text>
-          </View>
-          <View style={styles.duelCardMetaItem}>
             <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
-            <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+            <Text numberOfLines={1} style={styles.duelMetaText}>{formatDuelStakeLabel(duel)}</Text>
+          </View>
+          <View style={[styles.duelCardMetaItem, styles.duelJudgeWinnerMetaItem]}>
+            <Ionicons name="trophy" size={14} color="#1F9D55" />
+            <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelJudgeWinnerMetaText]}>
+              {duel.mode === 'challenge' ? 'Gennemført' : `Vinder: ${proposedWinnerName}`}
+            </Text>
           </View>
         </View>
 
@@ -9805,7 +10214,11 @@ function DuelScreen({
               pressed ? styles.footerItemPressed : null,
             ]}
           >
-            <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+            {renderDuelActionContent(duel, 'reject', {
+              spinnerColor: STUDOS_THEME.red,
+              text: 'Afvis',
+              textStyle: styles.duelCardRejectActionText,
+            })}
           </Pressable>
           <Pressable
             accessibilityLabel="Godkend dommergodkendelse"
@@ -9817,7 +10230,10 @@ function DuelScreen({
               pressed ? styles.footerItemPressed : null,
             ]}
           >
-            <Text style={styles.duelCardAcceptActionText}>Godkend</Text>
+            {renderDuelActionContent(duel, 'approve', {
+              text: 'Godkend',
+              textStyle: styles.duelCardAcceptActionText,
+            })}
           </Pressable>
         </View>
       </View>
@@ -9834,6 +10250,16 @@ function DuelScreen({
     }
 
     if (duel.status === 'expired') {
+      if (duel.mode === 'challenge') {
+        if (String(duel.toMemberId) === activeMemberId) {
+          return { label: 'Tabt', style: styles.duelArchiveResultLoss, textStyle: styles.duelArchiveResultTextLight };
+        }
+
+        if (String(duel.fromMemberId) === activeMemberId) {
+          return { label: 'Belønning retur', style: styles.duelArchiveResultNeutral, textStyle: styles.duelArchiveResultTextDark };
+        }
+      }
+
       return { label: 'Udløbet', style: styles.duelArchiveResultMuted, textStyle: styles.duelArchiveResultTextDark };
     }
 
@@ -9928,6 +10354,86 @@ function DuelScreen({
         >
           <Text style={styles.duelDeadlineDoneButtonText}>Vælg tid</Text>
         </Pressable>
+      </View>
+    </View>
+  ) : null;
+
+  const judgePickerModal = judgeAvailable && judgePickerOpen ? (
+    <View style={styles.duelJudgePickerOverlay}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Luk dommer-vælger"
+        onPress={closeJudgePicker}
+        style={styles.duelPickerBackdrop}
+      />
+      <View style={[styles.chatModalPanel, styles.duelJudgePickerModalPanel, styles.duelPickerSheetLayer]}>
+        <View style={styles.chatModalHeader}>
+          <View style={styles.chatModalHeaderTextColumn}>
+            <Text style={styles.chatModalKicker}>Dommer</Text>
+            <Text style={styles.chatModalTitle}>Vælg dommer</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Luk dommer-vælger"
+            onPress={closeJudgePicker}
+            style={styles.chatModalCloseButton}
+          >
+            <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+          </Pressable>
+        </View>
+
+        <View style={styles.chatModalSearchField}>
+          <Ionicons name="search" size={16} color="#65748b" />
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setJudgeSearchQuery}
+            placeholder="Søg efter dommer"
+            placeholderTextColor="#8b93a1"
+            style={styles.chatModalSearchInput}
+            value={judgeSearchQuery}
+          />
+        </View>
+
+        {judgeRows.length === 0 ? (
+          <Text style={styles.emptyText}>Ingen mulige dommere lige nu.</Text>
+        ) : filteredJudgeRows.length === 0 ? (
+          <Text style={styles.emptyText}>Ingen dommere matcher søgningen.</Text>
+        ) : (
+          <ScrollView style={styles.duelJudgePickerModalList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+            <View style={styles.chatModalMemberList}>
+              {filteredJudgeRows.map((member) => {
+                const rowId = String(member.id);
+                const rowName = getMemberName(member);
+                const selected = selectedJudgeId === rowId;
+
+                return (
+                  <Pressable
+                    key={rowId}
+                    onPress={() => {
+                      setSelectedJudgeId(rowId);
+                      setJudgeEnabled(true);
+                      setJudgePickerOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.chatModalMemberRow,
+                      selected ? styles.chatModalMemberRowSelected : null,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <Avatar profile={member} variant="smallCircle" />
+                    <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
+                    <Ionicons
+                      name={selected ? 'radio-button-on' : 'radio-button-off'}
+                      size={18}
+                      color={selected ? STUDOS_THEME.red : '#a4afbf'}
+                    />
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ScrollView>
+        )}
       </View>
     </View>
   ) : null;
@@ -10044,7 +10550,7 @@ function DuelScreen({
           {...createScreenTouchHandlers}
         >
           <View style={styles.duelModePanel}>
-            <Text style={styles.label}>Dyst-type</Text>
+            <Text style={styles.label}>Vælg din dyst</Text>
             <View style={styles.duelModeSwitch}>
               {DYST_MODE_OPTIONS.map((option) => {
                 const selected = duelMode === option.id;
@@ -10061,6 +10567,11 @@ function DuelScreen({
                       pressed ? styles.footerItemPressed : null,
                     ]}
                   >
+                    <Ionicons
+                      name={option.iconName}
+                      size={16}
+                      color={STUDOS_THEME.red}
+                    />
                     <Text style={[styles.duelModeOptionText, selected ? styles.duelModeOptionTextActive : null]}>
                       {option.label}
                     </Text>
@@ -10074,8 +10585,8 @@ function DuelScreen({
           {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
 
           <View style={styles.duelOpponentPicker}>
-            <Text style={styles.label}>Modstander</Text>
             <Pressable
+              accessibilityLabel={opponentPickerLabel}
               accessibilityRole="button"
               accessibilityState={{ expanded: opponentPickerOpen }}
               onPress={() => setOpponentPickerOpen((open) => !open)}
@@ -10087,7 +10598,7 @@ function DuelScreen({
             >
               <View style={styles.duelOpponentPickerCopy}>
                 <Text numberOfLines={1} style={styles.duelOpponentPickerTitle}>
-                  {selectedOpponentName || 'Vælg modstander'}
+                  {selectedOpponentName || opponentPickerLabel}
                 </Text>
                 <Text numberOfLines={1} style={styles.duelOpponentPickerMeta}>
                   {selectedOpponentName ? 'Tryk for at ændre' : 'Fold listen ud og vælg personen'}
@@ -10218,34 +10729,39 @@ function DuelScreen({
           </View>
 
           <View style={[styles.field, styles.duelStakeField]}>
-            <Text style={styles.label}>Indsats (Caps)</Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="number-pad"
-              onChangeText={setDuelStakeText}
-              placeholder="Fx 50"
-              placeholderTextColor="#8b93a1"
-              style={styles.input}
-              value={duelStakeText}
-            />
+            <Text style={styles.label}>{duelMode === 'challenge' ? 'Belønning' : 'Indsats'}</Text>
+            <View style={styles.duelStakeInputRow}>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="number-pad"
+                onChangeText={setDuelStakeText}
+                placeholder="Fx 50"
+                placeholderTextColor="#8b93a1"
+                style={[styles.input, styles.duelStakeInput]}
+                value={duelStakeText}
+              />
+              <View style={styles.duelStakeCoinBox}>
+                <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelStakeCoinImage} />
+              </View>
+            </View>
           </View>
 
+          {judgeAvailable ? (
           <View style={styles.duelJudgePanel}>
             <Pressable
               accessibilityRole="switch"
               accessibilityState={{ checked: judgeEnabled }}
               onPress={() => {
-                setJudgeEnabled((enabled) => {
-                  const nextEnabled = !enabled;
+                if (judgeEnabled) {
+                  setJudgeEnabled(false);
+                  setJudgePickerOpen(false);
+                  setSelectedJudgeId('');
+                  return;
+                }
 
-                  if (!nextEnabled) {
-                    setJudgePickerOpen(false);
-                    setSelectedJudgeId('');
-                  }
-
-                  return nextEnabled;
-                });
+                setJudgeEnabled(true);
+                setJudgePickerOpen(true);
               }}
               style={({ pressed }) => [
                 styles.duelJudgeToggleCard,
@@ -10266,71 +10782,29 @@ function DuelScreen({
             </Pressable>
 
             {judgeEnabled ? (
-              <View style={styles.duelJudgePicker}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: judgePickerOpen }}
-                  onPress={() => setJudgePickerOpen((open) => !open)}
-                  style={({ pressed }) => [
-                    styles.duelOpponentPickerButton,
-                    selectedJudgeId ? styles.duelOpponentPickerButtonSelected : null,
-                    pressed ? styles.footerItemPressed : null,
-                  ]}
-                >
-                  <View style={styles.duelOpponentPickerCopy}>
-                    <Text numberOfLines={1} style={styles.duelOpponentPickerTitle}>
-                      {selectedJudgeName || 'Vælg dommer'}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.duelOpponentPickerMeta}>
-                      {selectedJudgeName ? 'Tryk for at ændre' : 'Dommeren kan godkende eller afvise'}
-                    </Text>
-                  </View>
-                  <Ionicons name={judgePickerOpen ? 'chevron-up' : 'chevron-down'} size={18} color={STUDOS_THEME.ink} />
-                </Pressable>
-
-                {judgePickerOpen ? (
-                  <View style={styles.duelOpponentPickerPanel}>
-                    {judgeRows.length === 0 ? (
-                      <Text style={styles.emptyText}>Ingen mulige dommere lige nu.</Text>
-                    ) : (
-                      <ScrollView style={styles.duelOpponentList} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-                        <View style={styles.chatModalMemberList}>
-                          {judgeRows.map((member) => {
-                            const rowId = String(member.id);
-                            const rowName = getMemberName(member);
-
-                            return (
-                              <Pressable
-                                key={rowId}
-                                onPress={() => {
-                                  setSelectedJudgeId(rowId);
-                                  setJudgePickerOpen(false);
-                                }}
-                                style={({ pressed }) => [
-                                  styles.chatModalMemberRow,
-                                  styles.duelOpponentRow,
-                                  selectedJudgeId === rowId ? styles.chatModalMemberRowSelected : null,
-                                  pressed ? styles.footerItemPressed : null,
-                                ]}
-                              >
-                                <Avatar profile={member} variant="smallCircle" />
-                                <Text numberOfLines={1} style={styles.chatModalMemberName}>{rowName}</Text>
-                                <Ionicons
-                                  name={selectedJudgeId === rowId ? 'radio-button-on' : 'radio-button-off'}
-                                  size={18}
-                                  color={selectedJudgeId === rowId ? STUDOS_THEME.red : '#a4afbf'}
-                                />
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                      </ScrollView>
-                    )}
-                  </View>
-                ) : null}
-              </View>
+              <Pressable
+                accessibilityLabel="Vælg dommer"
+                accessibilityRole="button"
+                onPress={() => setJudgePickerOpen(true)}
+                style={({ pressed }) => [
+                  styles.duelOpponentPickerButton,
+                  selectedJudgeId ? styles.duelOpponentPickerButtonSelected : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={styles.duelOpponentPickerCopy}>
+                  <Text numberOfLines={1} style={styles.duelOpponentPickerTitle}>
+                    {selectedJudgeName || 'Vælg dommer'}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.duelOpponentPickerMeta}>
+                    {selectedJudgeName ? 'Tryk for at ændre' : 'Dommeren kan godkende eller afvise'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
             ) : null}
           </View>
+          ) : null}
         </ScrollView>
 
           <View style={styles.duelCreateBottomBar} {...createScreenTouchHandlers}>
@@ -10340,6 +10814,7 @@ function DuelScreen({
           </Animated.View>
           {deadlinePickerModal}
           {timePickerModal}
+          {judgePickerModal}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -10401,7 +10876,7 @@ function DuelScreen({
                       </View>
                       <View style={styles.duelArchiveMetaLine}>
                         <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
-                        <Text numberOfLines={1} style={styles.duelArchiveStake}>{duel.stake} Caps</Text>
+                        <Text numberOfLines={1} style={styles.duelArchiveStake}>{formatDuelStakeLabel(duel)}</Text>
                         {finishedLabel ? (
                           <>
                             <Text style={styles.duelArchiveMetaDot}>·</Text>
@@ -10457,6 +10932,48 @@ function DuelScreen({
             <ScrollView style={styles.duelArchiveList} showsVerticalScrollIndicator={false}>
               <View style={styles.duelList}>
                 {judgeApprovalDuels.map(renderJudgeApprovalCard)}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  ) : null;
+
+  const sentDuelModal = sentDuelsOpen ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setSentDuelsOpen(false)}
+      transparent
+      visible={sentDuelsOpen}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk sendte dyster"
+          onPress={() => setSentDuelsOpen(false)}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelArchivePanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Sendte dyster</Text>
+              <Text style={styles.chatModalTitle}>Afventer accept</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk sendte dyster"
+              onPress={() => setSentDuelsOpen(false)}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          {sentPendingDuels.length === 0 ? (
+            <Text style={styles.emptyText}>Du har ingen sendte dyster, der afventer svar.</Text>
+          ) : (
+            <ScrollView style={styles.duelArchiveList} showsVerticalScrollIndicator={false}>
+              <View style={styles.duelList}>
+                {sentPendingDuels.map((duel) => renderDuelCard(duel, { variant: 'sent' }))}
               </View>
             </ScrollView>
           )}
@@ -10594,19 +11111,59 @@ function DuelScreen({
         </Pressable>
       ) : null}
 
-      <View style={styles.panel}>
-        <View style={styles.panelHeader}>
-          <Text style={styles.sectionTitle}>Afventende dyster</Text>
-          <View style={styles.duelHeaderBadge}>
-            <Text style={styles.duelHeaderBadgeText}>
-              {pendingDuels.length}
+      {sentPendingDuels.length > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setSentDuelsOpen(true)}
+          style={({ pressed }) => [
+            styles.duelJudgeStrip,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <View style={styles.duelJudgeStripIcon}>
+            <Ionicons name="paper-plane-outline" size={18} color={STUDOS_THEME.ink} />
+          </View>
+          <View style={styles.duelJudgeStripCopy}>
+            <Text style={styles.duelJudgeStripTitle}>Sendte dyster</Text>
+            <Text style={styles.duelJudgeStripText}>
+              {sentPendingDuels.length} {sentPendingDuels.length === 1 ? 'dyst afventer' : 'dyster afventer'} accept
             </Text>
           </View>
-        </View>
+          <View style={styles.duelJudgeStripAction}>
+            <Text style={styles.duelJudgeStripActionText}>Åbn</Text>
+            <View style={styles.duelJudgeStripBadge}>
+              <Text style={styles.duelJudgeStripBadgeText}>{sentPendingDuels.length}</Text>
+            </View>
+          </View>
+        </Pressable>
+      ) : null}
+
+      <View style={styles.panel}>
+        <Pressable
+          accessibilityLabel={pendingDuelsExpanded ? 'Luk afventende dyster' : 'Åbn afventende dyster'}
+          accessibilityRole="button"
+          onPress={togglePendingDuelsExpanded}
+          style={({ pressed }) => [
+            styles.panelHeader,
+            styles.duelPanelToggleHeader,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Text style={styles.sectionTitle}>Afventende dyster</Text>
+          <View style={styles.duelPanelHeaderActions}>
+            <View style={styles.duelHeaderBadge}>
+              <Text style={styles.duelHeaderBadgeText}>
+                {pendingDuels.length}
+              </Text>
+            </View>
+            <Ionicons name={pendingDuelsExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={STUDOS_THEME.ink} />
+          </View>
+        </Pressable>
 
         {duelError ? <Text style={styles.errorText}>{duelError}</Text> : null}
 
-        {duelLoading ? (
+        {pendingDuelsExpanded ? (
+          duelLoading ? (
           <Text style={styles.emptyText}>Henter dyster...</Text>
         ) : pendingDuels.length === 0 ? (
           <Text style={styles.emptyText}>
@@ -10621,14 +11178,28 @@ function DuelScreen({
               const opponentName = getMemberName(opponent);
               const actionStatus = getDuelStatus(duel);
               const deadlineLabel = formatDateTime(duel.deadlineAt);
-              const creatorName = getMemberName(isCreator ? activeMember : opponentById[String(duel.fromMemberId)] ?? activeMember);
-              const duelTitle = `${creatorName} vs ${opponentName}`;
+              const creator = String(duel.fromMemberId) === activeMemberId
+                ? activeMember
+                : opponentById[String(duel.fromMemberId)];
+              const recipient = String(duel.toMemberId) === activeMemberId
+                ? activeMember
+                : opponentById[String(duel.toMemberId)];
+              const judge = duel.judgeMemberId
+                ? (String(duel.judgeMemberId) === activeMemberId
+                  ? activeMember
+                  : opponentById[String(duel.judgeMemberId)])
+                : null;
+              const creatorName = getMemberName(creator);
+              const recipientName = getMemberName(recipient);
+              const judgeName = judge ? getMemberName(judge) : '';
+              const visibleMember = duel.mode === 'challenge' ? creator : opponent;
+              const duelTitle = duel.mode === 'challenge' ? creatorName : `${creatorName} vs ${recipientName}`;
 
               return (
                 <View key={duel.id} style={styles.duelCard}>
                   <View style={styles.duelCardHeader}>
                     <Avatar
-                      profile={opponent}
+                      profile={visibleMember}
                       variant="smallCircle"
                     />
                     <View style={styles.duelCardCopy}>
@@ -10637,20 +11208,26 @@ function DuelScreen({
                       </Text>
                     </View>
                     <View style={[styles.duelStatusPill, actionStatus.style]}>
-                      <Text style={styles.duelStatusPillText}>{actionStatus.label}</Text>
+                      <Text style={[styles.duelStatusPillText, actionStatus.textStyle]}>{actionStatus.label}</Text>
                     </View>
                   </View>
 
                   <Text style={styles.duelCardChallenge}>{duel.challenge}</Text>
 
                     <View style={styles.duelCardMetaRow}>
-            <View style={styles.duelCardMetaItem}>
-              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.ink} />
-              <Text numberOfLines={1} style={styles.duelMetaText}>{getDystModeMeta(duel.mode).label}</Text>
+            <View style={[styles.duelCardMetaItem, styles.duelCardTypeMetaItem]}>
+              <Ionicons name={duel.mode === 'challenge' ? 'sparkles' : 'swap-horizontal'} size={13} color={STUDOS_THEME.red} />
+              <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelCardTypeMetaText]}>{getDystModeMeta(duel.mode).label}</Text>
             </View>
+            {duel.mode === 'versus' && judgeName ? (
+              <View style={[styles.duelCardMetaItem, styles.duelCardJudgeMetaItem]}>
+                <Ionicons name="shield-checkmark-outline" size={13} color={STUDOS_THEME.blue} />
+                <Text numberOfLines={1} style={[styles.duelMetaText, styles.duelCardJudgeMetaText]}>Dommer: {judgeName}</Text>
+              </View>
+            ) : null}
             <View style={styles.duelCardMetaItem}>
               <Image source={CAPS_COIN} resizeMode="contain" style={styles.duelMetaCoin} />
-                        <Text numberOfLines={1} style={styles.duelMetaText}>{duel.stake} Caps</Text>
+                        <Text numberOfLines={1} style={styles.duelMetaText}>{formatDuelStakeLabel(duel)}</Text>
                       </View>
                     <View style={styles.duelCardMetaItem}>
                       <Ionicons name="time-outline" size={14} color={STUDOS_THEME.blue} />
@@ -10666,18 +11243,25 @@ function DuelScreen({
                       isCreator ? (
                         <Pressable
                           accessibilityLabel="Annuller denne dyst"
+                          disabled={Boolean(duelActionLoadingId)}
                           onPress={() => respondToDuel(duel.id, 'cancel')}
                           style={({ pressed }) => [
                             styles.duelCardGhostAction,
+                            styles.duelCardCancelAction,
                             pressed ? styles.footerItemPressed : null,
                           ]}
                         >
-                          <Text style={styles.duelCardGhostActionText}>Annuller</Text>
+                          {renderDuelActionContent(duel, 'cancel', {
+                            spinnerColor: STUDOS_THEME.red,
+                            text: 'Annuller',
+                            textStyle: [styles.duelCardGhostActionText, styles.duelCardCancelActionText],
+                          })}
                         </Pressable>
                       ) : (
                         <>
                           <Pressable
                             accessibilityLabel="Afvis dyst"
+                            disabled={Boolean(duelActionLoadingId)}
                             onPress={() => respondToDuel(duel.id, 'decline')}
                             style={({ pressed }) => [
                               styles.duelCardRejectAction,
@@ -10685,10 +11269,15 @@ function DuelScreen({
                               pressed ? styles.footerItemPressed : null,
                             ]}
                           >
-                            <Text style={styles.duelCardRejectActionText}>Afvis</Text>
+                            {renderDuelActionContent(duel, 'decline', {
+                              spinnerColor: STUDOS_THEME.red,
+                              text: 'Afvis',
+                              textStyle: styles.duelCardRejectActionText,
+                            })}
                           </Pressable>
                           <Pressable
                             accessibilityLabel="Accepter dyst"
+                            disabled={Boolean(duelActionLoadingId)}
                             onPress={() => respondToDuel(duel.id, 'accept')}
                             style={({ pressed }) => [
                               styles.duelCardAcceptAction,
@@ -10696,44 +11285,30 @@ function DuelScreen({
                               pressed ? styles.footerItemPressed : null,
                             ]}
                           >
-                            <Text style={styles.duelCardAcceptActionText}>Accepter</Text>
+                            {renderDuelActionContent(duel, 'accept', {
+                              text: 'Accepter',
+                              textStyle: styles.duelCardAcceptActionText,
+                            })}
                           </Pressable>
                         </>
-                      )
-                    ) : null}
-
-                    {duel.status === 'awaitingCreatorConfirm' ? (
-                      isCreator ? (
-                        <Pressable
-                          accessibilityLabel="Bekræft dyst-overførsel"
-                          onPress={() => respondToDuel(duel.id, 'confirm')}
-                          style={({ pressed }) => [
-                            styles.duelCardAction,
-                            pressed ? styles.footerItemPressed : null,
-                          ]}
-                        >
-                          <Text style={styles.duelCardActionText}>Bekræft</Text>
-                        </Pressable>
-                      ) : (
-                        <Pressable
-                          disabled
-                          style={styles.duelCardGhostAction}
-                        >
-                          <Text style={[styles.duelCardGhostActionText, styles.duelCardGhostActionTextMuted]}>Afventer bekræftelse</Text>
-                        </Pressable>
                       )
                     ) : null}
 
                     {duel.status === 'active' ? (
                       <Pressable
                         accessibilityLabel="Markér dyst som gennemført"
+                        disabled={Boolean(duelActionLoadingId)}
                         onPress={() => respondToDuel(duel.id, 'complete')}
                         style={({ pressed }) => [
                           styles.duelCardGhostAction,
                           pressed ? styles.footerItemPressed : null,
                         ]}
                       >
-                        <Text style={styles.duelCardGhostActionText}>Markér gennemført</Text>
+                        {renderDuelActionContent(duel, 'complete', {
+                          spinnerColor: '#4e5c74',
+                          text: 'Markér gennemført',
+                          textStyle: styles.duelCardGhostActionText,
+                        })}
                       </Pressable>
                     ) : null}
                   </View>
@@ -10741,20 +11316,34 @@ function DuelScreen({
               );
             })}
           </View>
-        )}
+          )
+        ) : null}
       </View>
 
       <View style={styles.panel}>
-        <View style={styles.panelHeader}>
+        <Pressable
+          accessibilityLabel={activeDuelsExpanded ? 'Luk aktive dyster' : 'Åbn aktive dyster'}
+          accessibilityRole="button"
+          onPress={toggleActiveDuelsExpanded}
+          style={({ pressed }) => [
+            styles.panelHeader,
+            styles.duelPanelToggleHeader,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
           <Text style={styles.sectionTitle}>Aktive dyster</Text>
-          <View style={styles.duelHeaderBadge}>
-            <Text style={styles.duelHeaderBadgeText}>
-              {activeDuels.length}
-            </Text>
+          <View style={styles.duelPanelHeaderActions}>
+            <View style={styles.duelHeaderBadge}>
+              <Text style={styles.duelHeaderBadgeText}>
+                {activeDuels.length}
+              </Text>
+            </View>
+            <Ionicons name={activeDuelsExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={STUDOS_THEME.ink} />
           </View>
-        </View>
+        </Pressable>
 
-        {duelLoading ? (
+        {activeDuelsExpanded ? (
+          duelLoading ? (
           <Text style={styles.emptyText}>Henter dyster...</Text>
         ) : activeDuels.length === 0 ? (
           <Text style={styles.emptyText}>
@@ -10764,17 +11353,15 @@ function DuelScreen({
           <View style={styles.duelList}>
             {activeDuels.map(renderDuelCard)}
           </View>
-        )}
+          )
+        ) : null}
       </View>
-
-      <Text style={styles.duelFooterInfo}>
-        {activeMemberName}, du kan oprette dyst med alle i dit crew.
-      </Text>
 
       {createDuelOverlay}
       {winnerPickerModal}
       {finishedDuelArchiveModal}
       {judgeDuelModal}
+      {sentDuelModal}
       {duelInfoModal}
     </View>
   );
@@ -13570,7 +14157,7 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
   );
 }
 
-function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
+function FooterNav({ activeTab, chatUnreadCount = 0, pointDuelActionCount = 0, onChangeTab }) {
   return (
     <View style={styles.footerNav}>
       {APP_TABS.map((tab, index) => {
@@ -13578,13 +14165,20 @@ function FooterNav({ activeTab, chatUnreadCount = 0, onChangeTab }) {
         const isCenterAction = tab.id === 'overview';
         const isFirstItem = index === 0;
         const isLastItem = index === APP_TABS.length - 1;
-        const tabUnreadCount = tab.id === 'chat' ? chatUnreadCount : 0;
+        const tabUnreadCount = tab.id === 'chat'
+          ? chatUnreadCount
+          : tab.id === 'challenges'
+            ? pointDuelActionCount
+            : 0;
         const hasUnreadBadge = tabUnreadCount > 0;
         const tabAccentColor = tab.accentColor ?? '#FF6F73';
+        const badgeAccessibilityLabel = tab.id === 'challenges'
+          ? `${tab.label}, ${tabUnreadCount} kræver handling`
+          : `${tab.label}, ${tabUnreadCount} ulæste`;
 
         return (
           <Pressable
-            accessibilityLabel={hasUnreadBadge ? `${tab.label}, ${tabUnreadCount} ulæste` : tab.label}
+            accessibilityLabel={hasUnreadBadge ? badgeAccessibilityLabel : tab.label}
             accessibilityRole="button"
             hitSlop={6}
             key={tab.id}
@@ -15108,6 +15702,11 @@ function OverviewScreen({
             <Text style={styles.overviewCountdownLabel}>dage til{'\n'}studenterugen</Text>
           </View>
         </Animated.View>
+        <View pointerEvents="none" style={styles.overviewHeaderFeather}>
+          {OVERVIEW_HEADER_FEATHER_STOPS.map((stop, index) => (
+            <View key={`overview-header-feather-${index}`} style={[styles.overviewHeaderFeatherStop, stop]} />
+          ))}
+        </View>
       </Animated.View>
       <Animated.ScrollView
         contentContainerStyle={styles.overviewScrollContent}
@@ -19584,14 +20183,26 @@ const styles = StyleSheet.create({
     paddingTop: APP_SCREEN_TOP_PADDING,
     paddingBottom: 13,
     backgroundColor: '#F1FBF8',
+    overflow: 'visible',
     zIndex: 8,
   },
   overviewHeaderStackScrolled: {
     shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.14,
-    shadowRadius: 16,
-    elevation: 9,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 24,
+    elevation: 3,
+  },
+  overviewHeaderFeather: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: -36,
+    height: 36,
+    zIndex: 1,
+  },
+  overviewHeaderFeatherStop: {
+    width: '100%',
   },
   overviewHeaderTopRow: {
     alignItems: 'flex-end',
@@ -22730,12 +23341,15 @@ const styles = StyleSheet.create({
   duelModeSwitch: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 3,
     width: '100%',
   },
   duelModeOption: {
     flex: 1,
     minWidth: 0,
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
     justifyContent: 'center',
     minHeight: 42,
     borderColor: '#E5E8EF',
@@ -22830,9 +23444,6 @@ const styles = StyleSheet.create({
   duelJudgeSwitchKnobActive: {
     alignSelf: 'flex-end',
     backgroundColor: STUDOS_THEME.yellow,
-  },
-  duelJudgePicker: {
-    gap: 9,
   },
   duelJudgeStrip: {
     width: '100%',
@@ -22951,16 +23562,9 @@ const styles = StyleSheet.create({
   },
   duelCreateBottomBar: {
     width: '100%',
-    borderColor: '#E5E8EF',
-    borderRadius: 15,
-    borderWidth: 1,
-    backgroundColor: '#FFFFFF',
-    padding: 10,
-    shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 5,
+    paddingHorizontal: 0,
+    paddingTop: 6,
+    paddingBottom: 14,
   },
   duelSubtext: {
     flex: 1,
@@ -23219,15 +23823,27 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  duelPanelToggleHeader: {
+    borderRadius: 8,
+    marginHorizontal: -4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  duelPanelHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 8,
+  },
   duelList: {
     gap: 9,
   },
   duelCard: {
     gap: 8,
-    borderColor: '#F2D9B1',
+    borderColor: '#B7DDF7',
     borderRadius: 12,
     borderWidth: 1,
-    backgroundColor: '#FFFDF8',
+    backgroundColor: '#EAF6FF',
     padding: 11,
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 12 },
@@ -23237,8 +23853,8 @@ const styles = StyleSheet.create({
   },
   duelJudgeApprovalCard: {
     gap: 7,
-    borderColor: STUDOS_THEME.yellow,
-    backgroundColor: '#FFF8E8',
+    borderColor: '#B7DDF7',
+    backgroundColor: '#EAF6FF',
     padding: 9,
   },
   duelWinnerPickerPanel: {
@@ -23269,6 +23885,37 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 0,
   },
+  duelJudgeNameStack: {
+    gap: 6,
+  },
+  duelJudgeNameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minWidth: 0,
+  },
+  duelJudgeNameLabelRow: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  duelJudgeMemberName: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: STUDOS_THEME.ink,
+    fontSize: 14.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelJudgeWinnerMetaItem: {
+    borderColor: 'rgba(31, 157, 85, 0.28)',
+    backgroundColor: '#E3F8EF',
+  },
+  duelJudgeWinnerMetaText: {
+    color: STUDOS_THEME.ink,
+  },
   duelCardOpponent: {
     color: '#65748b',
     fontSize: 11,
@@ -23297,8 +23944,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF6DB',
   },
   duelStatusPillSuccess: {
-    borderColor: '#BEECD4',
-    backgroundColor: '#E3F8EF',
+    borderColor: '#F59E0B',
+    backgroundColor: '#F59E0B',
+  },
+  duelStatusPillCompleted: {
+    borderColor: '#1F9D55',
+    backgroundColor: '#1F9D55',
   },
   duelStatusPillInfo: {
     borderColor: 'rgba(117, 222, 208, 0.55)',
@@ -23317,6 +23968,19 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  duelStatusPillTextLight: {
+    color: '#FFFFFF',
+  },
+  duelCardSentDirectionIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 31,
+    height: 31,
+    borderColor: 'rgba(31, 157, 85, 0.28)',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#E3F8EF',
   },
   duelCardChallenge: {
     color: STUDOS_THEME.ink,
@@ -23345,6 +24009,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
+  duelCardTypeMetaItem: {
+    borderColor: 'rgba(255, 111, 115, 0.34)',
+    backgroundColor: '#FFF1F2',
+  },
+  duelCardJudgeMetaItem: {
+    borderColor: 'rgba(63, 138, 246, 0.26)',
+    backgroundColor: '#EEF6FF',
+  },
   duelMetaText: {
     flexShrink: 1,
     minWidth: 0,
@@ -23352,6 +24024,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  duelCardTypeMetaText: {
+    color: STUDOS_THEME.red,
+  },
+  duelCardJudgeMetaText: {
+    color: STUDOS_THEME.blue,
+  },
+  duelCardConfirmMetaText: {
+    color: '#8a6a16',
   },
   duelMetaCoin: {
     width: 15,
@@ -23362,6 +24043,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 7,
     alignItems: 'center',
+  },
+  duelCardSentActionRow: {
+    flexWrap: 'nowrap',
+    width: '100%',
   },
   duelCardSplitActionRow: {
     flexDirection: 'row',
@@ -23394,6 +24079,31 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  duelCardWinnerAction: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    height: 38,
+    borderColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#1F9D55',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    shadowColor: '#1F9D55',
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  duelCardWinnerActionText: {
+    color: '#FFFFFF',
+    flexShrink: 1,
+    fontSize: 13.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
   duelCardAcceptAction: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -23419,17 +24129,45 @@ const styles = StyleSheet.create({
   duelCardRejectAction: {
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 35,
+    height: 38,
+    borderColor: 'rgba(255, 111, 115, 0.38)',
     borderRadius: 12,
-    backgroundColor: STUDOS_THEME.ink,
+    borderWidth: 1,
+    backgroundColor: '#FFF1F2',
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   duelCardRejectActionText: {
-    color: '#FFFFFF',
+    color: STUDOS_THEME.red,
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  duelCardResultInfoPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 35,
+    minWidth: 0,
+    borderColor: '#FFE1B1',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFF6DB',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  duelCardResultInfoText: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: '#8a6a16',
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  duelActionInlineSpinner: {
+    marginRight: 1,
+    transform: [{ scale: 0.82 }],
   },
   duelCardGhostAction: {
     alignItems: 'center',
@@ -23442,28 +24180,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
+  duelCardCancelAction: {
+    borderColor: 'rgba(255, 111, 115, 0.38)',
+    backgroundColor: '#FFF1F2',
+  },
+  duelCardSentCancelAction: {
+    flex: 1.35,
+  },
   duelCardGhostActionText: {
     color: '#4e5c74',
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0,
   },
+  duelCardCancelActionText: {
+    color: STUDOS_THEME.red,
+  },
   duelCardGhostActionTextMuted: {
     color: '#8f97a7',
   },
-  duelFooterInfo: {
+  duelCardSentStatusPill: {
+    alignItems: 'center',
+    flex: 0.82,
+    justifyContent: 'center',
+    minHeight: 35,
+  },
+  duelCardSentStatusPillText: {
     width: '100%',
-    marginTop: 12,
-    borderColor: 'rgba(117, 222, 208, 0.36)',
-    borderRadius: 13,
-    borderWidth: 1,
-    backgroundColor: '#F1FBF8',
-    color: '#526078',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     textAlign: 'center',
   },
   crewScreen: {
@@ -24675,6 +25418,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.42)',
     paddingHorizontal: 16,
   },
+  duelJudgePickerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 96,
+    elevation: 96,
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
+    paddingHorizontal: 16,
+  },
   duelPickerBackdrop: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
@@ -24725,22 +25477,24 @@ const styles = StyleSheet.create({
   },
   duelTimePickerOverlay: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
+    alignItems: 'center',
+    justifyContent: 'center',
     zIndex: 90,
     elevation: 90,
-    backgroundColor: 'rgba(15, 23, 42, 0.38)',
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
+    paddingHorizontal: 16,
   },
   duelTimePickerSheet: {
     width: '100%',
+    maxWidth: 360,
     gap: 14,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 24,
     backgroundColor: '#FFF8E8',
     paddingHorizontal: 16,
     paddingTop: 15,
     paddingBottom: 22,
     shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: -10 },
+    shadowOffset: { width: 0, height: 18 },
     shadowOpacity: 0.16,
     shadowRadius: 22,
     elevation: 14,
@@ -24854,6 +25608,14 @@ const styles = StyleSheet.create({
     gap: 13,
     padding: 16,
   },
+  duelJudgePickerModalPanel: {
+    gap: 13,
+    maxHeight: '72%',
+    padding: 16,
+  },
+  duelJudgePickerModalList: {
+    maxHeight: 320,
+  },
   duelDeadlinePickerHeader: {
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -24961,6 +25723,31 @@ const styles = StyleSheet.create({
   },
   duelStakeField: {
     width: '100%',
+  },
+  duelStakeInputRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    width: '100%',
+  },
+  duelStakeInput: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 52,
+  },
+  duelStakeCoinBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 52,
+    height: 52,
+    borderColor: '#F2D9B1',
+    borderRadius: 13,
+    borderWidth: 1,
+    backgroundColor: '#FFF6DB',
+  },
+  duelStakeCoinImage: {
+    width: 44,
+    height: 44,
   },
   duelModalTextarea: {
     width: '100%',
