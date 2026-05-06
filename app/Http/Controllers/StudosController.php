@@ -101,7 +101,6 @@ class StudosController extends Controller
         return response()->json([
             'ok' => true,
             'service' => 'studos-laravel',
-            'database' => config('database.connections.mysql.database'),
         ]);
     }
 
