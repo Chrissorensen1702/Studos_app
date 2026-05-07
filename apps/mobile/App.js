@@ -80,6 +80,8 @@ const CHAT_LIST_HEADER_CLAMP_DISTANCE = 14;
 const CHAT_LIST_SEARCH_COLLAPSE_DISTANCE = 58;
 const CHAT_LIST_HEADER_EXPANDED_HEIGHT = APP_SCREEN_TOP_PADDING + CHAT_LIST_HEADER_SCROLL_PADDING_TOP;
 const CHAT_LIST_HEADER_COLLAPSED_HEIGHT = CHAT_LIST_HEADER_EXPANDED_HEIGHT - CHAT_LIST_SEARCH_COLLAPSE_DISTANCE;
+const WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE = 96;
+const WALLS_HEADER_CONTROLS_EXPANDED_HEIGHT = 93;
 const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
 const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
   const progress = index / 39;
@@ -1820,6 +1822,7 @@ export default function App() {
   );
   const appContentDetached = activeTab === 'chat'
     || activeTab === 'calendar'
+    || activeTab === 'walls'
     || activeTab === 'overview'
     || activeTab === 'earnCaps'
     || activeTab === 'classBattle'
@@ -2939,6 +2942,8 @@ export default function App() {
                 styles.appScreen,
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
+                activeTab === 'walls' ? styles.appScreenDetached : null,
+                activeTab === 'walls' ? styles.appScreenWallsDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
                 activeTab === 'classmates' ? styles.appScreenCrewDetached : null,
                 activeTab === 'emergencyContacts' ? styles.appScreenCrewDetached : null,
@@ -8803,6 +8808,18 @@ const WALLS_VISIBILITY = {
   public: 'public',
 };
 
+const WALLS_ALBUM_FILTERS = [
+  { id: 'all', label: 'Alle' },
+  { id: WALLS_VISIBILITY.public, label: 'Fælles' },
+  { id: WALLS_VISIBILITY.private, label: 'Private' },
+];
+
+const WALLS_ALBUM_SORT_OPTIONS = [
+  { id: 'recent', label: 'Seneste', icon: 'time-outline' },
+  { id: 'photos', label: 'Flest billeder', icon: 'images-outline' },
+  { id: 'az', label: 'A-Z', icon: 'text-outline' },
+];
+
 const WALLS_AUDIENCE = {
   class: 'class',
   crew: 'crew',
@@ -8815,7 +8832,19 @@ const WALLS_PERMISSION = {
   addDelete: 'addDelete',
 };
 
-function WallsCreateOverlay({ activeMember, initialGallery, onClose, onSave, schoolClass, sessionToken, visible }) {
+function canMemberAddGalleryPhoto(gallery, activeMember) {
+  if (!gallery || !activeMember) return false;
+  if (String(gallery.creatorId ?? '') === String(activeMember.id ?? '')) return true;
+
+  return gallery.visibility === WALLS_VISIBILITY.public
+    && [
+      WALLS_PERMISSION.add,
+      WALLS_PERMISSION.addDelete,
+      'add_delete',
+    ].includes(gallery.permission ?? '');
+}
+
+function WallsCreateOverlay({ activeMember, existingGalleries = [], initialGallery, onClose, onSave, schoolClass, sessionToken, visible }) {
   const isEditing = Boolean(initialGallery);
 
   // Swipe-back animation state
@@ -8858,6 +8887,25 @@ function WallsCreateOverlay({ activeMember, initialGallery, onClose, onSave, sch
       || (m.lastName ?? '').toLowerCase().includes(q),
     );
   }, [activeMembers, memberPickerSearch]);
+  const normalizedGalleryName = useMemo(
+    () => name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('da-DK'),
+    [name],
+  );
+  const duplicateNameWarning = useMemo(() => {
+    if (!normalizedGalleryName) return '';
+
+    const currentGalleryId = initialGallery?.id ? String(initialGallery.id) : null;
+    const hasDuplicate = (existingGalleries ?? []).some((gallery) => {
+      if (currentGalleryId && String(gallery.id) === currentGalleryId) return false;
+
+      return String(gallery.name ?? '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLocaleLowerCase('da-DK') === normalizedGalleryName;
+    });
+
+    return hasDuplicate ? 'Der findes allerede et album med det navn. Du kan stadig gemme.' : '';
+  }, [existingGalleries, initialGallery?.id, normalizedGalleryName]);
 
   const resetForm = useCallback(() => {
     setName('');
@@ -9157,6 +9205,12 @@ function WallsCreateOverlay({ activeMember, initialGallery, onClose, onSave, sch
                       value={name}
                     />
                   </View>
+                  {duplicateNameWarning ? (
+                    <View style={styles.wallsDuplicateNameWarning}>
+                      <Ionicons name="alert-circle-outline" size={15} color="#9A6A13" />
+                      <Text style={styles.wallsDuplicateNameWarningText}>{duplicateNameWarning}</Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 {/* Synlighed */}
@@ -9437,7 +9491,17 @@ function WallsCreateOverlay({ activeMember, initialGallery, onClose, onSave, sch
   );
 }
 
-function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, sessionToken, visible }) {
+function WallsAlbumScreen({
+  activeMember,
+  gallery,
+  onClose,
+  onPhotoDeleted,
+  onPhotoUploaded,
+  schoolClass,
+  sessionToken,
+  uploadRequestId = 0,
+  visible,
+}) {
   const wallsDragX = useRef(new Animated.Value(APP_WINDOW_WIDTH)).current;
   const wallsWidthRef = useRef(APP_WINDOW_WIDTH);
   const wallsTouchStartRef = useRef(null);
@@ -9459,11 +9523,10 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
   const [reportConfirmPhoto, setReportConfirmPhoto] = useState(null);
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState('');
+  const lastHandledUploadRequestRef = useRef(null);
 
   const isOwner = gallery && String(gallery.creatorId) === String(activeMember?.id);
-  const canAddPhoto = isOwner || (
-    gallery?.visibility === 'public' && ['add', 'add_delete'].includes(gallery?.permission ?? '')
-  );
+  const canAddPhoto = canMemberAddGalleryPhoto(gallery, activeMember);
   const canDeletePhoto = useCallback((photo) => {
     if (!photo || !activeMember) return false;
     if (String(photo.memberId) === String(activeMember.id)) return true;
@@ -9580,6 +9643,12 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
 
   const uploadPhoto = useCallback(async () => {
     setUploadError('');
+    if (!canAddPhoto || !gallery?.id) {
+      setUploadError('Du har ikke adgang til at uploade billeder i dette album.');
+      return;
+    }
+    if (uploading) return;
+
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { setUploadError('Giv adgang til dit fotobibliotek i indstillinger.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -9596,12 +9665,27 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
         body: JSON.stringify({ imageData: `data:${mimeType};base64,${asset.base64}` }),
       });
       setPhotos((prev) => [data.photo, ...prev]);
+      onPhotoUploaded?.(gallery.id, data.photo);
     } catch (err) {
       setUploadError(err?.message || 'Billedet kunne ikke uploades. Prøv igen.');
     } finally {
       setUploading(false);
     }
-  }, [gallery?.id, sessionToken]);
+  }, [canAddPhoto, gallery?.id, onPhotoUploaded, sessionToken, uploading]);
+
+  useEffect(() => {
+    if (!visible || !gallery?.id || !uploadRequestId) return;
+
+    const requestKey = `${gallery.id}:${uploadRequestId}`;
+    if (lastHandledUploadRequestRef.current === requestKey) return;
+    lastHandledUploadRequestRef.current = requestKey;
+
+    const uploadTimer = setTimeout(() => {
+      uploadPhoto();
+    }, 320);
+
+    return () => clearTimeout(uploadTimer);
+  }, [gallery?.id, uploadPhoto, uploadRequestId, visible]);
 
   const handleDeletePhoto = useCallback(async () => {
     if (!deleteConfirmPhoto) return;
@@ -9610,7 +9694,9 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
       await apiFetch(`/gallery-photos/${encodeURIComponent(deleteConfirmPhoto.id)}`, {
         authToken: sessionToken, method: 'DELETE',
       });
-      setPhotos((prev) => prev.filter((p) => p.id !== deleteConfirmPhoto.id));
+      const nextPhotos = photos.filter((p) => p.id !== deleteConfirmPhoto.id);
+      setPhotos(nextPhotos);
+      onPhotoDeleted?.(gallery?.id, deleteConfirmPhoto.id, nextPhotos.slice(0, 4));
       if (viewerPhoto?.id === deleteConfirmPhoto.id) closeViewer();
       setDeleteConfirmPhoto(null);
     } catch (err) {
@@ -9618,7 +9704,7 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
     } finally {
       setDeleting(false);
     }
-  }, [deleteConfirmPhoto, sessionToken, viewerPhoto, closeViewer]);
+  }, [closeViewer, deleteConfirmPhoto, gallery?.id, onPhotoDeleted, photos, sessionToken, viewerPhoto]);
 
   const handleReportPhoto = useCallback(async () => {
     if (!reportConfirmPhoto) return;
@@ -9901,9 +9987,93 @@ function WallsAlbumScreen({ activeMember, gallery, onClose, schoolClass, session
   );
 }
 
+function WallsGalleryFallbackCover() {
+  return (
+    <View style={styles.wallsCardFallbackCover}>
+      <View style={styles.wallsCardFallbackRibbon} />
+      <View style={styles.wallsCardFallbackBackplate} />
+      <View style={styles.wallsCardFallbackFace}>
+        <Text style={styles.wallsCardFallbackBrand}>Studos</Text>
+        <View style={styles.wallsCardFallbackLines}>
+          <View style={[styles.wallsCardFallbackLine, styles.wallsCardFallbackLineRed]} />
+          <View style={[styles.wallsCardFallbackLine, styles.wallsCardFallbackLineBlue]} />
+          <View style={[styles.wallsCardFallbackLine, styles.wallsCardFallbackLineYellow]} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function WallsGalleryPreviewCover({ gallery }) {
+  const previewPhotos = Array.isArray(gallery?.previewPhotos)
+    ? gallery.previewPhotos.filter((photo) => photo?.imageUri).slice(0, 4)
+    : [];
+
+  if (gallery?.coverUri) {
+    return (
+      <Image
+        accessibilityIgnoresInvertColors
+        resizeMode="cover"
+        source={{ uri: gallery.coverUri }}
+        style={styles.wallsCardCoverImage}
+      />
+    );
+  }
+
+  if (previewPhotos.length === 0) {
+    return <WallsGalleryFallbackCover />;
+  }
+
+  if (previewPhotos.length === 1) {
+    return (
+      <Image
+        accessibilityIgnoresInvertColors
+        resizeMode="cover"
+        source={{ uri: previewPhotos[0].imageUri }}
+        style={styles.wallsCardCoverImage}
+      />
+    );
+  }
+
+  if (previewPhotos.length < 4) {
+    return (
+      <View style={styles.wallsCardPreviewStrip}>
+        {previewPhotos.map((photo) => (
+          <Image
+            accessibilityIgnoresInvertColors
+            key={photo.id ?? photo.imageUri}
+            resizeMode="cover"
+            source={{ uri: photo.imageUri }}
+            style={styles.wallsCardPreviewStripImage}
+          />
+        ))}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.wallsCardPreviewGrid}>
+      {[previewPhotos.slice(0, 2), previewPhotos.slice(2, 4)].map((row, rowIndex) => (
+        <View key={`row-${rowIndex}`} style={styles.wallsCardPreviewGridRow}>
+          {row.map((photo) => (
+            <Image
+              accessibilityIgnoresInvertColors
+              key={photo.id ?? photo.imageUri}
+              resizeMode="cover"
+              source={{ uri: photo.imageUri }}
+              style={styles.wallsCardPreviewGridImage}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function WallsGalleryCard({ gallery, longPressHandledRef, onLongPress, onPress }) {
   const isPrivate = gallery.visibility === WALLS_VISIBILITY.private;
   const photoCount = gallery.photoCount ?? 0;
+  const visibilityLabel = isPrivate ? 'Privat' : 'Fælles';
   const scale = useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -9943,31 +10113,23 @@ function WallsGalleryCard({ gallery, longPressHandledRef, onLongPress, onPress }
         style={styles.wallsCard}
       >
         <View style={styles.wallsCardCover}>
-          {gallery.coverUri ? (
-            <Image
-              accessibilityIgnoresInvertColors
-              resizeMode="cover"
-              source={{ uri: gallery.coverUri }}
-              style={styles.wallsCardCoverImage}
-            />
-          ) : (
-            <View style={styles.wallsCardCoverPlaceholder}>
-              <Ionicons name="images-outline" size={28} color="#b0c4be" />
+          <WallsGalleryPreviewCover gallery={gallery} />
+          <View style={styles.wallsCardMeta}>
+            <Text numberOfLines={1} style={styles.wallsCardName}>{gallery.name}</Text>
+            <View style={styles.wallsCardDetailRow}>
+              <Text numberOfLines={1} style={styles.wallsCardCount}>
+                {photoCount === 0 ? 'Tomt' : `${photoCount} ${photoCount === 1 ? 'billede' : 'billeder'}`}
+              </Text>
+              <Text
+                style={[
+                  styles.wallsCardVisibility,
+                  !isPrivate ? styles.wallsCardVisibilityPublic : null,
+                ]}
+              >
+                {visibilityLabel}
+              </Text>
             </View>
-          )}
-          <View style={styles.wallsCardBadge}>
-            <Ionicons
-              name={isPrivate ? 'lock-closed' : 'earth'}
-              size={11}
-              color={STUDOS_THEME.ink}
-            />
           </View>
-        </View>
-        <View style={styles.wallsCardMeta}>
-          <Text numberOfLines={1} style={styles.wallsCardName}>{gallery.name}</Text>
-          <Text style={styles.wallsCardCount}>
-            {photoCount === 0 ? 'Tomt' : `${photoCount} ${photoCount === 1 ? 'billede' : 'billeder'}`}
-          </Text>
         </View>
       </Pressable>
     </Animated.View>
@@ -9977,8 +10139,10 @@ function WallsGalleryCard({ gallery, longPressHandledRef, onLongPress, onPress }
 function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedGallery, setSelectedGallery] = useState(null);
+  const [albumUploadRequestId, setAlbumUploadRequestId] = useState(0);
   const [editingGallery, setEditingGallery] = useState(null);
   const [actionGallery, setActionGallery] = useState(null);
+  const [aboutGallery, setAboutGallery] = useState(null);
   const [deleteConfirmGallery, setDeleteConfirmGallery] = useState(null);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -9986,11 +10150,124 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState('');
   const [galleries, setGalleries] = useState([]);
+  const [albumFilter, setAlbumFilter] = useState('all');
+  const [albumSort, setAlbumSort] = useState('recent');
+  const [draftAlbumSort, setDraftAlbumSort] = useState('recent');
+  const [filterModalOpen, setFilterModalOpen] = useState(false);
+  const [albumSearch, setAlbumSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [scrolled, setScrolled] = useState(false);
+  const wallsScrollY = useRef(new Animated.Value(0)).current;
   const longPressHandledRef = useRef(false);
+  const wallsHeaderScrolledRef = useRef(false);
   const isEmpty = galleries.length === 0 && !loading;
+  const categoryFilteredGalleries = useMemo(() => {
+    if (albumFilter === WALLS_VISIBILITY.private) {
+      return galleries.filter((gallery) => gallery.visibility === WALLS_VISIBILITY.private);
+    }
+    if (albumFilter === WALLS_VISIBILITY.public) {
+      return galleries.filter((gallery) => gallery.visibility === WALLS_VISIBILITY.public);
+    }
+    return galleries;
+  }, [albumFilter, galleries]);
+  const normalizedAlbumSearch = albumSearch.trim().toLocaleLowerCase('da-DK');
+  const searchFilteredGalleries = useMemo(() => {
+    if (!normalizedAlbumSearch) return categoryFilteredGalleries;
+
+    return categoryFilteredGalleries.filter((gallery) =>
+      String(gallery.name ?? '').toLocaleLowerCase('da-DK').includes(normalizedAlbumSearch),
+    );
+  }, [categoryFilteredGalleries, normalizedAlbumSearch]);
+  const filteredGalleries = useMemo(() => {
+    const galleryTimestamp = (gallery) => {
+      const value = Date.parse(gallery.updatedAt ?? gallery.createdAt ?? '');
+      return Number.isFinite(value) ? value : 0;
+    };
+
+    return [...searchFilteredGalleries].sort((left, right) => {
+      if (albumSort === 'photos') {
+        const photoDiff = (right.photoCount ?? 0) - (left.photoCount ?? 0);
+        if (photoDiff !== 0) return photoDiff;
+        return galleryTimestamp(right) - galleryTimestamp(left);
+      }
+
+      if (albumSort === 'az') {
+        const nameDiff = String(left.name ?? '').localeCompare(String(right.name ?? ''), 'da', { sensitivity: 'base' });
+        if (nameDiff !== 0) return nameDiff;
+        return galleryTimestamp(right) - galleryTimestamp(left);
+      }
+
+      return galleryTimestamp(right) - galleryTimestamp(left);
+    });
+  }, [albumSort, searchFilteredGalleries]);
+  const hasAdvancedAlbumFilter = albumSort !== 'recent';
+  const hasDraftAlbumFilter = draftAlbumSort !== 'recent';
+  const isFilterEmpty = !isEmpty && !loading && !loadError && !normalizedAlbumSearch && categoryFilteredGalleries.length === 0;
+  const isSearchEmpty = !isEmpty && !loading && !loadError && Boolean(normalizedAlbumSearch) && filteredGalleries.length === 0;
+  const filterEmptyTitle = albumFilter === WALLS_VISIBILITY.private
+    ? 'Ingen private album'
+    : 'Ingen fælles album';
+  const filterEmptyBody = albumFilter === WALLS_VISIBILITY.private
+    ? 'Private album vises her, når du opretter et kun for dig eller udvalgte personer.'
+    : 'Fælles album vises her, når der er album delt med klassen eller en gruppe.';
+  const searchEmptyBody = albumFilter === 'all'
+    ? 'Prøv et andet søgeord, eller opret et nyt album med + øverst til højre.'
+    : 'Prøv et andet søgeord, eller skift kategori for at søge i flere album.';
+  const galleryPermissionLabel = (gallery) => {
+    if (gallery?.visibility === WALLS_VISIBILITY.private) return 'Kun ejer';
+    if (gallery?.permission === 'add' || gallery?.permission === WALLS_PERMISSION.add) return 'Må tilføje';
+    if (gallery?.permission === 'add_delete' || gallery?.permission === WALLS_PERMISSION.addDelete) return 'Må tilføje og slette';
+    return 'Må kun se';
+  };
+  const galleryOwnerNamesById = useMemo(() => {
+    const membersById = new Map((schoolClass?.members ?? []).map((member) => [String(member.id), member]));
+
+    return galleries.reduce((names, gallery) => {
+      const member = membersById.get(String(gallery.creatorId ?? ''));
+      const fullName = [member?.firstName, member?.lastName].filter(Boolean).join(' ').trim();
+      const fallbackName = member?.displayName || gallery.creatorName || '';
+
+      if (fullName || fallbackName) {
+        names[String(gallery.id)] = fullName || fallbackName;
+      }
+
+      return names;
+    }, {});
+  }, [galleries, schoolClass?.members]);
+  const wallsHeaderControlsStyle = useMemo(() => ({
+    height: wallsScrollY.interpolate({
+      inputRange: [0, WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE],
+      outputRange: [WALLS_HEADER_CONTROLS_EXPANDED_HEIGHT, 0],
+      extrapolate: 'clamp',
+    }),
+    opacity: wallsScrollY.interpolate({
+      inputRange: [0, 42, WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE],
+      outputRange: [1, 0.55, 0],
+      extrapolate: 'clamp',
+    }),
+    transform: [
+      {
+        translateY: wallsScrollY.interpolate({
+          inputRange: [0, WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE],
+          outputRange: [0, -16],
+          extrapolate: 'clamp',
+        }),
+      },
+    ],
+  }), [wallsScrollY]);
+  const handleWallsScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { y: wallsScrollY } } }],
+    {
+      listener: (event) => {
+        const nextScrolled = event.nativeEvent.contentOffset.y > 6;
+        if (wallsHeaderScrolledRef.current === nextScrolled) return;
+        wallsHeaderScrolledRef.current = nextScrolled;
+        setScrolled(nextScrolled);
+      },
+      useNativeDriver: false,
+    },
+  ), [wallsScrollY]);
 
   useEffect(() => {
     if (!sessionToken) return;
@@ -10016,6 +10293,57 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
     setGalleries((prev) => prev.map((g) => g.id === updated.id ? updated : g));
   }, []);
 
+  const handleGalleryPhotoUploaded = useCallback((galleryId, photo) => {
+    if (!galleryId || !photo) return;
+
+    const updateGallery = (gallery) => {
+      const currentPhotoCount = Number(gallery.photoCount ?? 0);
+      const currentPreviewPhotos = Array.isArray(gallery.previewPhotos) ? gallery.previewPhotos : [];
+
+      return {
+        ...gallery,
+        previewPhotos: [
+          photo,
+          ...currentPreviewPhotos.filter((previewPhoto) =>
+            String(previewPhoto?.id ?? previewPhoto?.imageUri ?? '') !== String(photo.id ?? photo.imageUri ?? ''),
+          ),
+        ].slice(0, 4),
+        photoCount: Number.isFinite(currentPhotoCount) ? currentPhotoCount + 1 : 1,
+        updatedAt: photo.createdAt ?? new Date().toISOString(),
+      };
+    };
+
+    setGalleries((prev) => prev.map((gallery) =>
+      String(gallery.id) === String(galleryId) ? updateGallery(gallery) : gallery,
+    ));
+    setSelectedGallery((current) =>
+      current && String(current.id) === String(galleryId) ? updateGallery(current) : current,
+    );
+  }, []);
+
+  const handleGalleryPhotoDeleted = useCallback((galleryId, photoId, nextPreviewPhotos = []) => {
+    if (!galleryId || !photoId) return;
+
+    const updateGallery = (gallery) => {
+      const currentPhotoCount = Number(gallery.photoCount ?? 0);
+      const safePhotoCount = Number.isFinite(currentPhotoCount) ? Math.max(currentPhotoCount - 1, 0) : 0;
+
+      return {
+        ...gallery,
+        previewPhotos: Array.isArray(nextPreviewPhotos) ? nextPreviewPhotos.slice(0, 4) : [],
+        photoCount: safePhotoCount,
+        updatedAt: new Date().toISOString(),
+      };
+    };
+
+    setGalleries((prev) => prev.map((gallery) =>
+      String(gallery.id) === String(galleryId) ? updateGallery(gallery) : gallery,
+    ));
+    setSelectedGallery((current) =>
+      current && String(current.id) === String(galleryId) ? updateGallery(current) : current,
+    );
+  }, []);
+
   const openActionMenu = useCallback((gallery) => {
     longPressHandledRef.current = true;
     setTimeout(() => { longPressHandledRef.current = false; }, 450);
@@ -10025,6 +10353,25 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   const closeActionMenu = useCallback(() => setActionGallery(null), []);
 
   const isOwner = (gallery) => String(gallery.creatorId) === String(activeMember?.id);
+  const canUploadToGallery = useCallback((gallery) =>
+    canMemberAddGalleryPhoto(gallery, activeMember),
+  [activeMember]);
+  const openAlbumSortModal = useCallback(() => {
+    setDraftAlbumSort(albumSort);
+    setFilterModalOpen(true);
+  }, [albumSort]);
+  const closeAlbumSortModal = useCallback(() => {
+    setDraftAlbumSort(albumSort);
+    setFilterModalOpen(false);
+  }, [albumSort]);
+  const applyAlbumSort = useCallback(() => {
+    setAlbumSort(draftAlbumSort);
+    setFilterModalOpen(false);
+  }, [draftAlbumSort]);
+  const resetAlbumSort = useCallback(() => {
+    setAlbumSort('recent');
+    setDraftAlbumSort('recent');
+  }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteConfirmGallery) return;
@@ -10066,6 +10413,20 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   }, [reportConfirmGallery, sessionToken]);
 
   const wallsActions = actionGallery ? [
+    {
+      type: 'about',
+      label: 'Om albummet',
+      icon: 'information-circle-outline',
+      tone: 'calm',
+    },
+    ...(canUploadToGallery(actionGallery) ? [
+      {
+        type: 'upload',
+        label: 'Upload billede',
+        icon: 'cloud-upload-outline',
+        tone: 'success',
+      },
+    ] : []),
     ...(isOwner(actionGallery) ? [
       {
         type: 'edit',
@@ -10092,7 +10453,12 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   const selectWallsAction = useCallback((type) => {
     const gallery = actionGallery;
     closeActionMenu();
-    if (type === 'edit') {
+    if (type === 'about') {
+      setAboutGallery(gallery);
+    } else if (type === 'upload') {
+      setSelectedGallery(gallery);
+      setAlbumUploadRequestId((current) => current + 1);
+    } else if (type === 'edit') {
       setEditingGallery(gallery);
     } else if (type === 'delete') {
       setDeleteConfirmGallery(gallery);
@@ -10115,18 +10481,106 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
               pressed ? styles.footerItemPressed : null,
             ]}
           >
-            <Ionicons name="add" size={23} color={STUDOS_THEME.ink} />
+            <Ionicons name="add" size={23} color="#1F9D55" />
           </Pressable>
         </View>
         <Text style={styles.wallsSubtitle}>Hold nede på et album for at redigere, slette eller rapportere denne.</Text>
+        <Animated.View style={[styles.wallsHeaderControls, wallsHeaderControlsStyle]}>
+          <View style={styles.wallsAlbumFilterRow}>
+            <View style={styles.wallsAlbumFilterBar}>
+              {WALLS_ALBUM_FILTERS.map((filter) => {
+                const active = albumFilter === filter.id;
+                return (
+                  <Pressable
+                    accessibilityLabel={filter.label}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    key={filter.id}
+                    onPress={() => setAlbumFilter(filter.id)}
+                    style={({ pressed }) => [
+                      styles.wallsAlbumFilterOption,
+                      active ? styles.wallsAlbumFilterOptionActive : null,
+                      pressed ? styles.wallsAlbumFilterOptionPressed : null,
+                    ]}
+                  >
+                    <Text
+                      adjustsFontSizeToFit
+                      numberOfLines={1}
+                      style={[
+                        styles.wallsAlbumFilterText,
+                        active ? styles.wallsAlbumFilterTextActive : null,
+                      ]}
+                    >
+                      {filter.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable
+              accessibilityHint="Sorter album"
+              accessibilityLabel="Sortering"
+              accessibilityRole="button"
+              onPress={openAlbumSortModal}
+              style={({ pressed }) => [
+                styles.wallsAlbumAdvancedFilterButton,
+                hasAdvancedAlbumFilter ? styles.wallsAlbumAdvancedFilterButtonActive : null,
+                pressed ? styles.wallsAlbumFilterOptionPressed : null,
+              ]}
+            >
+              <Ionicons name="funnel-outline" size={17} color={STUDOS_THEME.red} />
+              {hasAdvancedAlbumFilter ? <View style={styles.wallsAlbumAdvancedFilterDot} /> : null}
+            </Pressable>
+            {hasAdvancedAlbumFilter ? (
+              <Pressable
+                accessibilityLabel="Nulstil sortering"
+                accessibilityRole="button"
+                onPress={resetAlbumSort}
+                style={({ pressed }) => [
+                  styles.wallsAlbumFilterResetButton,
+                  pressed ? styles.wallsAlbumFilterOptionPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={16} color={STUDOS_THEME.red} />
+              </Pressable>
+            ) : null}
+          </View>
+          <View style={styles.wallsAlbumSearchField}>
+            <Ionicons name="search" size={16} color="#65748b" />
+            <TextInput
+              accessibilityLabel="Søg album"
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={setAlbumSearch}
+              placeholder="Søg album"
+              placeholderTextColor="#8a9bb0"
+              returnKeyType="search"
+              style={styles.wallsAlbumSearchInput}
+              value={albumSearch}
+            />
+            {albumSearch ? (
+              <Pressable
+                accessibilityLabel="Ryd søgning"
+                accessibilityRole="button"
+                onPress={() => setAlbumSearch('')}
+                style={({ pressed }) => [
+                  styles.wallsAlbumSearchClear,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close-circle" size={18} color="#8a9bb0" />
+              </Pressable>
+            ) : null}
+          </View>
+        </Animated.View>
       </View>
 
-      <ScrollView
+      <Animated.ScrollView
         contentContainerStyle={[
           styles.wallsScrollContent,
-          (isEmpty || loading || loadError) ? styles.wallsScrollContentEmpty : null,
+          (isEmpty || isFilterEmpty || isSearchEmpty || loading || loadError) ? styles.wallsScrollContentEmpty : null,
         ]}
-        onScroll={(e) => setScrolled(e.nativeEvent.contentOffset.y > 6)}
+        onScroll={handleWallsScroll}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
       >
@@ -10151,9 +10605,21 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
               Tryk på + øverst til højre for at oprette dit første galleri. Du kan vælge om det er privat eller deles med klassen.
             </Text>
           </View>
+        ) : isFilterEmpty ? (
+          <View style={styles.wallsEmptyState}>
+            <Ionicons name="images-outline" size={52} color="#b0c4be" />
+            <Text style={styles.wallsEmptyTitle}>{filterEmptyTitle}</Text>
+            <Text style={styles.wallsEmptyBody}>{filterEmptyBody}</Text>
+          </View>
+        ) : isSearchEmpty ? (
+          <View style={styles.wallsEmptyState}>
+            <Ionicons name="search-outline" size={52} color="#b0c4be" />
+            <Text style={styles.wallsEmptyTitle}>Ingen match</Text>
+            <Text style={styles.wallsEmptyBody}>{searchEmptyBody}</Text>
+          </View>
         ) : (
           <View style={styles.wallsGrid}>
-            {galleries.map((g) => (
+            {filteredGalleries.map((g) => (
               <WallsGalleryCard
                 key={g.id}
                 gallery={g}
@@ -10164,11 +10630,12 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
             ))}
           </View>
         )}
-      </ScrollView>
+      </Animated.ScrollView>
 
       {/* Opret */}
       <WallsCreateOverlay
         activeMember={activeMember}
+        existingGalleries={galleries}
         onClose={() => setCreateOpen(false)}
         onSave={handleCreate}
         schoolClass={schoolClass}
@@ -10179,6 +10646,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
       {/* Rediger */}
       <WallsCreateOverlay
         activeMember={activeMember}
+        existingGalleries={galleries}
         initialGallery={editingGallery}
         onClose={() => setEditingGallery(null)}
         onSave={handleEdit}
@@ -10192,10 +10660,122 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
         activeMember={activeMember}
         gallery={selectedGallery}
         onClose={() => setSelectedGallery(null)}
+        onPhotoDeleted={handleGalleryPhotoDeleted}
+        onPhotoUploaded={handleGalleryPhotoUploaded}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
+        uploadRequestId={albumUploadRequestId}
         visible={Boolean(selectedGallery)}
       />
+
+      {/* Sortering */}
+      <Modal
+        animationType="fade"
+        onRequestClose={closeAlbumSortModal}
+        transparent
+        visible={filterModalOpen}
+      >
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
+          <Pressable
+            accessibilityLabel="Luk sortering"
+            style={styles.chatModalBackdrop}
+            onPress={closeAlbumSortModal}
+          />
+          <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatConversationActionMenuHeading}>
+                <Text style={styles.chatModalKicker}>Galleri</Text>
+                <Text style={styles.chatModalTitle}>Sorter album</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={closeAlbumSortModal}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={20} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.wallsFilterModalSection}>
+              <Text style={styles.wallsFilterModalLabel}>Sortering</Text>
+              <View style={styles.chatConversationActionMenuList}>
+                {WALLS_ALBUM_SORT_OPTIONS.map((option) => {
+                  const active = draftAlbumSort === option.id;
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={option.label}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      key={option.id}
+                      onPress={() => setDraftAlbumSort(option.id)}
+                      style={({ pressed }) => [
+                        styles.chatConversationActionMenuItem,
+                        active ? styles.wallsFilterModalItemActive : null,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <View style={[
+                        styles.chatConversationActionMenuIcon,
+                        active ? styles.chatConversationActionMenuIconWarning : null,
+                      ]}>
+                        <Ionicons
+                          name={option.icon}
+                          size={18}
+                          color={active ? STUDOS_THEME.ink : '#8a9bb0'}
+                        />
+                      </View>
+                      <Text style={[
+                        styles.chatConversationActionMenuText,
+                        active ? styles.wallsFilterModalTextActive : null,
+                      ]}>
+                        {option.label}
+                      </Text>
+                      {active ? (
+                        <Ionicons name="checkmark-circle" size={20} color={STUDOS_THEME.red} />
+                      ) : (
+                        <Ionicons name="ellipse-outline" size={20} color="#a4afbf" />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.wallsFilterModalActions}>
+              {hasDraftAlbumFilter ? (
+                <Pressable
+                  accessibilityLabel="Nulstil sortering"
+                  accessibilityRole="button"
+                  onPress={() => setDraftAlbumSort('recent')}
+                  style={({ pressed }) => [
+                    styles.wallsFilterResetButton,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Text style={styles.wallsFilterResetButtonText}>Nulstil</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityLabel="Anvend sortering"
+                accessibilityRole="button"
+                onPress={applyAlbumSort}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.wallsFilterApplyButton,
+                  pressed ? styles.primaryButtonPressed : null,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>Anvend</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Action menu */}
       <Modal
@@ -10239,6 +10819,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
                   onPress={() => selectWallsAction(action.type)}
                   style={({ pressed }) => [
                     styles.chatConversationActionMenuItem,
+                    action.tone === 'success' ? styles.wallsActionMenuItemSuccess : null,
                     pressed ? styles.footerItemPressed : null,
                   ]}
                 >
@@ -10247,6 +10828,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
                     action.tone === 'danger' ? styles.chatConversationActionMenuIconDanger : null,
                     action.tone === 'warning' ? styles.chatConversationActionMenuIconWarning : null,
                     action.tone === 'calm' ? styles.chatConversationActionMenuIconCalm : null,
+                    action.tone === 'success' ? styles.chatConversationActionMenuIconSuccess : null,
                   ]}>
                     <Ionicons
                       name={action.icon}
@@ -10259,6 +10841,60 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
                 </Pressable>
               ))}
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Om albummet */}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setAboutGallery(null)}
+        transparent
+        visible={Boolean(aboutGallery)}
+      >
+        <View style={[styles.chatModalRoot, styles.luckyAddPlayerModalRoot]}>
+          <Pressable
+            accessibilityLabel="Luk"
+            style={styles.chatModalBackdrop}
+            onPress={() => setAboutGallery(null)}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <Ionicons name="information-circle-outline" size={34} color={STUDOS_THEME.blue} />
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+              Om albummet
+            </Text>
+            <View style={styles.wallsAboutList}>
+              <View style={styles.wallsAboutRow}>
+                <Text style={styles.wallsAboutLabel}>Ejer</Text>
+                <Text numberOfLines={1} style={styles.wallsAboutValue}>
+                  {galleryOwnerNamesById[String(aboutGallery?.id ?? '')] ?? 'Ukendt'}
+                </Text>
+              </View>
+              <View style={styles.wallsAboutRow}>
+                <Text style={styles.wallsAboutLabel}>Synlighed</Text>
+                <Text numberOfLines={1} style={styles.wallsAboutValue}>
+                  {aboutGallery?.visibility === WALLS_VISIBILITY.private ? 'Privat' : 'Fælles'}
+                </Text>
+              </View>
+              <View style={styles.wallsAboutRow}>
+                <Text style={styles.wallsAboutLabel}>Tilladelse</Text>
+                <Text numberOfLines={1} style={styles.wallsAboutValue}>
+                  {galleryPermissionLabel(aboutGallery)}
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk"
+              accessibilityRole="button"
+              onPress={() => setAboutGallery(null)}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                styles.wallsAboutCloseButton,
+                pressed ? styles.primaryButtonPressed : null,
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>Luk</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -18337,6 +18973,9 @@ const styles = StyleSheet.create({
   appScreenDetached: {
     flex: 1,
   },
+  appScreenWallsDetached: {
+    paddingBottom: 0,
+  },
   appScreenCalendarUnderFooter: {
     marginBottom: -APP_FOOTER_HEIGHT,
     paddingBottom: 0,
@@ -20300,10 +20939,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: STUDOS_THEME.yellow,
     shadowColor: '#D9A83B',
-    shadowOffset: { width: 0, height: 7 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.34,
+    shadowRadius: 14,
+    elevation: 8,
   },
   calendarEventList: {
     gap: 12,
@@ -23976,6 +24615,25 @@ const styles = StyleSheet.create({
   wallsOverlayError: {
     marginTop: -8,
   },
+  wallsDuplicateNameWarning: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    borderColor: '#F2CF79',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8DF',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  wallsDuplicateNameWarningText: {
+    color: '#76530D',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
   wallsOverlayNextButton: {
     marginTop: 4,
   },
@@ -24237,6 +24895,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: STUDOS_THEME.red,
   },
+  wallsAboutList: {
+    alignSelf: 'stretch',
+    gap: 8,
+  },
+  wallsAboutRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  wallsAboutLabel: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    width: 74,
+  },
+  wallsAboutValue: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'right',
+  },
+  wallsAboutCloseButton: {
+    alignSelf: 'stretch',
+    minWidth: 190,
+  },
   wallsFloatingHeaderScrolled: {
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 9 },
@@ -24252,8 +24944,166 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 4,
   },
+  wallsHeaderControls: {
+    overflow: 'hidden',
+  },
+  wallsAlbumFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  wallsAlbumFilterBar: {
+    flexDirection: 'row',
+    flex: 1,
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: '#E3EFEC',
+    padding: 4,
+  },
+  wallsAlbumFilterOption: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    minHeight: 28,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+  },
+  wallsAlbumFilterOptionActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  wallsAlbumFilterOptionPressed: {
+    opacity: 0.72,
+  },
+  wallsAlbumAdvancedFilterButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E3EFEC',
+  },
+  wallsAlbumAdvancedFilterButtonActive: {
+    backgroundColor: '#D9E9E5',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  wallsAlbumAdvancedFilterDot: {
+    position: 'absolute',
+    top: 7,
+    right: 7,
+    width: 7,
+    height: 7,
+    borderColor: '#FFFFFF',
+    borderRadius: 4,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  wallsAlbumFilterResetButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#E3EFEC',
+  },
+  wallsFilterModalSection: {
+    gap: 8,
+  },
+  wallsFilterModalLabel: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  wallsFilterModalItemActive: {
+    borderColor: '#BDEFE8',
+    backgroundColor: '#EDF9F7',
+  },
+  wallsFilterModalTextActive: {
+    color: STUDOS_THEME.ink,
+  },
+  wallsFilterModalActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  wallsFilterResetButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 0.7,
+    minHeight: 42,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  wallsFilterResetButtonText: {
+    color: STUDOS_THEME.red,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsActionMenuItemSuccess: {
+    borderColor: '#BFECCF',
+    backgroundColor: '#EAF8EF',
+  },
+  wallsFilterApplyButton: {
+    flex: 1,
+    minHeight: 42,
+  },
+  wallsAlbumFilterText: {
+    color: '#65748b',
+    fontSize: 10.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsAlbumFilterTextActive: {
+    color: STUDOS_THEME.red,
+  },
+  wallsAlbumSearchField: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    marginTop: 9,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 12,
+    paddingRight: 8,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  wallsAlbumSearchInput: {
+    flex: 1,
+    minHeight: 38,
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+    paddingVertical: 0,
+  },
+  wallsAlbumSearchClear: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
   wallsScrollContent: {
-    paddingTop: 104,
+    paddingTop: 204,
     paddingBottom: 24,
   },
   wallsScrollContentEmpty: {
@@ -24358,7 +25208,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderColor: '#DDE8E5',
     borderWidth: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#EDF3F1',
     overflow: 'hidden',
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 4 },
@@ -24369,7 +25219,7 @@ const styles = StyleSheet.create({
   wallsCardCover: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: 110,
+    height: 156,
     backgroundColor: '#EDF3F1',
     position: 'relative',
   },
@@ -24377,38 +25227,154 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  wallsCardPreviewStrip: {
+    flexDirection: 'row',
+    gap: 2,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  wallsCardPreviewStripImage: {
+    flex: 1,
+    height: '100%',
+  },
+  wallsCardPreviewGrid: {
+    gap: 2,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  wallsCardPreviewGridRow: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 2,
+  },
+  wallsCardPreviewGridImage: {
+    flex: 1,
+    height: '100%',
+  },
+  wallsCardFallbackCover: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#DDEBE7',
+    overflow: 'hidden',
+  },
+  wallsCardFallbackRibbon: {
+    position: 'absolute',
+    left: -18,
+    right: -18,
+    top: 26,
+    height: 34,
+    backgroundColor: STUDOS_THEME.red,
+    opacity: 0.9,
+    transform: [{ rotate: '-8deg' }],
+  },
+  wallsCardFallbackBackplate: {
+    position: 'absolute',
+    width: 108,
+    height: 76,
+    borderRadius: 12,
+    backgroundColor: STUDOS_THEME.blue,
+    transform: [{ rotate: '7deg' }],
+  },
+  wallsCardFallbackFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 116,
+    height: 82,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 12,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 4,
+    transform: [{ rotate: '-3deg' }],
+  },
+  wallsCardFallbackBrand: {
+    color: STUDOS_THEME.ink,
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsCardFallbackLines: {
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 8,
+  },
+  wallsCardFallbackLine: {
+    width: 22,
+    height: 5,
+    borderRadius: 999,
+  },
+  wallsCardFallbackLineRed: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  wallsCardFallbackLineBlue: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  wallsCardFallbackLineYellow: {
+    backgroundColor: STUDOS_THEME.yellow,
+  },
   wallsCardCoverPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
   },
-  wallsCardBadge: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.88)',
-  },
   wallsCardMeta: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    gap: 2,
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 8,
+    gap: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(12,18,34,0.42)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   wallsCardName: {
-    color: STUDOS_THEME.ink,
+    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0,
+    textShadowColor: 'rgba(23,33,67,0.62)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  wallsCardDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
   wallsCardCount: {
-    color: '#8a9bb0',
+    flex: 1,
+    color: 'rgba(255,255,255,0.78)',
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0,
+    textShadowColor: 'rgba(23,33,67,0.58)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  wallsCardVisibility: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.82)',
+    overflow: 'hidden',
+  },
+  wallsCardVisibilityPublic: {
+    backgroundColor: STUDOS_THEME.blue,
   },
   wallsAlbumHeader: {
     flexDirection: 'row',
@@ -28965,6 +29931,10 @@ const styles = StyleSheet.create({
   chatConversationActionMenuIconCalm: {
     borderColor: '#BDEFE8',
     backgroundColor: STUDOS_THEME.blue,
+  },
+  chatConversationActionMenuIconSuccess: {
+    borderColor: '#8BDBA3',
+    backgroundColor: '#1F9D55',
   },
   chatConversationActionMenuText: {
     color: STUDOS_THEME.ink,

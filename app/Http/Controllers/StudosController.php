@@ -3720,7 +3720,7 @@ class StudosController extends Controller
     private const GALLERY_AUDIENCE_VALUES   = ['class', 'crew', 'specific'];
     private const GALLERY_PERMISSION_VALUES = ['view', 'add', 'add_delete'];
 
-    private function galleryApiShape(object $gallery): array
+    private function galleryApiShape(object $gallery, array $previewPhotos = []): array
     {
         $memberIds = [];
 
@@ -3738,10 +3738,41 @@ class StudosController extends Controller
             'memberIds'           => $memberIds,
             'photoCount'          => (int) ($gallery->photo_count ?? 0),
             'coverUri'            => UploadedImage::publicUrl($gallery->cover_image_url ?? null, request()),
+            'previewPhotos'       => $previewPhotos,
             'creatorId'           => $gallery->created_by_member_id ?? null,
             'createdAt'           => $this->apiDateTime($gallery->created_at),
             'updatedAt'           => $this->apiDateTime($gallery->updated_at),
         ];
+    }
+
+    private function galleryPreviewPhotosByGalleryIds(array $galleryIds): array
+    {
+        $ids = array_values(array_filter(array_map(fn ($id) => (string) $id, $galleryIds)));
+
+        if (empty($ids)) {
+            return [];
+        }
+
+        $photos = DB::table('gallery_photos')
+            ->whereIn('gallery_id', $ids)
+            ->whereNull('deleted_at')
+            ->orderBy('gallery_id')
+            ->orderByDesc('created_at')
+            ->get();
+
+        $previewPhotos = [];
+
+        foreach ($photos as $photo) {
+            $galleryId = (string) $photo->gallery_id;
+
+            if (count($previewPhotos[$galleryId] ?? []) >= 4) {
+                continue;
+            }
+
+            $previewPhotos[$galleryId][] = $this->galleryPhotoApiShape($photo);
+        }
+
+        return $previewPhotos;
     }
 
     private function galleryIsVisibleToMember(object $gallery, object $member): bool
@@ -3769,10 +3800,13 @@ class StudosController extends Controller
             ->orderByDesc('created_at')
             ->get();
 
-        $visible = $galleries->filter(fn ($g) => $this->galleryIsVisibleToMember($g, $member));
+        $visible = $galleries->filter(fn ($g) => $this->galleryIsVisibleToMember($g, $member))->values();
+        $previewPhotosByGalleryId = $this->galleryPreviewPhotosByGalleryIds($visible->pluck('id')->all());
 
         return response()->json([
-            'galleries' => $visible->values()->map(fn ($g) => $this->galleryApiShape($g))->all(),
+            'galleries' => $visible->map(fn ($g) =>
+                $this->galleryApiShape($g, $previewPhotosByGalleryId[(string) $g->id] ?? [])
+            )->all(),
         ]);
     }
 
@@ -4119,7 +4153,7 @@ class StudosController extends Controller
 
         DB::table('galleries')
             ->where('id', $gallery->id)
-            ->increment('photo_count');
+            ->increment('photo_count', 1, ['updated_at' => $now]);
 
         $photo = DB::table('gallery_photos')->where('id', $id)->first();
 
@@ -4156,7 +4190,7 @@ class StudosController extends Controller
         DB::table('galleries')
             ->where('id', $gallery->id)
             ->where('photo_count', '>', 0)
-            ->decrement('photo_count');
+            ->decrement('photo_count', 1, ['updated_at' => $now]);
 
         return response()->json(['ok' => true]);
     }

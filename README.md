@@ -4,8 +4,9 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-06 efter Walls/galleri v1, UX-forbedringer,
-device adaptation og sikkerhedsstramninger.
+Status er opdateret 2026-05-07 efter Walls/galleri cover-fallback,
+sortering/filter-UX, long-press upload, device adaptation og
+sikkerhedsstramninger.
 
 Se ogsaa:
 
@@ -51,8 +52,9 @@ Se ogsaa:
 - Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
   til én klasse. Dette haandhaeves i backend-validering og database-indekset
   `members.email`.
-- Walls v1 er implementeret: klassegallerier med synlighedsregler, fotoupload,
-  billedvisning og rapportering. Backend bruger `galleries` og `gallery_photos`.
+- Walls/galleri er implementeret: klassealbums med synlighedsregler,
+  fotoupload, billedvisning, rapportering, kategori-tabs, soegning, sortering
+  og dynamisk cover-fallback. Backend bruger `galleries` og `gallery_photos`.
 - Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
   (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
   dimensionsbaseret inset-beregning uden externe biblioteker.
@@ -165,7 +167,8 @@ Kernen er:
   Klassedyst, ugens gode gerning og weekly check-in.
 - Android og iOS push-token registrering og chat-push.
 - Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
-  synlighedsregler (`private`/`class`/`public`), soft-delete og rapportering.
+  synlighedsregler (`private`/`class`/`public`), soft-delete, rapportering og
+  album-previewdata til dynamiske cover-collager.
 
 Roller pr. 2026-04-29:
 
@@ -231,6 +234,10 @@ POST /api/galleries/{gallery}/photos
 DELETE /api/gallery-photos/{photo}
 POST /api/gallery-photos/{photo}/report
 ```
+
+`GET /api/galleries` returnerer ogsaa `previewPhotos` med op til fire nyeste
+albumfotos pr. galleri. Mobilappen bruger dem til automatisk cover-fallback,
+hvis brugeren ikke har valgt et specifikt cover.
 
 ## Public Landing Page
 
@@ -422,10 +429,24 @@ Dyst:
 Walls:
 
 - Walls er klassens billedgalleri, opdelt i navngivne albums (gallerier).
-- Gallerioversigten viser cover-billede, navn, antal fotos og oprettelsesdato.
+- Gallerioversigten viser albumkort med cover, navn, antal fotos og
+  synligheds-pill (`Privat`/`Faelles`).
+- Oversigten har kategori-tabs (`Alle`, `Faelles`, `Private`), soegefelt og
+  sortering via filterknappen (`Seneste`, `Flest billeder`, `A-Z`).
+- Sorteringsvalget i filtermodalen er midlertidigt, indtil brugeren trykker
+  `Anvend`; en lille `x`-knap nulstiller sortering direkte fra oversigten.
+- Naar Galleri forlades og aabnes igen, resettes oversigten til `Alle`,
+  `Seneste` og tom soegning.
 - Et galleri kan oprettes med navn og synlighed; synlighedsregler styrer hvem
   der kan se albummet.
+- Hvis flere album har samme navn, advarer appen, men blokerer ikke gem.
+- Hvis brugeren har valgt et specifikt cover, bruges det altid. Uden specifikt
+  cover viser tomme album et grafisk Studos-cover; album med billeder bruger
+  automatisk de nyeste billeder som cover: 1 foto i fuld bredde, 2-3 fotos som
+  lodrette felter og 4+ fotos som 2x2-collage.
 - Album-skærmen viser alle fotos i et grid og har upload-knap.
+- Long-press paa et album viser `Om albummet`; brugere med adgang ser ogsaa
+  `Upload billede`, som aabner albummet og starter billedvaelgeren automatisk.
 - Fotoupload bruger expo-image-picker og sender til `POST /api/galleries/{gallery}/photos`.
 - Enkeltfotovisning aabner i en fullscreen viewer med download/slet/rapport-actions.
 - Rapportering og sletning er tilgaengelig for uploader og klasse-admin.
@@ -558,7 +579,26 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-06 efter Walls v1, UX og device adaptation:
+Senest koert 2026-05-07 efter Walls cover-fallback, sortering og long-press
+upload:
+
+```bash
+php -l app/Http/Controllers/StudosController.php
+npm --workspace @studenter-app/mobile exec -- expo export --platform web --output-dir /private/tmp/studos-mobile-export-gallery-cover-scrim
+php artisan test
+```
+
+Resultat:
+
+- `StudosController.php` lint OK.
+- Expo web-export for mobilappen bygger OK.
+- `php artisan test`: 40 feature-/unit-tests passer, men 1 eksisterende
+  push-token-test fejler fortsat (`authenticated member can register android
+  push token`: forventet 422, fik 200). Fejlen er ikke relateret til
+  Galleri-cover/preview-aendringerne.
+- Walls `/api/galleries` returnerer nu `previewPhotos` til cover fallback.
+
+Tidligere koert 2026-05-06 efter Walls v1, UX og device adaptation:
 
 ```bash
 node --check apps/mobile/App.js
@@ -611,8 +651,9 @@ Resultat:
 
 ## Naeste Gode Skridt
 
-1. QA Walls paa to brugere/enheder: opret galleri, upload foto, vis fullscreen,
-   slet, rapporter og synlighedsregler.
+1. QA Walls paa to brugere/enheder: opret galleri, filter/sortering/soegning,
+   dynamisk cover-fallback ved 0/1/2/3/4 billeder, upload via long-press,
+   fullscreen, slet, rapporter og synlighedsregler.
 2. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
    Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
    realtime/polling og Caps-refundering.
