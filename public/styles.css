@@ -960,51 +960,6 @@ code {
   background: #75ded0;
 }
 
-.app-icon-badge {
-  width: 34px;
-  height: 34px;
-}
-
-.app-icon-badge-ribbon {
-  position: absolute;
-  top: 5px;
-  width: 7px;
-  height: 15px;
-  border-radius: 2px;
-}
-
-.app-icon-badge-ribbon-left {
-  left: 9px;
-  background: #75ded0;
-  transform: rotate(-14deg);
-}
-
-.app-icon-badge-ribbon-right {
-  right: 9px;
-  background: #ff6f73;
-  transform: rotate(14deg);
-}
-
-.app-icon-badge-medal {
-  position: absolute;
-  top: 14px;
-  left: 8px;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border: 2px solid #ff6f73;
-  border-radius: 999px;
-  background: #ffd46d;
-}
-
-.app-icon-badge-medal span {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #75ded0;
-}
-
 .app-icon-podium {
   display: flex;
   align-items: flex-end;
@@ -1057,10 +1012,6 @@ code {
 
 .landing-feature-card.accent-games {
   --feature-accent: #a855f7;
-}
-
-.landing-feature-card.accent-awards {
-  --feature-accent: #c35aa0;
 }
 
 .landing-feature-card.accent-battle {
@@ -1877,7 +1828,6 @@ code {
 .mockup-mission-list,
 .mockup-stat-grid,
 .mockup-game-grid,
-.mockup-award-stack,
 .mockup-battle-list {
   position: relative;
   z-index: 1;
@@ -1914,8 +1864,7 @@ code {
 .mockup-copy small,
 .mockup-scoreboard small,
 .mockup-stat-grid small,
-.mockup-game-grid small,
-.mockup-award-stack small {
+.mockup-game-grid small {
   color: rgba(23, 32, 51, 0.62);
   font-size: 11px;
   font-weight: 850;
@@ -1929,7 +1878,6 @@ code {
 }
 
 .mockup-copy strong,
-.mockup-award-stack strong,
 .mockup-battle-list strong {
   color: #172143;
   font-size: 14px;
@@ -2115,7 +2063,6 @@ code {
 
 .mockup-stat-grid span,
 .mockup-game-grid span,
-.mockup-award-stack span,
 .mockup-battle-list span {
   display: grid;
   gap: 5px;
@@ -2157,15 +2104,9 @@ code {
   background: #f3e8ff;
 }
 
-.mockup-award-stack,
 .mockup-battle-list {
   display: grid;
   gap: 10px;
-}
-
-.mockup-award-stack span {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
 }
 
 .mockup-battle-list span {

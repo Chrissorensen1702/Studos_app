@@ -32,7 +32,6 @@
             <a href="{{ route('home') }}#landing-features-title">Caps</a>
             <a href="{{ route('home') }}#landing-features-title">Challenges</a>
             <a href="{{ route('home') }}#landing-features-title">Galleri</a>
-            <a href="{{ route('home') }}#landing-features-title">Klasseawards</a>
             <a href="{{ route('home') }}#landing-features-title">Klassedyst</a>
           </div>
         </div>

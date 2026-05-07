@@ -104,10 +104,6 @@
               <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Spil.png') }}" alt="Mini games i Studos appen">
             </div>
 
-            <div class="landing-mockup-slide" data-feature-slide="awards" data-feature-title="Klassewards" aria-hidden="true">
-              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Klasseawards.png') }}" alt="Klassewards i Studos appen">
-            </div>
-
             <div class="landing-mockup-slide" data-feature-slide="battle" data-feature-title="Klassedyst" aria-hidden="true">
               <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Klassedyst.png') }}" alt="Klassedyst i Studos appen">
             </div>
@@ -215,22 +211,6 @@
           <h3>Mini games</h3>
           <p>Små spil, randomizer og hurtige challenges giver klassen noget at samles om mellem de store events. Perfekt til pauser, vognture og de øjeblikke, hvor nogen skal sætte gang i stemningen.
             <br><br>Træk en mission, start en leg eller lad appen vælge næste move. Det skal være nemt at få lidt kaos i gang.</p>
-        </article>
-
-        <article class="landing-feature-card accent-awards" data-feature-card="awards" role="button" tabindex="0" aria-pressed="false">
-          <div class="landing-feature-card-head">
-            <span class="landing-feature-icon" aria-hidden="true">
-              <span class="landing-app-icon app-icon-badge">
-                <span class="app-icon-badge-ribbon app-icon-badge-ribbon-left"></span>
-                <span class="app-icon-badge-ribbon app-icon-badge-ribbon-right"></span>
-                <span class="app-icon-badge-medal"><span></span></span>
-              </span>
-            </span>
-            <span class="landing-feature-label">Awards</span>
-          </div>
-          <h3>Klasseawards</h3>
-          <p>Stem på klassens egne awards og giv de titler, folk kommer til at citere resten af året. Fra sjoveste comeback til mest ikoniske entrance - klassen bestemmer selv kategorierne.
-            <br><br>Det bliver en del af historien om året. Små titler, store grin og minder, der hænger ved.</p>
         </article>
 
         <article class="landing-feature-card accent-battle" data-feature-card="battle" role="button" tabindex="0" aria-pressed="false">

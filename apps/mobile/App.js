@@ -5,6 +5,7 @@ import {
   AppState,
   Dimensions,
   Easing,
+  FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -13,6 +14,7 @@ import {
   NativeModules,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -30,7 +32,6 @@ import * as SecureStore from 'expo-secure-store';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
 const ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.androidNotificationPrompt.v1';
-const OVERVIEW_MOOD_STORAGE_KEY = 'studos.overviewMood.v1';
 const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
 const EARN_CAPS_CHECKIN_STORAGE_KEY = 'studos.earnCapsCheckIn.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
@@ -80,9 +81,13 @@ const CHAT_LIST_HEADER_CLAMP_DISTANCE = 14;
 const CHAT_LIST_SEARCH_COLLAPSE_DISTANCE = 58;
 const CHAT_LIST_HEADER_EXPANDED_HEIGHT = APP_SCREEN_TOP_PADDING + CHAT_LIST_HEADER_SCROLL_PADDING_TOP;
 const CHAT_LIST_HEADER_COLLAPSED_HEIGHT = CHAT_LIST_HEADER_EXPANDED_HEIGHT - CHAT_LIST_SEARCH_COLLAPSE_DISTANCE;
+const CHAT_REFRESH_CONTROL_OFFSET = CHAT_LIST_HEADER_SCROLL_PADDING_TOP + 22;
 const WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE = 96;
 const WALLS_HEADER_CONTROLS_EXPANDED_HEIGHT = 93;
+const WALLS_GALLERIES_PAGE_SIZE = 24;
+const WALLS_REFRESH_CONTROL_OFFSET = 204;
 const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
+const CALENDAR_REFRESH_CONTROL_OFFSET = OVERVIEW_HEADER_HEIGHT + 18;
 const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
   const progress = index / 39;
   const opacity = Math.max(0, Math.pow(1 - progress, 2.25) * 0.92);
@@ -92,7 +97,7 @@ const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
     height: 0.9,
   };
 });
-const CHAT_THREAD_HEADER_COUNTERS = [
+const OVERVIEW_CLIP_COUNTERS = [
   { id: 'home', icon: 'home', value: '12' },
   { id: 'wave', icon: 'water', value: '8' },
   { id: 'bolt', icon: 'flash', value: '4' },
@@ -210,6 +215,84 @@ function ChatConversationChevron({ unread }) {
   return <MaterialCommunityIcons name="chevron-right" size={30} color={STUDOS_THEME.red} style={styles.chatConversationChevronUnreadIcon} />;
 }
 
+function GroupConversationAvatar({ emptyIcon = 'people', members = [], photoUrl, variant = 'chatCircle' }) {
+  const avatarMembers = uniqueById((members ?? []).filter(Boolean)).slice(0, 3);
+  const rootStyle = variant === 'chatHeader'
+    ? styles.groupAvatarRootChatHeader
+    : variant === 'chatPicker'
+      ? styles.groupAvatarRootPicker
+      : styles.groupAvatarRootChatCircle;
+  const photoStyle = variant === 'chatHeader'
+    ? styles.groupAvatarPhotoChatHeader
+    : variant === 'chatPicker'
+      ? styles.groupAvatarPhotoPicker
+      : styles.groupAvatarPhotoChatCircle;
+  const tileLayouts = avatarMembers.length === 1
+    ? [styles.groupAvatarTileSingle]
+    : avatarMembers.length === 2
+      ? [styles.groupAvatarTileLeft, styles.groupAvatarTileRight]
+      : [styles.groupAvatarTileTop, styles.groupAvatarTileBottomLeft, styles.groupAvatarTileBottomRight];
+  const fallbackColors = [STUDOS_THEME.blue, STUDOS_THEME.red, STUDOS_THEME.yellow];
+
+  if (photoUrl) {
+    return (
+      <View style={rootStyle}>
+        <Image source={{ uri: photoUrl }} style={photoStyle} />
+      </View>
+    );
+  }
+
+  if (!avatarMembers.length) {
+    return (
+      <View style={[rootStyle, styles.groupAvatarEmpty]}>
+        <Ionicons
+          name={emptyIcon}
+          size={variant === 'chatCircle' ? 18 : 22}
+          color={STUDOS_THEME.red}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View style={rootStyle}>
+      {avatarMembers.map((member, index) => {
+        const photo = member?.profilePhotoUrl;
+
+        return (
+          <View
+            key={`${member?.id ?? member?.displayName ?? 'member'}-${index}`}
+            style={[styles.groupAvatarTile, tileLayouts[index]]}
+          >
+            {photo ? (
+              <Image source={{ uri: photo }} style={styles.groupAvatarTileImage} />
+            ) : (
+              <View
+                style={[
+                  styles.groupAvatarInitialsTile,
+                  { backgroundColor: fallbackColors[index % fallbackColors.length] },
+                ]}
+              >
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  numberOfLines={1}
+                  style={[
+                    styles.groupAvatarInitialsText,
+                    index === 1 ? styles.groupAvatarInitialsTextLight : styles.groupAvatarInitialsTextDark,
+                  ]}
+                >
+                  {initialsFor(member)}
+                </Text>
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function useScaleAnim(scaleDown = 0.97) {
   const scale = useRef(new Animated.Value(1)).current;
   const spring = (v) => Animated.spring(scale, { toValue: v, useNativeDriver: true, tension: 220, friction: 18 }).start();
@@ -245,13 +328,11 @@ function ChatConversationRow({ conversation, isMemberOnline, lastMessagePreview,
                 {isMemberOnline ? <View style={styles.chatConversationOnlineDot} /> : null}
               </View>
             ) : (
-              <View style={styles.chatConversationIcon}>
-                {conversation.groupPhotoUrl ? (
-                  <Image source={{ uri: conversation.groupPhotoUrl }} style={styles.chatConversationGroupPhoto} />
-                ) : (
-                  <Ionicons name="people" size={18} color={STUDOS_THEME.red} />
-                )}
-              </View>
+              <GroupConversationAvatar
+                members={conversation.participants?.map((participant) => participant.member)}
+                photoUrl={conversation.groupPhotoUrl}
+                variant="chatCircle"
+              />
             )}
             <View style={styles.chatConversationCopy}>
               <Text
@@ -533,6 +614,24 @@ const STUDOS_THEME = {
   red: '#FF6F73',
   ink: '#172143',
 };
+
+function StudosRefreshControl({ offset = 0, onRefresh, refreshing }) {
+  if (typeof onRefresh !== 'function') {
+    return null;
+  }
+
+  return (
+    <RefreshControl
+      colors={[STUDOS_THEME.red, STUDOS_THEME.blue]}
+      onRefresh={onRefresh}
+      progressBackgroundColor="#FFFFFF"
+      progressViewOffset={offset}
+      refreshing={Boolean(refreshing)}
+      tintColor={STUDOS_THEME.red}
+    />
+  );
+}
+
 const APP_TABS = [
   { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar', accentColor: STUDOS_THEME.blue },
   { id: 'chat', label: 'Chat', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', accentColor: STUDOS_THEME.red },
@@ -551,8 +650,6 @@ const APP_DRAWER_SECTIONS = [
     items: [
       { id: 'earnCaps', label: 'Optjen Caps', icon: 'sparkles-outline', activeIcon: 'sparkles', accentColor: STUDOS_THEME.yellow },
       { id: 'classBattle', label: 'Leaderboard', icon: 'podium-outline', activeIcon: 'podium', accentColor: STUDOS_THEME.yellow },
-      { id: 'moodBoard', label: 'Stemningstavle', icon: 'happy-outline', activeIcon: 'happy', accentColor: STUDOS_THEME.yellow },
-      { id: 'badges', label: 'Klasseawards', icon: 'ribbon-outline', activeIcon: 'ribbon', accentColor: STUDOS_THEME.yellow },
       { id: 'randomizer', label: 'Arcade Hub', icon: 'shuffle-outline', activeIcon: 'shuffle', accentColor: STUDOS_THEME.red },
       { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
     ],
@@ -1238,14 +1335,7 @@ const resolvePusherClient = (module) => (
   ?? module
 );
 
-const formatMoodUpdatedAt = (date = new Date()) => new Intl.DateTimeFormat('da-DK', {
-  day: '2-digit',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-}).format(date);
-
-const moodDayKeyFor = (date = new Date()) => {
+const localDayKeyFor = (date = new Date()) => {
   const value = date instanceof Date ? date : new Date(date);
 
   if (Number.isNaN(value.getTime())) {
@@ -1267,14 +1357,6 @@ const dayNumberForDayKey = (dayKey) => {
   }
 
   return Math.floor(new Date(year, month - 1, day).getTime() / 86400000);
-};
-
-const millisecondsUntilNextMidnight = (date = new Date()) => {
-  const nextMidnight = new Date(date);
-
-  nextMidnight.setHours(24, 0, 0, 0);
-
-  return Math.max(1000, nextMidnight.getTime() - date.getTime());
 };
 
 const formatChatTime = (value) => {
@@ -1821,12 +1903,15 @@ export default function App() {
     [activeClass?.graduationDate],
   );
   const appContentDetached = activeTab === 'chat'
+    || activeTab === 'profile'
     || activeTab === 'calendar'
     || activeTab === 'walls'
     || activeTab === 'overview'
+    || activeTab === 'challenges'
     || activeTab === 'earnCaps'
     || activeTab === 'classBattle'
     || activeTab === 'classmates'
+    || activeTab === 'connections'
     || activeTab === 'emergencyContacts';
 
   const scrollAppToTop = useCallback(() => {
@@ -2193,6 +2278,32 @@ export default function App() {
     }));
   };
 
+  const refreshSessionData = useCallback(async () => {
+    if (!session?.token) {
+      return;
+    }
+
+    const data = await apiFetch('/session/me', { authToken: session.token });
+
+    if (!data.session?.member || !data.class) {
+      throw new Error('Sessionen kunne ikke opdateres.');
+    }
+
+    const nextSession = {
+      ...data.session,
+      token: session.token,
+    };
+
+    setSession(nextSession);
+    setSchoolClass(data.class);
+    setProfile(profileFromMember(nextSession.member));
+
+    await SessionStore.setItemAsync(SESSION_STORAGE_KEY, JSON.stringify({
+      session: nextSession,
+      class: data.class,
+    }));
+  }, [session?.token]);
+
   useEffect(() => {
     if (!session?.member?.id || !session?.token) {
       return;
@@ -2240,7 +2351,7 @@ export default function App() {
       return undefined;
     }
 
-    const dayKey = moodDayKeyFor();
+    const dayKey = localDayKeyFor();
     const autoCheckInKey = `${session.member.id}:${dayKey}`;
 
     if (weeklyCheckInAutoRef.current === autoCheckInKey) {
@@ -2940,12 +3051,15 @@ export default function App() {
             {appContentDetached ? (
               <View style={[
                 styles.appScreen,
+                activeTab === 'profile' ? styles.appScreenDetached : null,
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'walls' ? styles.appScreenDetached : null,
                 activeTab === 'walls' ? styles.appScreenWallsDetached : null,
+                activeTab === 'challenges' ? styles.appScreenDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
                 activeTab === 'classmates' ? styles.appScreenCrewDetached : null,
+                activeTab === 'connections' ? styles.appScreenCrewDetached : null,
                 activeTab === 'emergencyContacts' ? styles.appScreenCrewDetached : null,
                 activeTab === 'classBattle' ? styles.appScreenClassBattleDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
@@ -2982,6 +3096,7 @@ export default function App() {
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
+                  onRefreshClassData={refreshSessionData}
                   onSendAndroidNotificationTest={sendAndroidNotificationTest}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
@@ -3030,6 +3145,7 @@ export default function App() {
                   onRequestScrollTop={scrollAppToTop}
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
+                  onRefreshClassData={refreshSessionData}
                   onSendAndroidNotificationTest={sendAndroidNotificationTest}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
@@ -3250,6 +3366,7 @@ function AppTabScreen({
   onRequestScrollTop,
   onReportEvent,
   onRespondToEvent,
+  onRefreshClassData,
   onSendAndroidNotificationTest,
   onUpdateEvent,
   pinnedContent,
@@ -3299,6 +3416,7 @@ function AppTabScreen({
         schoolClass={schoolClass}
         onProfileFieldUpdate={onProfileFieldUpdate}
         onProfilePhotoUpdate={onProfilePhotoUpdate}
+        onRefresh={onRefreshClassData}
         onLogout={onLogout}
         onDeleteAccount={onDeleteAccount}
       />
@@ -3327,18 +3445,6 @@ function AppTabScreen({
     );
   }
 
-  if (activeTab === 'awards') {
-    return (
-      <FeatureScreen
-        icon="trophy"
-        kicker={schoolClass.className}
-        title="Awards"
-        emptyTitle="Ingen awards endnu"
-        emptyText="Afstemninger og klassepriser bliver samlet her."
-      />
-    );
-  }
-
   if (activeTab === 'calendar') {
     return (
       <CalendarScreen
@@ -3351,6 +3457,7 @@ function AppTabScreen({
         onBlockMember={onBlockMember}
         onRequestScrollTop={onRequestScrollTop}
         onReportEvent={onReportEvent}
+        onRefresh={onRefreshClassData}
         onRespondToEvent={onRespondToEvent}
         onUpdateEvent={onUpdateEvent}
       />
@@ -3363,6 +3470,7 @@ function AppTabScreen({
         activeMember={activeMember}
         events={events}
         onOpenEarnCaps={() => onChangeTab?.('earnCaps')}
+        onRefreshClassData={onRefreshClassData}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
       />
@@ -3381,24 +3489,13 @@ function AppTabScreen({
     );
   }
 
-  if (activeTab === 'badges') {
-    return (
-      <FeatureScreen
-        icon="ribbon"
-        kicker={schoolClass.className}
-        title="Badges"
-        emptyTitle="Ingen badges endnu"
-        emptyText="Hueklip, beviser og digitale mærker bliver samlet her."
-      />
-    );
-  }
-
   if (activeTab === 'classmates') {
     return (
       <CrewScreen
         activeMember={activeMember}
         activeMembers={activeMembers}
         onOpenDirectChat={onOpenDirectChat}
+        onRefreshClassData={onRefreshClassData}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
       />
@@ -3432,22 +3529,11 @@ function AppTabScreen({
     );
   }
 
-  if (activeTab === 'moodBoard') {
-    return (
-      <FeatureScreen
-        icon="happy"
-        kicker={schoolClass.className}
-        title="Stemningstavle"
-        emptyTitle="Ingen stemning endnu"
-        emptyText="Her kan alle dele hvordan de har det lige nu."
-      />
-    );
-  }
-
   if (activeTab === 'connections') {
     return (
       <ConnectionsScreen
         activeMember={activeMember}
+        onRefreshClassData={onRefreshClassData}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
       />
@@ -3470,6 +3556,7 @@ function AppTabScreen({
       <EmergencyContactsScreen
         activeMember={activeMember}
         activeMembers={activeMembers}
+        onRefreshClassData={onRefreshClassData}
         sessionToken={sessionToken}
         onUpdateVisibility={onEmergencyContactVisibilityChange}
         onUpdateContact={onEmergencyContactUpdate}
@@ -3488,9 +3575,11 @@ function AppTabScreen({
       onOpenEarnCaps={() => onChangeTab?.('earnCaps')}
       onOpenPointDuel={() => onChangeTab?.('challenges')}
       onOpenActivities={() => onChangeTab?.('activities')}
+      onRefresh={onRefreshClassData}
       pinnedContent={pinnedContent}
       profile={profile}
       schoolClass={schoolClass}
+      sessionToken={sessionToken}
     />
   );
 }
@@ -3513,6 +3602,7 @@ function ChatScreen({
   const [groupPhotoData, setGroupPhotoData] = useState('');
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState([]);
   const [loadingChat, setLoadingChat] = useState(false);
+  const [chatRefreshing, setChatRefreshing] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
@@ -3533,6 +3623,14 @@ function ChatScreen({
   const [chatActionLoading, setChatActionLoading] = useState(false);
   const [chatMessageActionConfirm, setChatMessageActionConfirm] = useState(null);
   const [chatMessageActionLoading, setChatMessageActionLoading] = useState(false);
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+  const [groupAddMembersOpen, setGroupAddMembersOpen] = useState(false);
+  const [groupAddMemberIds, setGroupAddMemberIds] = useState([]);
+  const [groupAddMemberQuery, setGroupAddMemberQuery] = useState('');
+  const [groupAddingMembers, setGroupAddingMembers] = useState(false);
+  const [groupRenameOpen, setGroupRenameOpen] = useState(false);
+  const [groupRenameTitle, setGroupRenameTitle] = useState('');
+  const [groupRenaming, setGroupRenaming] = useState(false);
   const [chatListHeaderScrolled, setChatListHeaderScrolled] = useState(false);
   const echoRef = useRef(null);
   const activeRealtimeChannelRef = useRef('');
@@ -3592,6 +3690,12 @@ function ChatScreen({
       return searchableName.includes(query);
     });
   }, [chatMembers, groupPickerQuery]);
+  const selectedGroupPreviewMembers = useMemo(() => {
+    const selectedIds = new Set(selectedGroupMemberIds.map((memberId) => String(memberId)));
+    const selectedMembers = chatMembers.filter((member) => selectedIds.has(String(member.id)));
+
+    return uniqueById([activeMember, ...selectedMembers].filter(Boolean));
+  }, [activeMember, chatMembers, selectedGroupMemberIds]);
 
   useEffect(() => {
     if (!hasSyncedConversationsRef.current) {
@@ -3738,6 +3842,16 @@ function ChatScreen({
     chatThreadSwipeActiveRef.current = false;
     setChatMessageActionConfirm(null);
     setChatMessageActionLoading(false);
+    setChatActionConfirm(null);
+    setChatActionLoading(false);
+    setGroupInfoOpen(false);
+    setGroupAddMembersOpen(false);
+    setGroupAddMemberIds([]);
+    setGroupAddMemberQuery('');
+    setGroupAddingMembers(false);
+    setGroupRenameOpen(false);
+    setGroupRenameTitle('');
+    setGroupRenaming(false);
     setSelectedConversation(null);
     setMessages([]);
 
@@ -3975,6 +4089,24 @@ function ChatScreen({
       if (!options.silent) {
         setLoadingChat(false);
       }
+    }
+  };
+
+  const refreshChat = async () => {
+    if (!sessionToken) {
+      return;
+    }
+
+    setChatRefreshing(true);
+    setChatError('');
+
+    try {
+      await loadConversations();
+      if (selectedConversation?.id) {
+        await loadMessages(selectedConversation, { silent: true });
+      }
+    } finally {
+      setChatRefreshing(false);
     }
   };
 
@@ -4345,6 +4477,143 @@ function ChatScreen({
     }
   };
 
+  const openGroupInfoPanel = () => {
+    if (selectedConversation?.type !== 'group') {
+      return;
+    }
+
+    setGroupInfoOpen(true);
+    setGroupAddMembersOpen(false);
+    setGroupAddMemberIds([]);
+    setGroupAddMemberQuery('');
+    setGroupRenameOpen(false);
+    setGroupRenameTitle('');
+    setChatError('');
+    setChatNotice('');
+  };
+
+  const closeGroupInfoPanel = () => {
+    if (groupAddingMembers || groupRenaming) {
+      return;
+    }
+
+    setGroupInfoOpen(false);
+    setGroupAddMembersOpen(false);
+    setGroupAddMemberIds([]);
+    setGroupAddMemberQuery('');
+    setGroupRenameOpen(false);
+    setGroupRenameTitle('');
+  };
+
+  const toggleGroupAddMember = (memberId) => {
+    setGroupAddMemberIds((current) => (
+      current.includes(memberId)
+        ? current.filter((id) => id !== memberId)
+        : [...current, memberId]
+    ));
+  };
+
+  const selectGroupInfoAction = (actionType) => {
+    if (!selectedConversation?.id || !actionType) {
+      return;
+    }
+
+    if (actionType === 'add-members') {
+      setGroupAddMembersOpen(true);
+      setGroupRenameOpen(false);
+      setGroupAddMemberIds([]);
+      setGroupAddMemberQuery('');
+      setChatError('');
+      setChatNotice('');
+      return;
+    }
+
+    if (actionType === 'rename') {
+      setGroupAddMembersOpen(false);
+      setGroupRenameOpen(true);
+      setGroupRenameTitle(selectedConversation.title ?? '');
+      setChatError('');
+      setChatNotice('');
+      return;
+    }
+
+    setGroupInfoOpen(false);
+    setGroupAddMembersOpen(false);
+    setGroupRenameOpen(false);
+    openChatActionConfirm(actionType, selectedConversation);
+  };
+
+  const renameSelectedGroup = async () => {
+    const title = groupRenameTitle.trim();
+
+    if (!selectedConversation?.id || !title) {
+      setChatError('Skriv et gruppenavn.');
+      return;
+    }
+
+    setGroupRenaming(true);
+    setChatError('');
+    setChatNotice('');
+
+    try {
+      const data = await apiFetch(`/chat/conversations/${encodeURIComponent(selectedConversation.id)}`, {
+        authToken: sessionToken,
+        method: 'PATCH',
+        body: JSON.stringify({
+          title,
+        }),
+      });
+
+      if (data.conversation) {
+        replaceConversationInState(data.conversation);
+      }
+
+      setGroupRenameOpen(false);
+      setGroupRenameTitle('');
+      setChatNotice('Chatnavnet er ændret.');
+      await loadConversations();
+    } catch (apiError) {
+      setChatError(apiError.message || 'Chatnavnet kunne ikke ændres.');
+    } finally {
+      setGroupRenaming(false);
+    }
+  };
+
+  const addSelectedGroupMembers = async () => {
+    if (!selectedConversation?.id || !groupAddMemberIds.length) {
+      setChatError('Vælg mindst et medlem.');
+      return;
+    }
+
+    setGroupAddingMembers(true);
+    setChatError('');
+    setChatNotice('');
+
+    try {
+      const data = await apiFetch(`/chat/conversations/${encodeURIComponent(selectedConversation.id)}/participants`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({
+          memberIds: groupAddMemberIds,
+        }),
+      });
+
+      if (data.conversation) {
+        replaceConversationInState(data.conversation);
+      }
+
+      setGroupAddMembersOpen(false);
+      setGroupAddMemberIds([]);
+      setGroupAddMemberQuery('');
+      setChatNotice('Medlemmerne er tilføjet.');
+      await loadConversations();
+    } catch (apiError) {
+      setChatError(apiError.message || 'Medlemmerne kunne ikke tilføjes.');
+    } finally {
+      setGroupAddingMembers(false);
+    }
+  };
+
   const removeConversationFromState = (conversationId) => {
     setConversations((current) => current.filter((conversation) => conversation.id !== conversationId));
 
@@ -4563,9 +4832,75 @@ function ChatScreen({
   const selectedConversationMember = selectedConversation?.participants
     ?.find((participant) => participant.memberId !== activeMember?.id)
     ?.member;
-  const selectedConversationMeta = selectedConversation?.type === 'direct'
-    ? 'Klassens stræber'
-    : `${selectedConversation?.participants?.length ?? 0} deltagere`;
+  const selectedConversationActiveParticipants = (selectedConversation?.participants ?? [])
+    .filter((participant) => participant.status === 'active' && participant.member);
+  const selectedConversationOwnerParticipant = selectedConversationActiveParticipants
+    .find((participant) => participant.role === 'owner' || participant.memberId === selectedConversation?.ownerMemberId);
+  const selectedConversationOwnerName = selectedConversationOwnerParticipant?.member?.displayName ?? 'Ukendt ejer';
+  const selectedConversationMeta = `${selectedConversationActiveParticipants.length || selectedConversation?.participants?.length || 0} deltagere`;
+  const selectedConversationCanManageMembers = selectedConversation?.type === 'group'
+    && selectedConversation?.canDeleteForEveryone;
+  const selectedConversationActiveMemberIds = new Set(
+    selectedConversationActiveParticipants.map((participant) => String(participant.memberId)),
+  );
+  const groupAddMemberCandidates = chatMembers.filter((member) => !selectedConversationActiveMemberIds.has(String(member.id)));
+  const groupAddMemberQueryValue = groupAddMemberQuery.trim().toLocaleLowerCase('da-DK');
+  const filteredGroupAddMemberCandidates = groupAddMemberQueryValue
+    ? groupAddMemberCandidates.filter((member) => {
+      const searchableName = [
+        member.displayName,
+        member.firstName,
+        member.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase('da-DK');
+
+      return searchableName.includes(groupAddMemberQueryValue);
+    })
+    : groupAddMemberCandidates;
+  const selectedGroupInfoActions = selectedConversation?.type === 'group'
+    ? [
+      ...(selectedConversationCanManageMembers
+        ? [
+          { type: 'rename', icon: 'create', label: 'Ændr chatnavn', tone: 'quiet' },
+          { type: 'add-members', icon: 'person-add', label: 'Tilføj medlemmer', tone: 'calm' },
+        ]
+        : []),
+      {
+        type: isConversationMuted(selectedConversation) ? 'unmute' : 'mute',
+        icon: isConversationMuted(selectedConversation) ? 'notifications' : 'notifications-off',
+        label: isConversationMuted(selectedConversation) ? 'Slå notifikationer til' : 'Slå notifikationer fra',
+        tone: isConversationMuted(selectedConversation) ? 'calm' : 'quiet',
+      },
+      selectedConversation.canDeleteForEveryone
+        ? { type: 'delete', icon: 'trash', label: 'Slet gruppechat', tone: 'danger' }
+        : { type: 'leave', icon: 'log-out-outline', label: 'Forlad gruppechat', tone: 'danger' },
+      { type: 'report', icon: 'flag', label: 'Rapportér chat', tone: 'warning' },
+    ]
+    : [];
+  const selectedConversationMemberCaps = Number(selectedConversationMember?.capsBalance ?? selectedConversationMember?.points);
+  const selectedConversationMemberCapsText = Number.isFinite(selectedConversationMemberCaps)
+    ? new Intl.NumberFormat('da-DK').format(Math.max(0, Math.floor(selectedConversationMemberCaps)))
+    : null;
+  const selectedConversationMemberWonDuels = Number(selectedConversationMember?.duelStats?.won);
+  const selectedConversationMemberLostDuels = Number(selectedConversationMember?.duelStats?.lost);
+  const selectedConversationMemberDuelStats = [
+    {
+      id: 'won',
+      label: 'Vundne',
+      value: Number.isFinite(selectedConversationMemberWonDuels) ? selectedConversationMemberWonDuels : 0,
+      style: styles.chatThreadMemberDuelPillWon,
+      textStyle: styles.chatThreadMemberDuelPillTextDark,
+    },
+    {
+      id: 'lost',
+      label: 'Tabte',
+      value: Number.isFinite(selectedConversationMemberLostDuels) ? selectedConversationMemberLostDuels : 0,
+      style: styles.chatThreadMemberDuelPillLost,
+      textStyle: styles.chatThreadMemberDuelPillTextLight,
+    },
+  ];
   const selectedConversationMemberOnline = isMemberOnline(selectedConversationMember);
   const selectedConversationActivity = formatMemberActivity(selectedConversationMember);
   const sendButtonInactive = !messageBody.trim();
@@ -4652,6 +4987,371 @@ function ChatScreen({
     </View>
   ) : null;
 
+  const groupInfoPanel = selectedConversation?.type === 'group' && groupInfoOpen ? (
+    <View pointerEvents="box-none" style={styles.chatThreadActionOverlay}>
+      <Pressable
+        accessibilityLabel="Luk medlemmer af chatten"
+        disabled={groupAddingMembers || groupRenaming}
+        style={styles.chatThreadActionBackdrop}
+        onPress={closeGroupInfoPanel}
+      />
+      <View style={[styles.chatModalPanel, styles.chatGroupInfoPanel]}>
+        {groupRenameOpen ? (
+          <>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatGroupInfoHeaderTitle}>
+                <Text style={styles.chatModalKicker}>Gruppechat</Text>
+                <Text style={styles.chatModalTitle}>Ændr chatnavn</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Tilbage til medlemmer"
+                accessibilityRole="button"
+                disabled={groupRenaming}
+                hitSlop={10}
+                onPress={() => {
+                  setGroupRenameOpen(false);
+                  setGroupRenameTitle('');
+                  setChatError('');
+                }}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="chevron-back" size={22} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.chatModalSearchField}>
+              <Ionicons name="create" size={17} color="#65748b" />
+              <TextInput
+                autoCapitalize="sentences"
+                autoCorrect={false}
+                maxLength={120}
+                onChangeText={setGroupRenameTitle}
+                onSubmitEditing={renameSelectedGroup}
+                placeholder="Gruppenavn"
+                placeholderTextColor="#8b93a1"
+                returnKeyType="done"
+                style={styles.chatModalSearchInput}
+                value={groupRenameTitle}
+              />
+            </View>
+
+            {chatError ? <Text style={styles.errorText}>{chatError}</Text> : null}
+
+            <Pressable
+              accessibilityRole="button"
+              disabled={groupRenaming || !groupRenameTitle.trim()}
+              onPress={renameSelectedGroup}
+              style={({ pressed }) => [
+                styles.chatActionConfirmButton,
+                styles.chatGroupInfoSubmitButton,
+                !groupRenameTitle.trim() ? styles.chatGroupInfoSubmitDisabled : null,
+                pressed && groupRenameTitle.trim() ? styles.footerItemPressed : null,
+              ]}
+            >
+              {groupRenaming ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.chatActionConfirmButtonText}>
+                  Gem chatnavn
+                </Text>
+              )}
+            </Pressable>
+          </>
+        ) : groupAddMembersOpen ? (
+          <>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatGroupInfoHeaderTitle}>
+                <Text style={styles.chatModalKicker}>Gruppechat</Text>
+                <Text style={styles.chatModalTitle}>Tilføj medlemmer</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Tilbage til medlemmer"
+                accessibilityRole="button"
+                disabled={groupAddingMembers}
+                hitSlop={10}
+                onPress={() => {
+                  setGroupAddMembersOpen(false);
+                  setGroupAddMemberIds([]);
+                  setGroupAddMemberQuery('');
+                  setChatError('');
+                }}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="chevron-back" size={22} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.chatModalSearchField}>
+              <Ionicons name="search" size={17} color="#65748b" />
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                onChangeText={setGroupAddMemberQuery}
+                placeholder="Søg efter medlemmer"
+                placeholderTextColor="#8b93a1"
+                style={styles.chatModalSearchInput}
+                value={groupAddMemberQuery}
+              />
+            </View>
+
+            <Text style={styles.chatGroupSelectionText}>
+              {groupAddMemberIds.length} valgt
+            </Text>
+
+            <ScrollView
+              contentContainerStyle={styles.chatModalMemberList}
+              keyboardShouldPersistTaps="handled"
+              style={styles.chatGroupInfoMemberScroll}
+            >
+              {filteredGroupAddMemberCandidates.length ? filteredGroupAddMemberCandidates.map((member) => {
+                const selected = groupAddMemberIds.includes(member.id);
+
+                return (
+                  <Pressable
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: selected }}
+                    key={member.id}
+                    onPress={() => toggleGroupAddMember(member.id)}
+                    style={({ pressed }) => [
+                      styles.chatModalMemberRow,
+                      selected ? styles.chatModalMemberRowSelected : null,
+                      pressed ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <Avatar profile={member} variant="chatCircle" />
+                    <Text numberOfLines={1} style={styles.chatModalMemberName}>
+                      {member.displayName}
+                    </Text>
+                    <View style={[styles.chatModalCheck, selected ? styles.chatModalCheckSelected : null]}>
+                      {selected ? <Ionicons name="checkmark" size={15} color="#FFFFFF" /> : null}
+                    </View>
+                  </Pressable>
+                );
+              }) : (
+                <Text style={styles.chatModalEmptyText}>
+                  {groupAddMemberCandidates.length ? 'Ingen medlemmer matcher søgningen.' : 'Alle aktive medlemmer er allerede med.'}
+                </Text>
+              )}
+            </ScrollView>
+
+            {chatError ? <Text style={styles.errorText}>{chatError}</Text> : null}
+
+            <Pressable
+              accessibilityRole="button"
+              disabled={groupAddingMembers || !groupAddMemberIds.length}
+              onPress={addSelectedGroupMembers}
+              style={({ pressed }) => [
+                styles.chatActionConfirmButton,
+                styles.chatActionConfirmButtonCalm,
+                styles.chatGroupInfoSubmitButton,
+                !groupAddMemberIds.length ? styles.chatGroupInfoSubmitDisabled : null,
+                pressed && groupAddMemberIds.length ? styles.footerItemPressed : null,
+              ]}
+            >
+              {groupAddingMembers ? (
+                <ActivityIndicator color={STUDOS_THEME.ink} />
+              ) : (
+                <Text style={[styles.chatActionConfirmButtonText, styles.chatActionConfirmButtonTextDark]}>
+                  Tilføj medlemmer
+                </Text>
+              )}
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.chatGroupInfoHeaderTitle}>
+                <Text style={styles.chatModalKicker}>Gruppechat</Text>
+                <Text style={styles.chatModalTitle}>Medlemmer af chatten</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk medlemmer af chatten"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={closeGroupInfoPanel}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={22} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.chatGroupInfoSummary}>
+              <GroupConversationAvatar
+                members={selectedConversationActiveParticipants.map((participant) => participant.member)}
+                photoUrl={selectedConversation.groupPhotoUrl}
+                variant="chatPicker"
+              />
+              <View style={styles.chatGroupInfoSummaryCopy}>
+                <Text numberOfLines={1} style={styles.chatGroupInfoTitle}>
+                  {selectedConversation.title}
+                </Text>
+                <Text numberOfLines={1} style={styles.chatGroupInfoMeta}>
+                  {selectedConversationMeta} · Ejer: {selectedConversationOwnerName}
+                </Text>
+              </View>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={styles.chatGroupInfoMemberList}
+              keyboardShouldPersistTaps="handled"
+              style={styles.chatGroupInfoMemberScroll}
+            >
+              {selectedConversationActiveParticipants.map((participant) => {
+                const member = participant.member;
+                const online = isMemberOnline(member);
+                const isViewer = participant.memberId === activeMember?.id;
+                const statusText = isViewer ? 'Dig' : online ? 'Online' : formatMemberActivity(member);
+
+                return (
+                  <View key={participant.id ?? participant.memberId} style={styles.chatGroupInfoMemberRow}>
+                    <Avatar profile={member} variant="chatCircle" />
+                    <View style={styles.chatGroupInfoMemberCopy}>
+                      <View style={styles.chatGroupInfoMemberNameRow}>
+                        <Text numberOfLines={1} style={styles.chatGroupInfoMemberName}>
+                          {member?.displayName ?? 'Ukendt medlem'}
+                        </Text>
+                        {participant.role === 'owner' ? (
+                          <Text style={styles.chatGroupInfoRolePill}>Ejer</Text>
+                        ) : null}
+                      </View>
+                      <View style={styles.chatGroupInfoStatusRow}>
+                        <View style={[styles.chatGroupInfoStatusDot, online ? styles.chatGroupInfoStatusDotOnline : null]} />
+                        <Text numberOfLines={1} style={styles.chatGroupInfoStatusText}>
+                          {statusText}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            {chatError ? <Text style={styles.errorText}>{chatError}</Text> : null}
+            {chatNotice ? <Text style={styles.successText}>{chatNotice}</Text> : null}
+
+            <View style={styles.chatConversationActionMenuList}>
+              {selectedGroupInfoActions.map((action) => (
+                <Pressable
+                  accessibilityLabel={action.label}
+                  accessibilityRole="button"
+                  key={action.type}
+                  onPress={() => selectGroupInfoAction(action.type)}
+                  style={({ pressed }) => [
+                    styles.chatConversationActionMenuItem,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.chatConversationActionMenuIcon,
+                      action.tone === 'danger' ? styles.chatConversationActionMenuIconDanger : null,
+                      action.tone === 'warning' ? styles.chatConversationActionMenuIconWarning : null,
+                      action.tone === 'calm' ? styles.chatConversationActionMenuIconCalm : null,
+                    ]}
+                  >
+                    <Ionicons
+                      name={action.icon}
+                      size={18}
+                      color={action.tone === 'quiet' || action.tone === 'warning' ? STUDOS_THEME.ink : '#FFFFFF'}
+                    />
+                  </View>
+                  <Text style={styles.chatConversationActionMenuText}>
+                    {action.label}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color="#9aa3b4" />
+                </Pressable>
+              ))}
+            </View>
+          </>
+        )}
+      </View>
+    </View>
+  ) : null;
+
+  const chatThreadConversationActionPanel = selectedConversation && chatActionConfirm && chatActionConfig ? (
+    <View pointerEvents="box-none" style={styles.chatThreadActionOverlay}>
+      <Pressable
+        accessibilityLabel="Luk chathandling"
+        disabled={chatActionLoading}
+        style={styles.chatThreadActionBackdrop}
+        onPress={() => {
+          if (!chatActionLoading) {
+            setChatActionConfirm(null);
+          }
+        }}
+      />
+      <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel, styles.chatThreadActionPanel]}>
+        <View
+          style={[
+            styles.chatActionConfirmIcon,
+            chatActionConfig.tone === 'danger' ? styles.chatActionConfirmIconDanger : null,
+            chatActionConfig.tone === 'warning' ? styles.chatActionConfirmIconWarning : null,
+            chatActionConfig.tone === 'calm' ? styles.chatActionConfirmIconCalm : null,
+          ]}
+        >
+          <Ionicons
+            name={chatActionConfig.icon ?? 'settings'}
+            size={24}
+            color={chatActionConfig.tone === 'quiet' || chatActionConfig.tone === 'warning' ? STUDOS_THEME.ink : '#FFFFFF'}
+          />
+        </View>
+        <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+          {chatActionConfig.title}
+        </Text>
+        <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+          {chatActionConfig.body}
+        </Text>
+        <View style={styles.chatActionConfirmButtons}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={chatActionLoading}
+            onPress={() => setChatActionConfirm(null)}
+            style={({ pressed }) => [
+              styles.chatActionCancelButton,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            <Text style={styles.chatActionCancelText}>Annuller</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={chatActionLoading}
+            onPress={performChatAction}
+            style={({ pressed }) => [
+              styles.chatActionConfirmButton,
+              chatActionConfig.tone === 'danger' ? styles.chatActionConfirmButtonDanger : null,
+              chatActionConfig.tone === 'warning' ? styles.chatActionConfirmButtonWarning : null,
+              chatActionConfig.tone === 'calm' ? styles.chatActionConfirmButtonCalm : null,
+              pressed ? styles.footerItemPressed : null,
+            ]}
+          >
+            {chatActionLoading ? (
+              <ActivityIndicator color={chatActionConfig.tone === 'warning' ? STUDOS_THEME.ink : '#FFFFFF'} />
+            ) : (
+              <Text
+                style={[
+                  styles.chatActionConfirmButtonText,
+                  chatActionConfig.tone === 'warning' ? styles.chatActionConfirmButtonTextDark : null,
+                ]}
+              >
+                {chatActionConfig.confirmLabel}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  ) : null;
+
   const chatThreadOverlay = selectedConversation ? (
     <Modal
       animationType="none"
@@ -4681,6 +5381,17 @@ function ChatScreen({
           {...chatThreadTouchHandlers}
         >
         <View style={styles.chatThreadPageHeader} {...chatThreadTouchHandlers}>
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            pointerEvents="none"
+            style={styles.chatThreadHeaderBackdrop}
+          >
+            <View style={[styles.chatThreadHeaderStripe, styles.chatThreadHeaderStripeBlue]} />
+            <View style={[styles.chatThreadHeaderStripe, styles.chatThreadHeaderStripeYellow]} />
+            <View style={[styles.chatThreadHeaderStripe, styles.chatThreadHeaderStripeRed]} />
+            <Text style={styles.chatThreadHeaderWatermark}>STUDOS</Text>
+          </View>
           <Pressable
             accessibilityLabel="Tilbage til chats"
             accessibilityRole="button"
@@ -4694,66 +5405,93 @@ function ChatScreen({
             <Ionicons name="chevron-back" size={24} color={STUDOS_THEME.ink} />
           </Pressable>
           <View style={styles.chatThreadCenteredIdentity}>
-            <View style={styles.chatThreadProfileSummary}>
-              {selectedConversationMember ? (
+            <Pressable
+              accessibilityHint={selectedConversation.type === 'group' ? 'Åbner medlemmer og gruppeindstillinger' : undefined}
+              accessibilityLabel={selectedConversation.type === 'group' ? 'Se medlemmer af chatten' : undefined}
+              accessibilityRole={selectedConversation.type === 'group' ? 'button' : undefined}
+              disabled={selectedConversation.type !== 'group'}
+              onPress={openGroupInfoPanel}
+              style={({ pressed }) => [
+                styles.chatThreadProfileSummary,
+                selectedConversation.type === 'group' ? styles.chatThreadProfileSummaryInteractive : null,
+                pressed ? styles.chatThreadProfileSummaryPressed : null,
+              ]}
+            >
+              {selectedConversation.type === 'direct' && selectedConversationMember ? (
                 <View style={styles.chatThreadAvatarStatusWrap}>
                   <Avatar profile={selectedConversationMember} variant="chatHeader" />
                   {selectedConversationMemberOnline ? <View style={styles.chatThreadOnlineDot} /> : null}
                 </View>
               ) : (
-                <View style={styles.chatThreadGroupAvatar}>
-                  {selectedConversation.groupPhotoUrl ? (
-                    <Image source={{ uri: selectedConversation.groupPhotoUrl }} style={styles.chatThreadGroupPhoto} />
-                  ) : (
-                    <Ionicons name="people" size={23} color={STUDOS_THEME.red} />
-                  )}
-                </View>
+                <GroupConversationAvatar
+                  members={selectedConversation.participants?.map((participant) => participant.member)}
+                  photoUrl={selectedConversation.groupPhotoUrl}
+                  variant="chatHeader"
+                />
               )}
               <View style={styles.chatThreadPageTitleWrap}>
                 <Text numberOfLines={1} style={styles.chatThreadPageTitle}>
                   {selectedConversation.title}
                 </Text>
                 {selectedConversation.type === 'direct' ? (
-                  <>
-                    <View style={styles.chatThreadPageMetaRow}>
-                      <View style={styles.chatThreadAwardIcon}>
-                        <View style={styles.chatThreadAwardRibbonRow}>
-                          <View style={[styles.chatThreadAwardRibbon, styles.chatThreadAwardRibbonLeft]} />
-                          <View style={[styles.chatThreadAwardRibbon, styles.chatThreadAwardRibbonRight]} />
-                        </View>
-                        <View style={styles.chatThreadAwardMedal}>
-                          <View style={styles.chatThreadAwardMedalDot} />
-                        </View>
-                      </View>
-                      <Text numberOfLines={1} style={styles.chatThreadPageMeta}>
-                        {selectedConversationMeta}
-                      </Text>
-                    </View>
-                    <Text numberOfLines={1} style={styles.chatThreadLastActive}>
-                      {selectedConversationActivity}
-                    </Text>
-                  </>
+                  <Text numberOfLines={1} style={styles.chatThreadLastActive}>
+                    {selectedConversationActivity}
+                  </Text>
                 ) : (
                   <Text numberOfLines={1} style={styles.chatThreadPageMeta}>
                     {selectedConversationMeta}
                   </Text>
                 )}
               </View>
-            </View>
-            <View style={styles.chatThreadCounterGrid}>
-              {CHAT_THREAD_HEADER_COUNTERS.map((counter) => (
-                <View key={counter.id} style={styles.chatThreadCounterPill}>
-                  {counter.id === 'wave' ? (
-                    <MaterialCommunityIcons name="waves" size={13} color={STUDOS_THEME.red} />
-                  ) : (
-                    <Ionicons name={counter.icon} size={11} color={STUDOS_THEME.red} />
-                  )}
-                  <Text numberOfLines={1} style={styles.chatThreadCounterText}>
-                    {counter.value}
-                  </Text>
+            </Pressable>
+            {selectedConversation.type === 'direct' && selectedConversationMember ? (
+              <View style={styles.chatThreadMemberStatsStack}>
+                {selectedConversationMemberCapsText ? (
+                  <View style={styles.chatThreadMemberCapsPill}>
+                    <Image source={CAPS_COIN} resizeMode="contain" style={styles.chatThreadMemberCapsCoin} />
+                    <View style={styles.chatThreadMemberCapsCopy}>
+                      <Text numberOfLines={1} style={styles.chatThreadMemberCapsValue}>
+                        {selectedConversationMemberCapsText}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.chatThreadMemberCapsLabel}>
+                        Caps
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+                <View style={styles.chatThreadMemberDuelPillRow}>
+                  {selectedConversationMemberDuelStats.map((stat) => (
+                    <View key={stat.id} style={[styles.chatThreadMemberDuelPill, stat.style]}>
+                      <Text numberOfLines={1} style={[styles.chatThreadMemberDuelPillValue, stat.textStyle]}>
+                        {stat.value}
+                      </Text>
+                      <Text
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.74}
+                        numberOfLines={1}
+                        style={[styles.chatThreadMemberDuelPillLabel, stat.textStyle]}
+                      >
+                        {stat.label}
+                      </Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
+              </View>
+            ) : selectedConversation.type === 'group' ? (
+              <Pressable
+                accessibilityLabel="Se medlemmer af chatten"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={openGroupInfoPanel}
+                style={({ pressed }) => [
+                  styles.chatThreadGroupInfoButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="people" size={16} color={STUDOS_THEME.ink} />
+                <Ionicons name="chevron-forward" size={13} color={STUDOS_THEME.ink} />
+              </Pressable>
+            ) : null}
           </View>
         </View>
 
@@ -4790,63 +5528,70 @@ function ChatScreen({
                     {messageProfileOnline ? <View style={styles.chatMessageOnlineDot} /> : null}
                   </View>
                 ) : null}
-                <Pressable
-                  accessibilityHint={message.isMine ? 'Hold nede for at slette beskeden' : 'Hold nede for at rapportere beskeden'}
-                  accessibilityRole="button"
-                  delayLongPress={280}
-                  disabled={message.isDeleted}
-                  hitSlop={4}
-                  onLongPress={() => openChatMessageActionConfirm(message)}
-                  style={({ pressed }) => [
-                    styles.chatBubble,
-                    message.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
-                    !message.isDeleted && pressed ? styles.chatBubbleHolding : null,
-                    message.isDeleted ? styles.chatBubbleDeleted : null,
-                  ]}
-                >
-                  {({ pressed }) => (
-                    <>
-                      <View
-                        pointerEvents="none"
-                        style={[
-                          styles.chatBubbleTail,
-                          message.isMine ? styles.chatBubbleTailMine : styles.chatBubbleTailOther,
-                        ]}
-                      />
-                      <Text style={[styles.chatMessageText, message.isMine ? styles.chatMessageTextMine : null]}>
-                        {message.isDeleted ? 'Beskeden er slettet' : message.body}
-                      </Text>
-                      <View style={styles.chatBubbleMetaRow}>
-                        <Text style={[styles.chatBubbleMeta, message.isMine ? styles.chatBubbleMetaMine : null]}>
-                          {formatChatTime(message.createdAt)}
-                        </Text>
-                        {selectedConversation.type === 'direct' && message.isMine ? (
-                          <Ionicons
-                            name={message.readByOther ? 'checkmark-done' : 'checkmark'}
-                            size={14}
-                            color={message.readByOther ? STUDOS_THEME.blue : '#FFF4D8'}
-                            style={styles.chatBubbleStatusIcon}
-                          />
-                        ) : null}
-                      </View>
-                      {!message.isDeleted && pressed ? (
+                <View style={styles.chatBubbleStack}>
+                  {selectedConversation.type === 'group' && !message.isMine ? (
+                    <Text numberOfLines={1} style={styles.chatSenderName}>
+                      {messageProfile?.firstName || String(messageProfile?.displayName ?? '').trim().split(/\s+/)[0] || 'Ukendt'}
+                    </Text>
+                  ) : null}
+                  <Pressable
+                    accessibilityHint={message.isMine ? 'Hold nede for at slette beskeden' : 'Hold nede for at rapportere beskeden'}
+                    accessibilityRole="button"
+                    delayLongPress={280}
+                    disabled={message.isDeleted}
+                    hitSlop={4}
+                    onLongPress={() => openChatMessageActionConfirm(message)}
+                    style={({ pressed }) => [
+                      styles.chatBubble,
+                      message.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
+                      !message.isDeleted && pressed ? styles.chatBubbleHolding : null,
+                      message.isDeleted ? styles.chatBubbleDeleted : null,
+                    ]}
+                  >
+                    {({ pressed }) => (
+                      <>
                         <View
                           pointerEvents="none"
                           style={[
-                            styles.chatBubbleHoldIndicator,
-                            message.isMine ? styles.chatBubbleHoldIndicatorMine : styles.chatBubbleHoldIndicatorOther,
+                            styles.chatBubbleTail,
+                            message.isMine ? styles.chatBubbleTailMine : styles.chatBubbleTailOther,
                           ]}
-                        >
-                          <Ionicons
-                            name={message.isMine ? 'trash' : 'flag'}
-                            size={11}
-                            color={message.isMine ? '#FFFFFF' : STUDOS_THEME.ink}
-                          />
+                        />
+                        <Text style={[styles.chatMessageText, message.isMine ? styles.chatMessageTextMine : null]}>
+                          {message.isDeleted ? 'Beskeden er slettet' : message.body}
+                        </Text>
+                        <View style={styles.chatBubbleMetaRow}>
+                          <Text style={[styles.chatBubbleMeta, message.isMine ? styles.chatBubbleMetaMine : null]}>
+                            {formatChatTime(message.createdAt)}
+                          </Text>
+                          {selectedConversation.type === 'direct' && message.isMine ? (
+                            <Ionicons
+                              name={message.readByOther ? 'checkmark-done' : 'checkmark'}
+                              size={14}
+                              color={message.readByOther ? STUDOS_THEME.blue : '#FFF4D8'}
+                              style={styles.chatBubbleStatusIcon}
+                            />
+                          ) : null}
                         </View>
-                      ) : null}
-                    </>
-                  )}
-                </Pressable>
+                        {!message.isDeleted && pressed ? (
+                          <View
+                            pointerEvents="none"
+                            style={[
+                              styles.chatBubbleHoldIndicator,
+                              message.isMine ? styles.chatBubbleHoldIndicatorMine : styles.chatBubbleHoldIndicatorOther,
+                            ]}
+                          >
+                            <Ionicons
+                              name={message.isMine ? 'trash' : 'flag'}
+                              size={11}
+                              color={message.isMine ? '#FFFFFF' : STUDOS_THEME.ink}
+                            />
+                          </View>
+                        ) : null}
+                      </>
+                    )}
+                  </Pressable>
+                </View>
 
                 {message.isMine ? (
                   <View style={styles.chatMessageAvatarStatusWrap}>
@@ -4908,6 +5653,8 @@ function ChatScreen({
         </View>
         </Animated.View>
         {chatMessageActionPanel}
+        {groupInfoPanel}
+        {chatThreadConversationActionPanel}
       </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -5019,6 +5766,13 @@ function ChatScreen({
         contentContainerStyle={styles.chatConversationList}
         keyboardShouldPersistTaps="handled"
         onScroll={handleChatListScroll}
+        refreshControl={(
+          <StudosRefreshControl
+            offset={CHAT_REFRESH_CONTROL_OFFSET}
+            onRefresh={refreshChat}
+            refreshing={chatRefreshing}
+          />
+        )}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.chatConversationScroll}
@@ -5258,13 +6012,12 @@ function ChatScreen({
                 pressed ? styles.footerItemPressed : null,
               ]}
             >
-              <View style={styles.chatGroupPhotoPreview}>
-                {groupPhotoUri ? (
-                  <Image source={{ uri: groupPhotoUri }} style={styles.chatGroupPhotoPreviewImage} />
-                ) : (
-                  <Ionicons name="camera" size={22} color={STUDOS_THEME.red} />
-                )}
-              </View>
+              <GroupConversationAvatar
+                emptyIcon="camera"
+                members={selectedGroupMemberIds.length ? selectedGroupPreviewMembers : []}
+                photoUrl={groupPhotoUri}
+                variant="chatPicker"
+              />
               <View style={styles.chatGroupPhotoCopy}>
                 <Text style={styles.chatGroupPhotoTitle}>
                   {groupPhotoUri ? 'Gruppebillede valgt' : 'Tilføj gruppebillede'}
@@ -5420,7 +6173,7 @@ function ChatScreen({
           }
         }}
         transparent
-        visible={Boolean(chatActionConfirm && chatActionConfig)}
+        visible={Boolean(chatActionConfirm && chatActionConfig && !selectedConversation)}
       >
         <View style={styles.chatModalRoot}>
           <Pressable
@@ -5510,6 +6263,7 @@ function CalendarScreen({
   onBlockMember,
   onRequestScrollTop,
   onReportEvent,
+  onRefresh,
   onRespondToEvent,
   onUpdateEvent,
 }) {
@@ -5532,6 +6286,7 @@ function CalendarScreen({
   const [reportingEventId, setReportingEventId] = useState('');
   const [blockingMemberId, setBlockingMemberId] = useState('');
   const [respondingEventId, setRespondingEventId] = useState('');
+  const [calendarRefreshing, setCalendarRefreshing] = useState(false);
   const [pendingResponsePageOpen, setPendingResponsePageOpen] = useState(false);
   const [pastEventsPageOpen, setPastEventsPageOpen] = useState(false);
   const [calendarAttendanceEventId, setCalendarAttendanceEventId] = useState('');
@@ -6017,6 +6772,23 @@ function CalendarScreen({
       useNativeDriver: true,
     },
   ), [calendarScrollY, updateCalendarHeaderScrolled]);
+
+  const refreshCalendar = useCallback(async () => {
+    if (typeof onRefresh !== 'function') {
+      return;
+    }
+
+    setCalendarRefreshing(true);
+    setCalendarError('');
+
+    try {
+      await onRefresh();
+    } catch (error) {
+      setCalendarError(error?.message || 'Kalenderen kunne ikke opdateres.');
+    } finally {
+      setCalendarRefreshing(false);
+    }
+  }, [onRefresh]);
 
   const resetCalendarHeaderScroll = useCallback(() => {
     calendarScrollY.setValue(0);
@@ -7840,6 +8612,13 @@ function CalendarScreen({
         keyboardShouldPersistTaps="handled"
         onScroll={handleCalendarGridScroll}
         ref={calendarGridScrollRef}
+        refreshControl={(
+          <StudosRefreshControl
+            offset={CALENDAR_REFRESH_CONTROL_OFFSET}
+            onRefresh={refreshCalendar}
+            refreshing={calendarRefreshing}
+          />
+        )}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.calendarGridScroll}
@@ -8470,10 +9249,11 @@ function CalendarScreen({
   );
 }
 
-function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolClass, sessionToken }) {
+function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, onRefreshClassData, schoolClass, sessionToken }) {
   const leaderboardScrollRef = useRef(null);
   const [leaderboardScope, setLeaderboardScope] = useState('global');
   const [classBattleData, setClassBattleData] = useState(null);
+  const [classBattleRefreshing, setClassBattleRefreshing] = useState(false);
   const [classBattleRowsScrolled, setClassBattleRowsScrolled] = useState(false);
   const activeMembers = schoolClass?.members?.filter((member) => member.status === 'active') ?? [];
   const currentMember = activeMembers.find((member) => String(member.id) === String(activeMember?.id));
@@ -8561,30 +9341,47 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolCl
   const formatPercent = (value) => new Intl.NumberFormat('da-DK', {
     maximumFractionDigits: 1,
   }).format(value);
-  useEffect(() => {
+  const loadClassBattle = useCallback(async ({ refreshing = false } = {}) => {
     if (!sessionToken) {
       setClassBattleData(null);
-      return undefined;
+      return;
     }
 
+    if (refreshing) {
+      setClassBattleRefreshing(true);
+    }
+
+    try {
+      const data = await apiFetch('/class-battle', { authToken: sessionToken });
+
+      setClassBattleData(data);
+      if (refreshing) {
+        await onRefreshClassData?.();
+      }
+    } catch {
+      setClassBattleData(null);
+    } finally {
+      if (refreshing) {
+        setClassBattleRefreshing(false);
+      }
+    }
+  }, [onRefreshClassData, sessionToken]);
+  useEffect(() => {
     let cancelled = false;
 
-    apiFetch('/class-battle', { authToken: sessionToken })
-      .then((data) => {
-        if (!cancelled) {
-          setClassBattleData(data);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setClassBattleData(null);
-        }
-      });
+    loadClassBattle().catch(() => {
+      if (!cancelled) {
+        setClassBattleData(null);
+      }
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [sessionToken]);
+  }, [loadClassBattle]);
+  const refreshClassBattle = useCallback(() => {
+    loadClassBattle({ refreshing: true });
+  }, [loadClassBattle]);
   const changeLeaderboardScope = (nextScope) => {
     setLeaderboardScope(nextScope);
     setClassBattleRowsScrolled(false);
@@ -8739,6 +9536,12 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, schoolCl
           ref={leaderboardScrollRef}
           nestedScrollEnabled
           onScroll={updateClassBattleRowsScrolled}
+          refreshControl={(
+            <StudosRefreshControl
+              onRefresh={refreshClassBattle}
+              refreshing={classBattleRefreshing}
+            />
+          )}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           style={styles.classBattleRowsScroll}
@@ -9511,6 +10314,7 @@ function WallsAlbumScreen({
 
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [photosRefreshing, setPhotosRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -9541,19 +10345,40 @@ function WallsAlbumScreen({
 
   const photoColWidth = useMemo(() => {
     const inner = APP_WINDOW_WIDTH - APP_SCREEN_PADDING * 2;
-    return Math.floor((inner - 4) / 3);
+    return Math.floor((inner - 8) / 3);
   }, []);
 
-  useEffect(() => {
+  const loadAlbumPhotos = useCallback(async ({ refreshing = false, reset = false } = {}) => {
     if (!visible || !gallery?.id || !sessionToken) return;
-    setLoading(true);
+
+    if (refreshing) {
+      setPhotosRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setLoadError('');
-    setPhotos([]);
-    apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, { authToken: sessionToken })
-      .then((data) => setPhotos(Array.isArray(data?.photos) ? data.photos : []))
-      .catch((err) => setLoadError(err?.message || 'Kunne ikke hente billeder.'))
-      .finally(() => setLoading(false));
+    if (reset) {
+      setPhotos([]);
+    }
+
+    try {
+      const data = await apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, { authToken: sessionToken });
+      setPhotos(Array.isArray(data?.photos) ? data.photos : []);
+    } catch (err) {
+      setLoadError(err?.message || 'Kunne ikke hente billeder.');
+    } finally {
+      setLoading(false);
+      setPhotosRefreshing(false);
+    }
   }, [visible, gallery?.id, sessionToken]);
+
+  useEffect(() => {
+    loadAlbumPhotos({ reset: true });
+  }, [loadAlbumPhotos]);
+
+  const refreshAlbumPhotos = useCallback(() => {
+    loadAlbumPhotos({ refreshing: true });
+  }, [loadAlbumPhotos]);
 
   useEffect(() => {
     if (visible) {
@@ -9764,54 +10589,73 @@ function WallsAlbumScreen({
           {uploadError ? <Text style={[styles.errorText, { marginBottom: 6 }]}>{uploadError}</Text> : null}
 
           {/* Fotogrid */}
-          <ScrollView
+          <FlatList
             {...touchHandlers}
-            contentContainerStyle={styles.wallsAlbumScrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {loading ? (
-              <View style={styles.wallsEmptyState}>
-                <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
-              </View>
-            ) : loadError ? (
-              <View style={styles.wallsEmptyState}>
-                <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
-                <Text style={styles.wallsEmptyTitle}>Kunne ikke hente billeder</Text>
-                <Text style={styles.wallsEmptyBody}>{loadError}</Text>
-              </View>
-            ) : photos.length === 0 ? (
-              <View style={styles.wallsEmptyState}>
-                <Ionicons name="images-outline" size={56} color="#b0c4be" />
-                <Text style={styles.wallsEmptyTitle}>Ingen billeder endnu</Text>
-                <Text style={styles.wallsEmptyBody}>
-                  {canAddPhoto
-                    ? 'Tryk på + for at tilføje det første billede.'
-                    : 'Der er ikke tilføjet billeder til dette album endnu.'}
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.wallsAlbumGrid}>
-                {photos.map((photo) => (
-                  <Pressable
-                    accessibilityHint="Hold inde for indstillinger"
-                    accessibilityLabel="Se billede"
-                    accessibilityRole="button"
-                    key={photo.id}
-                    onLongPress={() => setActionPhoto(photo)}
-                    onPress={() => openViewer(photo)}
-                    style={[styles.wallsAlbumPhotoCell, { width: photoColWidth, height: photoColWidth }]}
-                  >
-                    <Image
-                      accessibilityIgnoresInvertColors
-                      resizeMode="cover"
-                      source={{ uri: photo.imageUri }}
-                      style={styles.wallsAlbumPhoto}
-                    />
-                  </Pressable>
-                ))}
-              </View>
+            columnWrapperStyle={styles.wallsAlbumGridRow}
+            contentContainerStyle={[
+              styles.wallsAlbumScrollContent,
+              (loading || loadError || photos.length === 0) ? styles.wallsAlbumScrollContentEmpty : null,
+            ]}
+            data={loading || loadError ? [] : photos}
+            keyExtractor={(photo) => String(photo.id)}
+            ListEmptyComponent={() => {
+              if (loading) {
+                return (
+                  <View style={styles.wallsEmptyState}>
+                    <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
+                  </View>
+                );
+              }
+              if (loadError) {
+                return (
+                  <View style={styles.wallsEmptyState}>
+                    <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
+                    <Text style={styles.wallsEmptyTitle}>Kunne ikke hente billeder</Text>
+                    <Text style={styles.wallsEmptyBody}>{loadError}</Text>
+                  </View>
+                );
+              }
+
+              return (
+                <View style={styles.wallsEmptyState}>
+                  <Ionicons name="images-outline" size={56} color="#b0c4be" />
+                  <Text style={styles.wallsEmptyTitle}>Ingen billeder endnu</Text>
+                  <Text style={styles.wallsEmptyBody}>
+                    {canAddPhoto
+                      ? 'Tryk på + for at tilføje det første billede.'
+                      : 'Der er ikke tilføjet billeder til dette album endnu.'}
+                  </Text>
+                </View>
+              );
+            }}
+            numColumns={3}
+            refreshControl={(
+              <StudosRefreshControl
+                onRefresh={refreshAlbumPhotos}
+                refreshing={photosRefreshing}
+              />
             )}
-          </ScrollView>
+            renderItem={({ item: photo }) => (
+              <Pressable
+                accessibilityHint="Hold inde for indstillinger"
+                accessibilityLabel="Se billede"
+                accessibilityRole="button"
+                onLongPress={() => setActionPhoto(photo)}
+                onPress={() => openViewer(photo)}
+                style={[styles.wallsAlbumPhotoCell, { width: photoColWidth, height: photoColWidth }]}
+              >
+                <Image
+                  accessibilityIgnoresInvertColors
+                  resizeMode="cover"
+                  source={{ uri: photo.imageUri }}
+                  style={styles.wallsAlbumPhoto}
+                />
+              </Pressable>
+            )}
+            removeClippedSubviews={Platform.OS !== 'ios'}
+            scrollEventThrottle={16}
+            showsVerticalScrollIndicator={false}
+          />
 
           {/* Upload-knap */}
           {canAddPhoto && (
@@ -10114,21 +10958,21 @@ function WallsGalleryCard({ gallery, longPressHandledRef, onLongPress, onPress }
       >
         <View style={styles.wallsCardCover}>
           <WallsGalleryPreviewCover gallery={gallery} />
-          <View style={styles.wallsCardMeta}>
-            <Text numberOfLines={1} style={styles.wallsCardName}>{gallery.name}</Text>
-            <View style={styles.wallsCardDetailRow}>
-              <Text numberOfLines={1} style={styles.wallsCardCount}>
-                {photoCount === 0 ? 'Tomt' : `${photoCount} ${photoCount === 1 ? 'billede' : 'billeder'}`}
-              </Text>
-              <Text
-                style={[
-                  styles.wallsCardVisibility,
-                  !isPrivate ? styles.wallsCardVisibilityPublic : null,
-                ]}
-              >
-                {visibilityLabel}
-              </Text>
-            </View>
+        </View>
+        <View style={styles.wallsCardMeta}>
+          <Text numberOfLines={1} style={styles.wallsCardName}>{gallery.name}</Text>
+          <View style={styles.wallsCardDetailRow}>
+            <Text numberOfLines={1} style={styles.wallsCardCount}>
+              {photoCount === 0 ? 'Tomt' : `${photoCount} ${photoCount === 1 ? 'billede' : 'billeder'}`}
+            </Text>
+            <Text
+              style={[
+                styles.wallsCardVisibility,
+                !isPrivate ? styles.wallsCardVisibilityPublic : null,
+              ]}
+            >
+              {visibilityLabel}
+            </Text>
           </View>
         </View>
       </Pressable>
@@ -10150,61 +10994,29 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState('');
   const [galleries, setGalleries] = useState([]);
+  const [galleryPage, setGalleryPage] = useState(1);
+  const [galleryHasMore, setGalleryHasMore] = useState(false);
   const [albumFilter, setAlbumFilter] = useState('all');
   const [albumSort, setAlbumSort] = useState('recent');
   const [draftAlbumSort, setDraftAlbumSort] = useState('recent');
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [albumSearch, setAlbumSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [loadMoreError, setLoadMoreError] = useState('');
   const [scrolled, setScrolled] = useState(false);
   const wallsScrollY = useRef(new Animated.Value(0)).current;
   const longPressHandledRef = useRef(false);
   const wallsHeaderScrolledRef = useRef(false);
-  const isEmpty = galleries.length === 0 && !loading;
-  const categoryFilteredGalleries = useMemo(() => {
-    if (albumFilter === WALLS_VISIBILITY.private) {
-      return galleries.filter((gallery) => gallery.visibility === WALLS_VISIBILITY.private);
-    }
-    if (albumFilter === WALLS_VISIBILITY.public) {
-      return galleries.filter((gallery) => gallery.visibility === WALLS_VISIBILITY.public);
-    }
-    return galleries;
-  }, [albumFilter, galleries]);
-  const normalizedAlbumSearch = albumSearch.trim().toLocaleLowerCase('da-DK');
-  const searchFilteredGalleries = useMemo(() => {
-    if (!normalizedAlbumSearch) return categoryFilteredGalleries;
-
-    return categoryFilteredGalleries.filter((gallery) =>
-      String(gallery.name ?? '').toLocaleLowerCase('da-DK').includes(normalizedAlbumSearch),
-    );
-  }, [categoryFilteredGalleries, normalizedAlbumSearch]);
-  const filteredGalleries = useMemo(() => {
-    const galleryTimestamp = (gallery) => {
-      const value = Date.parse(gallery.updatedAt ?? gallery.createdAt ?? '');
-      return Number.isFinite(value) ? value : 0;
-    };
-
-    return [...searchFilteredGalleries].sort((left, right) => {
-      if (albumSort === 'photos') {
-        const photoDiff = (right.photoCount ?? 0) - (left.photoCount ?? 0);
-        if (photoDiff !== 0) return photoDiff;
-        return galleryTimestamp(right) - galleryTimestamp(left);
-      }
-
-      if (albumSort === 'az') {
-        const nameDiff = String(left.name ?? '').localeCompare(String(right.name ?? ''), 'da', { sensitivity: 'base' });
-        if (nameDiff !== 0) return nameDiff;
-        return galleryTimestamp(right) - galleryTimestamp(left);
-      }
-
-      return galleryTimestamp(right) - galleryTimestamp(left);
-    });
-  }, [albumSort, searchFilteredGalleries]);
+  const galleryRequestSeqRef = useRef(0);
+  const normalizedAlbumSearch = albumSearch.trim();
+  const isEmpty = galleries.length === 0 && !loading && !loadError;
   const hasAdvancedAlbumFilter = albumSort !== 'recent';
   const hasDraftAlbumFilter = draftAlbumSort !== 'recent';
-  const isFilterEmpty = !isEmpty && !loading && !loadError && !normalizedAlbumSearch && categoryFilteredGalleries.length === 0;
-  const isSearchEmpty = !isEmpty && !loading && !loadError && Boolean(normalizedAlbumSearch) && filteredGalleries.length === 0;
+  const isFilterEmpty = isEmpty && !normalizedAlbumSearch && albumFilter !== 'all';
+  const isSearchEmpty = isEmpty && Boolean(normalizedAlbumSearch);
   const filterEmptyTitle = albumFilter === WALLS_VISIBILITY.private
     ? 'Ingen private album'
     : 'Ingen fælles album';
@@ -10269,29 +11081,160 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
     },
   ), [wallsScrollY]);
 
-  useEffect(() => {
+  const fetchGalleriesPage = useCallback(async ({ page = 1, mode = 'replace' } = {}) => {
     if (!sessionToken) return;
-    setLoading(true);
-    setLoadError('');
-    apiFetch('/galleries', { authToken: sessionToken })
-      .then((data) => {
-        setGalleries(Array.isArray(data?.galleries) ? data.galleries : []);
-      })
-      .catch((err) => {
+
+    const requestSeq = galleryRequestSeqRef.current + 1;
+    galleryRequestSeqRef.current = requestSeq;
+
+    if (mode === 'append') {
+      setLoadingMore(true);
+      setLoadMoreError('');
+    } else {
+      if (mode === 'refresh') {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setLoadingMore(false);
+      setLoadError('');
+      setLoadMoreError('');
+    }
+
+    try {
+      const params = new URLSearchParams();
+      params.set('page', String(page));
+      params.set('perPage', String(WALLS_GALLERIES_PAGE_SIZE));
+      params.set('sort', albumSort);
+      if (albumFilter !== 'all') params.set('visibility', albumFilter);
+      if (normalizedAlbumSearch) params.set('q', normalizedAlbumSearch);
+
+      const data = await apiFetch(`/galleries?${params.toString()}`, { authToken: sessionToken });
+      if (galleryRequestSeqRef.current !== requestSeq) return;
+
+      const nextGalleries = Array.isArray(data?.galleries) ? data.galleries : [];
+      const nextPage = Number(data?.pagination?.page ?? page);
+      const hasMore = Boolean(data?.pagination?.hasMore);
+
+      setGalleries((prev) => {
+        if (mode !== 'append') return nextGalleries;
+
+        const seen = new Set(prev.map((gallery) => String(gallery?.id ?? '')));
+        const additions = nextGalleries.filter((gallery) => {
+          const id = String(gallery?.id ?? '');
+          if (!id || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+
+        return [...prev, ...additions];
+      });
+      setGalleryPage(nextPage);
+      setGalleryHasMore(hasMore);
+    } catch (err) {
+      if (galleryRequestSeqRef.current !== requestSeq) return;
+
+      if (mode === 'append') {
+        setLoadMoreError(err?.message || 'Kunne ikke hente flere album.');
+      } else {
         setLoadError(err?.message || 'Kunne ikke hente gallerier.');
-      })
-      .finally(() => setLoading(false));
-  }, [sessionToken]);
+        setGalleryHasMore(false);
+      }
+    } finally {
+      if (galleryRequestSeqRef.current !== requestSeq) return;
+
+      setLoading(false);
+      setLoadingMore(false);
+      setRefreshing(false);
+    }
+  }, [albumFilter, albumSort, normalizedAlbumSearch, sessionToken]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      setGalleries([]);
+      setGalleryPage(1);
+      setGalleryHasMore(false);
+      setLoading(false);
+      return undefined;
+    }
+
+    const delay = normalizedAlbumSearch ? 260 : 0;
+    const timer = setTimeout(() => {
+      fetchGalleriesPage({ page: 1, mode: 'replace' });
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [fetchGalleriesPage, normalizedAlbumSearch, sessionToken]);
+
+  const handleRefreshGalleries = useCallback(() => {
+    fetchGalleriesPage({ page: 1, mode: 'refresh' });
+  }, [fetchGalleriesPage]);
+
+  const handleLoadMoreGalleries = useCallback(() => {
+    if (loading || loadingMore || refreshing || loadError || !galleryHasMore) return;
+    fetchGalleriesPage({ page: galleryPage + 1, mode: 'append' });
+  }, [
+    fetchGalleriesPage,
+    galleryHasMore,
+    galleryPage,
+    loadError,
+    loading,
+    loadingMore,
+    refreshing,
+  ]);
+
+  const galleryListFooter = useMemo(() => {
+    if (loadingMore) {
+      return (
+        <View style={styles.wallsListFooter}>
+          <ActivityIndicator color={STUDOS_THEME.blue} size="small" />
+        </View>
+      );
+    }
+
+    if (loadMoreError) {
+      return (
+        <Pressable
+          accessibilityLabel="Prøv at hente flere album igen"
+          accessibilityRole="button"
+          onPress={handleLoadMoreGalleries}
+          style={({ pressed }) => [
+            styles.wallsListFooterRetry,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Text style={styles.wallsListFooterRetryTitle}>Kunne ikke hente flere</Text>
+          <Text style={styles.wallsListFooterRetryText}>Tryk for at prøve igen</Text>
+        </Pressable>
+      );
+    }
+
+    return null;
+  }, [handleLoadMoreGalleries, loadMoreError, loadingMore]);
 
   const handleCreate = useCallback((gallery) => {
     if (!gallery) return;
-    setGalleries((prev) => [gallery, ...prev]);
-  }, []);
+    fetchGalleriesPage({ page: 1, mode: 'refresh' });
+  }, [fetchGalleriesPage]);
 
   const handleEdit = useCallback((updated) => {
     if (!updated) return;
-    setGalleries((prev) => prev.map((g) => g.id === updated.id ? updated : g));
-  }, []);
+    setSelectedGallery((current) => current && String(current.id) === String(updated.id) ? {
+      ...current,
+      ...updated,
+      previewPhotos: Array.isArray(updated.previewPhotos) && updated.previewPhotos.length > 0
+        ? updated.previewPhotos
+        : current.previewPhotos,
+    } : current);
+    setAboutGallery((current) => current && String(current.id) === String(updated.id) ? {
+      ...current,
+      ...updated,
+      previewPhotos: Array.isArray(updated.previewPhotos) && updated.previewPhotos.length > 0
+        ? updated.previewPhotos
+        : current.previewPhotos,
+    } : current);
+    fetchGalleriesPage({ page: 1, mode: 'refresh' });
+  }, [fetchGalleriesPage]);
 
   const handleGalleryPhotoUploaded = useCallback((galleryId, photo) => {
     if (!galleryId || !photo) return;
@@ -10484,7 +11427,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
             <Ionicons name="add" size={23} color="#1F9D55" />
           </Pressable>
         </View>
-        <Text style={styles.wallsSubtitle}>Hold nede på et album for at redigere, slette eller rapportere denne.</Text>
+        <Text style={styles.wallsSubtitle}>Hold nede på et album for at se info, redigere, slette eller rapportere albummet.</Text>
         <Animated.View style={[styles.wallsHeaderControls, wallsHeaderControlsStyle]}>
           <View style={styles.wallsAlbumFilterRow}>
             <View style={styles.wallsAlbumFilterBar}>
@@ -10575,62 +11518,93 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
         </Animated.View>
       </View>
 
-      <Animated.ScrollView
+      <Animated.FlatList
         contentContainerStyle={[
           styles.wallsScrollContent,
           (isEmpty || isFilterEmpty || isSearchEmpty || loading || loadError) ? styles.wallsScrollContentEmpty : null,
         ]}
+        columnWrapperStyle={styles.wallsGridRow}
+        data={(loading || loadError || isEmpty) ? [] : galleries}
+        initialNumToRender={8}
+        keyExtractor={(gallery) => String(gallery.id)}
+        ListEmptyComponent={() => {
+          if (loading) {
+            return (
+              <View style={styles.wallsEmptyState}>
+                <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
+              </View>
+            );
+          }
+          if (loadError) {
+            return (
+              <View style={styles.wallsEmptyState}>
+                <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
+                <Text style={styles.wallsEmptyTitle}>Kunne ikke hente gallerier</Text>
+                <Text style={styles.wallsEmptyBody}>{loadError}</Text>
+              </View>
+            );
+          }
+
+          if (isSearchEmpty) {
+            return (
+              <View style={styles.wallsEmptyState}>
+                <Ionicons name="search-outline" size={52} color="#b0c4be" />
+                <Text style={styles.wallsEmptyTitle}>Ingen match</Text>
+                <Text style={styles.wallsEmptyBody}>{searchEmptyBody}</Text>
+              </View>
+            );
+          }
+
+          if (isFilterEmpty) {
+            return (
+              <View style={styles.wallsEmptyState}>
+                <Ionicons name="images-outline" size={52} color="#b0c4be" />
+                <Text style={styles.wallsEmptyTitle}>{filterEmptyTitle}</Text>
+                <Text style={styles.wallsEmptyBody}>{filterEmptyBody}</Text>
+              </View>
+            );
+          }
+
+          return (
+            <View style={styles.wallsEmptyState}>
+              <View style={styles.wallsEmptyIconWrap}>
+                <GalleriEmptyIcon />
+                <View style={styles.wallsEmptySlash} />
+              </View>
+              <Text style={styles.wallsEmptyTitle}>Du har ingen gallerier</Text>
+              <Text style={styles.wallsEmptyBody}>
+                Tryk på + øverst til højre for at oprette dit første galleri. Du kan vælge om det er privat eller deles med klassen.
+              </Text>
+            </View>
+          );
+        }}
+        ListFooterComponent={galleryListFooter}
+        maxToRenderPerBatch={8}
+        numColumns={2}
+        onEndReached={handleLoadMoreGalleries}
+        onEndReachedThreshold={0.45}
         onScroll={handleWallsScroll}
+        refreshControl={(
+          <StudosRefreshControl
+            offset={WALLS_REFRESH_CONTROL_OFFSET}
+            onRefresh={handleRefreshGalleries}
+            refreshing={refreshing}
+          />
+        )}
+        renderItem={({ item: gallery }) => (
+          <WallsGalleryCard
+            gallery={gallery}
+            longPressHandledRef={longPressHandledRef}
+            onLongPress={openActionMenu}
+            onPress={setSelectedGallery}
+          />
+        )}
+        removeClippedSubviews={Platform.OS !== 'ios'}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
-      >
-        {loading ? (
-          <View style={styles.wallsEmptyState}>
-            <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
-          </View>
-        ) : loadError ? (
-          <View style={styles.wallsEmptyState}>
-            <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
-            <Text style={styles.wallsEmptyTitle}>Kunne ikke hente gallerier</Text>
-            <Text style={styles.wallsEmptyBody}>{loadError}</Text>
-          </View>
-        ) : isEmpty ? (
-          <View style={styles.wallsEmptyState}>
-            <View style={styles.wallsEmptyIconWrap}>
-              <GalleriEmptyIcon />
-              <View style={styles.wallsEmptySlash} />
-            </View>
-            <Text style={styles.wallsEmptyTitle}>Du har ingen gallerier</Text>
-            <Text style={styles.wallsEmptyBody}>
-              Tryk på + øverst til højre for at oprette dit første galleri. Du kan vælge om det er privat eller deles med klassen.
-            </Text>
-          </View>
-        ) : isFilterEmpty ? (
-          <View style={styles.wallsEmptyState}>
-            <Ionicons name="images-outline" size={52} color="#b0c4be" />
-            <Text style={styles.wallsEmptyTitle}>{filterEmptyTitle}</Text>
-            <Text style={styles.wallsEmptyBody}>{filterEmptyBody}</Text>
-          </View>
-        ) : isSearchEmpty ? (
-          <View style={styles.wallsEmptyState}>
-            <Ionicons name="search-outline" size={52} color="#b0c4be" />
-            <Text style={styles.wallsEmptyTitle}>Ingen match</Text>
-            <Text style={styles.wallsEmptyBody}>{searchEmptyBody}</Text>
-          </View>
-        ) : (
-          <View style={styles.wallsGrid}>
-            {filteredGalleries.map((g) => (
-              <WallsGalleryCard
-                key={g.id}
-                gallery={g}
-                longPressHandledRef={longPressHandledRef}
-                onLongPress={openActionMenu}
-                onPress={setSelectedGallery}
-              />
-            ))}
-          </View>
-        )}
-      </Animated.ScrollView>
+        updateCellsBatchingPeriod={40}
+        windowSize={7}
+      />
 
       {/* Opret */}
       <WallsCreateOverlay
@@ -10684,7 +11658,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
           <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
             <View style={styles.chatModalHeader}>
               <View style={styles.chatConversationActionMenuHeading}>
-                <Text style={styles.chatModalKicker}>Galleri</Text>
+                <Text style={styles.chatModalKicker}>Album</Text>
                 <Text style={styles.chatModalTitle}>Sorter album</Text>
               </View>
               <Pressable
@@ -10793,7 +11767,7 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
           <View style={[styles.chatModalPanel, styles.chatConversationActionMenuPanel]}>
             <View style={styles.chatModalHeader}>
               <View style={styles.chatConversationActionMenuHeading}>
-                <Text style={styles.chatModalKicker}>Galleri</Text>
+                <Text style={styles.chatModalKicker}>Album</Text>
                 <Text numberOfLines={1} style={styles.chatModalTitle}>
                   {actionGallery?.name ?? ''}
                 </Text>
@@ -11213,6 +12187,7 @@ function DuelScreen({
   const [duelInfoOpen, setDuelInfoOpen] = useState(false);
   const [duelError, setDuelError] = useState('');
   const [duelLoading, setDuelLoading] = useState(false);
+  const [duelRefreshing, setDuelRefreshing] = useState(false);
   const [duelSubmitting, setDuelSubmitting] = useState(false);
   const [duelActionLoadingId, setDuelActionLoadingId] = useState('');
   const [duelRealtimeReady, setDuelRealtimeReady] = useState(false);
@@ -11533,7 +12508,7 @@ function DuelScreen({
     }
   }, [onCapsBalanceChange]);
 
-  const loadDuels = useCallback(async ({ silent = false } = {}) => {
+  const loadDuels = useCallback(async ({ refreshing = false, silent = false } = {}) => {
     if (!sessionToken) {
       setDuels([]);
       return;
@@ -11542,7 +12517,10 @@ function DuelScreen({
     const requestSeq = duelLoadSeqRef.current + 1;
     duelLoadSeqRef.current = requestSeq;
 
-    if (!silent) {
+    if (refreshing) {
+      setDuelRefreshing(true);
+      setDuelError('');
+    } else if (!silent) {
       setDuelLoading(true);
       setDuelError('');
     }
@@ -11568,7 +12546,11 @@ function DuelScreen({
         return;
       }
 
-      if (!silent) {
+      if (refreshing) {
+        setDuelRefreshing(false);
+      }
+
+      if (!silent && !refreshing) {
         setDuelLoading(false);
       }
     }
@@ -11576,6 +12558,10 @@ function DuelScreen({
 
   useEffect(() => {
     loadDuels();
+  }, [loadDuels]);
+
+  const refreshDuels = useCallback(() => {
+    loadDuels({ refreshing: true });
   }, [loadDuels]);
 
   const queueDuelRefresh = useCallback((delays = [350, 1400]) => {
@@ -13238,56 +14224,71 @@ function DuelScreen({
   ) : null;
 
   return (
-    <View style={styles.flowStack}>
-      <View style={styles.tabHeader}>
-        <View style={styles.duelHeaderLeft}>
-          <View style={styles.titleWithLogoRow}>
-            <Text style={[styles.title, styles.titleSmallHeader]} numberOfLines={1} ellipsizeMode="tail">
-              Dyst
-            </Text>
-            <DuelTitleGraphic style={styles.duelTitleLogo} />
+    <View style={styles.duelScreenRoot}>
+      <View style={styles.duelScreenHeader}>
+        <View style={styles.tabHeader}>
+          <View style={styles.duelHeaderLeft}>
+            <View style={styles.titleWithLogoRow}>
+              <Text style={[styles.title, styles.titleSmallHeader]} numberOfLines={1} ellipsizeMode="tail">
+                Dyst
+              </Text>
+              <DuelTitleGraphic style={styles.duelTitleLogo} />
+            </View>
+          </View>
+          <View style={styles.duelHeaderActions}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setFinishedDuelsOpen(true)}
+              style={({ pressed }) => [
+                styles.duelHeaderArchiveAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="archive-outline" size={15} color={STUDOS_THEME.ink} />
+              <Text style={[styles.duelHeaderArchiveActionText, styles.duelHeaderTinyActionText]}>Arkiv</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={openCreateModal}
+              style={({ pressed }) => [
+                styles.duelHeaderAction,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Ionicons name="add" size={18} color="#FFFFFF" />
+              <Text style={[styles.duelHeaderActionText, styles.duelHeaderTinyActionText]}>Ny dyst</Text>
+            </Pressable>
           </View>
         </View>
-        <View style={styles.duelHeaderActions}>
+        <View style={styles.duelSubtextRow}>
+          <Text style={styles.duelSubtext}>
+            Udfordr dit crew, sæt Caps på højkant, og kravl op ad leaderboardet.
+          </Text>
           <Pressable
-            accessibilityRole="button"
-            onPress={() => setFinishedDuelsOpen(true)}
+            accessibilityLabel="Læs om dyster"
+            onPress={() => setDuelInfoOpen(true)}
             style={({ pressed }) => [
-              styles.duelHeaderArchiveAction,
+              styles.duelInfoButton,
               pressed ? styles.footerItemPressed : null,
             ]}
           >
-            <Ionicons name="archive-outline" size={15} color={STUDOS_THEME.ink} />
-            <Text style={[styles.duelHeaderArchiveActionText, styles.duelHeaderTinyActionText]}>Arkiv</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            onPress={openCreateModal}
-            style={({ pressed }) => [
-              styles.duelHeaderAction,
-              pressed ? styles.footerItemPressed : null,
-            ]}
-          >
-            <Ionicons name="add" size={18} color="#FFFFFF" />
-            <Text style={[styles.duelHeaderActionText, styles.duelHeaderTinyActionText]}>Ny dyst</Text>
+            <Text style={styles.duelInfoButtonText}>?</Text>
           </Pressable>
         </View>
       </View>
-      <View style={styles.duelSubtextRow}>
-        <Text style={styles.duelSubtext}>
-          Udfordr dit crew, sæt Caps på højkant, og kravl op ad leaderboardet.
-        </Text>
-        <Pressable
-          accessibilityLabel="Læs om dyster"
-          onPress={() => setDuelInfoOpen(true)}
-          style={({ pressed }) => [
-            styles.duelInfoButton,
-            pressed ? styles.footerItemPressed : null,
-          ]}
-        >
-          <Text style={styles.duelInfoButtonText}>?</Text>
-        </Pressable>
-      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.duelMainContent}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={(
+          <StudosRefreshControl
+            onRefresh={refreshDuels}
+            refreshing={duelRefreshing}
+          />
+        )}
+        showsVerticalScrollIndicator={false}
+        style={styles.duelMainScroll}
+      >
 
       {judgeApprovalDuels.length > 0 ? (
         <Pressable
@@ -13561,6 +14562,7 @@ function DuelScreen({
           )
         ) : null}
       </View>
+      </ScrollView>
 
       {createDuelOverlay}
       {winnerPickerModal}
@@ -14020,7 +15022,7 @@ function EarnCapsScreen({
   sessionToken,
   weeklyCheckInSnapshot,
 }) {
-  const todayDayKey = moodDayKeyFor();
+  const todayDayKey = localDayKeyFor();
   const checkInStorageKey = useMemo(
     () => `${EARN_CAPS_CHECKIN_STORAGE_KEY}.${activeMember?.id ?? activeMember?.email ?? 'guest'}`,
     [activeMember?.email, activeMember?.id],
@@ -14035,6 +15037,7 @@ function EarnCapsScreen({
   const [earnCapsGoodDeedError, setEarnCapsGoodDeedError] = useState('');
   const [earnCapsGoodDeedReward, setEarnCapsGoodDeedReward] = useState(null);
   const [earnCapsGoodDeedSubmitting, setEarnCapsGoodDeedSubmitting] = useState(false);
+  const [earnCapsRefreshing, setEarnCapsRefreshing] = useState(false);
   const normalizeCheckInState = useCallback((payload = {}) => ({
     completedWeeks: Math.max(0, Number(payload.completedWeeks) || 0),
     lastDayKey: payload.lastDayKey ? String(payload.lastDayKey) : '',
@@ -14137,6 +15140,28 @@ function EarnCapsScreen({
   useEffect(() => {
     refreshEarnCapsGoodDeed();
   }, [refreshEarnCapsGoodDeed]);
+
+  const refreshEarnCaps = useCallback(async () => {
+    if (!sessionToken) {
+      return;
+    }
+
+    setEarnCapsRefreshing(true);
+
+    try {
+      const [checkInData] = await Promise.all([
+        apiFetch('/check-ins/weekly', { authToken: sessionToken }),
+        refreshEarnCapsGoodDeed(),
+      ]);
+
+      setCheckInState(normalizeCheckInState(checkInData?.weeklyCheckIn));
+      setCheckInError('');
+    } catch (apiError) {
+      setCheckInError(apiError.message || 'Optjen Caps kunne ikke opdateres.');
+    } finally {
+      setEarnCapsRefreshing(false);
+    }
+  }, [normalizeCheckInState, refreshEarnCapsGoodDeed, sessionToken]);
 
   const earnCapsGoodDeedClaim = earnCapsGoodDeed?.myClaim ?? null;
   const earnCapsGoodDeedBaseCaps = Number.isFinite(Number(earnCapsGoodDeed?.week?.baseCaps))
@@ -14284,6 +15309,12 @@ function EarnCapsScreen({
         <ScrollView
           contentContainerStyle={styles.earnCapsMethodStack}
           nestedScrollEnabled
+          refreshControl={(
+            <StudosRefreshControl
+              onRefresh={refreshEarnCaps}
+              refreshing={earnCapsRefreshing}
+            />
+          )}
           showsVerticalScrollIndicator={false}
           style={styles.earnCapsMethodsScroll}
         >
@@ -14496,33 +15527,48 @@ function SettingsScreen({
   );
 }
 
-function ConnectionsScreen({ activeMember, schoolClass, sessionToken }) {
+function ConnectionsScreen({ activeMember, onRefreshClassData, schoolClass, sessionToken }) {
   const [personalCode, setPersonalCode] = useState('');
   const [connections, setConnections] = useState([]);
   const [loadingConnections, setLoadingConnections] = useState(false);
+  const [connectionsRefreshing, setConnectionsRefreshing] = useState(false);
   const [submittingConnection, setSubmittingConnection] = useState(false);
   const [respondingConnectionId, setRespondingConnectionId] = useState('');
   const [connectionError, setConnectionError] = useState('');
   const [connectionMessage, setConnectionMessage] = useState('');
 
-  const loadConnections = async () => {
+  const loadConnections = async ({ refreshing = false } = {}) => {
     if (!activeMember?.id || !sessionToken) {
       return;
+    }
+
+    if (refreshing) {
+      setConnectionsRefreshing(true);
     }
 
     setLoadingConnections(true);
 
     try {
-      const data = await apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
-        authToken: sessionToken,
-      });
+      const [data] = await Promise.all([
+        apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
+          authToken: sessionToken,
+        }),
+        refreshing && onRefreshClassData ? onRefreshClassData() : Promise.resolve(),
+      ]);
       setConnections(data.connections ?? []);
     } catch (apiError) {
       setConnectionError(apiError.message || 'Connections kunne ikke hentes.');
     } finally {
       setLoadingConnections(false);
+      if (refreshing) {
+        setConnectionsRefreshing(false);
+      }
     }
   };
+
+  const refreshConnections = useCallback(() => {
+    loadConnections({ refreshing: true });
+  }, [activeMember?.id, onRefreshClassData, sessionToken]);
 
   useEffect(() => {
     let isMounted = true;
@@ -14627,7 +15673,17 @@ function ConnectionsScreen({ activeMember, schoolClass, sessionToken }) {
   };
 
   return (
-    <View style={styles.flowStack}>
+    <ScrollView
+      contentContainerStyle={styles.flowStack}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={(
+        <StudosRefreshControl
+          onRefresh={refreshConnections}
+          refreshing={connectionsRefreshing}
+        />
+      )}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.tabHeader}>
         <View>
           <Text style={styles.kicker}>{schoolClass.className}</Text>
@@ -14719,13 +15775,14 @@ function ConnectionsScreen({ activeMember, schoolClass, sessionToken }) {
           )}
         </View>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 function EmergencyContactsScreen({
   activeMember,
   activeMembers = [],
+  onRefreshClassData,
   onUpdateVisibility,
   onUpdateContact,
   sessionToken,
@@ -14752,6 +15809,7 @@ function EmergencyContactsScreen({
   const [contactError, setContactError] = useState('');
   const [emergencyConnections, setEmergencyConnections] = useState([]);
   const [emergencyConnectionsLoading, setEmergencyConnectionsLoading] = useState(false);
+  const [emergencyContactsRefreshing, setEmergencyContactsRefreshing] = useState(false);
   const [emergencyConnectionsError, setEmergencyConnectionsError] = useState('');
   const defaultEmergencyContactVisibility = useMemo(
     () => normalizeEmergencyContactVisibility(activeMember?.emergencyContactVisibility),
@@ -14814,6 +15872,33 @@ function EmergencyContactsScreen({
       isMounted = false;
     };
   }, [activeMember?.id, sessionToken]);
+
+  const refreshEmergencyContacts = useCallback(async () => {
+    if (!activeMember?.id || !sessionToken) {
+      return;
+    }
+
+    setEmergencyContactsRefreshing(true);
+    setEmergencyConnectionsLoading(true);
+    setEmergencyConnectionsError('');
+
+    try {
+      const [data] = await Promise.all([
+        apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
+          authToken: sessionToken,
+        }),
+        onRefreshClassData ? onRefreshClassData() : Promise.resolve(),
+      ]);
+
+      setEmergencyConnections(data.connections ?? []);
+    } catch (error) {
+      setEmergencyConnectionsError(error.message || 'Kunne ikke hente venner.');
+      setEmergencyConnections([]);
+    } finally {
+      setEmergencyConnectionsLoading(false);
+      setEmergencyContactsRefreshing(false);
+    }
+  }, [activeMember?.id, onRefreshClassData, sessionToken]);
 
   const mapMembersToEmergencyContacts = (members) => {
     const normalizedMembers = uniqueById(Array.isArray(members) ? members : []);
@@ -15075,7 +16160,17 @@ function EmergencyContactsScreen({
   };
 
   return (
-    <View style={[styles.flowStack, styles.crewScreen, styles.emergencyContactsScreen]}>
+    <ScrollView
+      contentContainerStyle={[styles.flowStack, styles.crewScreen, styles.emergencyContactsScreen]}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={(
+        <StudosRefreshControl
+          onRefresh={refreshEmergencyContacts}
+          refreshing={emergencyContactsRefreshing}
+        />
+      )}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={[styles.tabHeader, styles.emergencyContactsTabHeader]}>
         <View style={styles.emergencyContactsHeaderRow}>
           <View style={styles.titleWithLogoRow}>
@@ -15462,7 +16557,7 @@ function EmergencyContactsScreen({
           </View>
         </View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -15470,6 +16565,7 @@ function CrewScreen({
   activeMember,
   activeMembers = [],
   onOpenDirectChat,
+  onRefreshClassData,
   schoolClass,
   sessionToken,
 }) {
@@ -15478,53 +16574,54 @@ function CrewScreen({
   const [crewSource, setCrewSource] = useState('class');
   const [connections, setConnections] = useState([]);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [crewRefreshing, setCrewRefreshing] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
   const [phoneModalVisible, setPhoneModalVisible] = useState(false);
   const [phoneModalName, setPhoneModalName] = useState('');
   const [phoneModalNumber, setPhoneModalNumber] = useState('');
 
-  useEffect(() => {
-    let isMounted = true;
-
+  const loadCrewConnections = useCallback(async ({ refreshing = false } = {}) => {
     if (!activeMember?.id || !sessionToken) {
-      if (isMounted) {
-        setConnections([]);
-        setConnectionsError('');
-        setConnectionsLoading(false);
-      }
+      setConnections([]);
+      setConnectionsError('');
+      setConnectionsLoading(false);
+      return;
+    }
 
-      return () => {
-        isMounted = false;
-      };
+    if (refreshing) {
+      setCrewRefreshing(true);
     }
 
     setConnectionsLoading(true);
     setConnectionsError('');
 
-    apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
-      authToken: sessionToken,
-    })
-      .then((data) => {
-        if (isMounted) {
-          setConnections(data.connections ?? []);
-        }
-      })
-      .catch((error) => {
-        if (isMounted) {
-          setConnectionsError(error.message || 'Kunne ikke hente venner.');
-          setConnections([]);
-        }
-      })
-      .finally(() => {
-        if (isMounted) {
-          setConnectionsLoading(false);
-        }
-      });
+    try {
+      const [data] = await Promise.all([
+        apiFetch(`/members/${encodeURIComponent(activeMember.id)}/connections`, {
+          authToken: sessionToken,
+        }),
+        refreshing && onRefreshClassData ? onRefreshClassData() : Promise.resolve(),
+      ]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [activeMember?.id, sessionToken]);
+      setConnections(data.connections ?? []);
+    } catch (error) {
+      setConnectionsError(error.message || 'Kunne ikke hente venner.');
+      setConnections([]);
+    } finally {
+      setConnectionsLoading(false);
+      if (refreshing) {
+        setCrewRefreshing(false);
+      }
+    }
+  }, [activeMember?.id, onRefreshClassData, sessionToken]);
+
+  useEffect(() => {
+    loadCrewConnections();
+  }, [loadCrewConnections]);
+
+  const refreshCrew = useCallback(() => {
+    loadCrewConnections({ refreshing: true });
+  }, [loadCrewConnections]);
 
   const crewMembers = useMemo(() => {
     const normalizedMembers = uniqueById(rawMembers);
@@ -15584,7 +16681,17 @@ function CrewScreen({
   const showClassCrew = crewSource === 'class';
   const currentRows = showClassCrew ? classRows : friendRows;
   return (
-    <View style={[styles.flowStack, styles.crewScreen]}>
+    <ScrollView
+      contentContainerStyle={[styles.flowStack, styles.crewScreen]}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={(
+        <StudosRefreshControl
+          onRefresh={refreshCrew}
+          refreshing={crewRefreshing}
+        />
+      )}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.tabHeader}>
         <View style={styles.titleWithLogoRow}>
           <Text style={[styles.title, styles.titleSmallHeader]}>Mit crew</Text>
@@ -15733,7 +16840,7 @@ function CrewScreen({
           </View>
         ) : null}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -15848,38 +16955,6 @@ function SidebarMenuIcon({ active = false, item }) {
             ]}
           />
         ))}
-      </View>
-    );
-  }
-
-  if (item.id === 'moodBoard') {
-    return (
-      <View style={styles.sidebarMenuIconWrap}>
-        <View style={styles.sidebarMoodBoardIcon}>
-          <View style={[styles.sidebarMoodCard, styles.sidebarMoodCardBlue]}>
-            <View style={styles.sidebarMoodCardLine} />
-          </View>
-          <View style={[styles.sidebarMoodCard, styles.sidebarMoodCardYellow]}>
-            <View style={styles.sidebarMoodCardDot} />
-          </View>
-          <View style={[styles.sidebarMoodCard, styles.sidebarMoodCardRed]}>
-            <View style={styles.sidebarMoodCardLine} />
-          </View>
-        </View>
-      </View>
-    );
-  }
-
-  if (item.id === 'badges') {
-    return (
-      <View style={styles.sidebarMenuIconWrap}>
-        <View style={styles.sidebarBadgeRibbonRow}>
-          <View style={[styles.sidebarBadgeRibbon, styles.sidebarBadgeRibbonLeft]} />
-          <View style={[styles.sidebarBadgeRibbon, styles.sidebarBadgeRibbonRight]} />
-        </View>
-        <View style={styles.sidebarBadgeMedal}>
-          <View style={styles.sidebarBadgeMedalDot} />
-        </View>
       </View>
     );
   }
@@ -16886,6 +17961,7 @@ function AccountProfileScreen({
   schoolClass,
   onProfileFieldUpdate,
   onProfilePhotoUpdate,
+  onRefresh,
   onLogout,
   onDeleteAccount,
 }) {
@@ -16901,6 +17977,7 @@ function AccountProfileScreen({
   const [editingProfileLoading, setEditingProfileLoading] = useState(false);
   const [editingProfileError, setEditingProfileError] = useState('');
   const [profilePhotoMenuOpen, setProfilePhotoMenuOpen] = useState(false);
+  const [profileRefreshing, setProfileRefreshing] = useState(false);
   const profileNumberFormat = useMemo(() => new Intl.NumberFormat('da-DK'), []);
   const displayProfile = {
     ...profile,
@@ -17080,8 +18157,35 @@ function AccountProfileScreen({
     schoolClass.schoolName,
   ]);
 
+  const refreshProfile = useCallback(async () => {
+    if (typeof onRefresh !== 'function') {
+      return;
+    }
+
+    setProfileRefreshing(true);
+    setLocalError('');
+
+    try {
+      await onRefresh();
+    } catch (refreshError) {
+      setLocalError(refreshError?.message || 'Profilen kunne ikke opdateres.');
+    } finally {
+      setProfileRefreshing(false);
+    }
+  }, [onRefresh]);
+
   return (
-    <View style={[styles.overviewBlank, styles.overviewSurface]}>
+    <ScrollView
+      contentContainerStyle={[styles.overviewBlank, styles.overviewSurface]}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={(
+        <StudosRefreshControl
+          onRefresh={refreshProfile}
+          refreshing={profileRefreshing}
+        />
+      )}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.tabHeader}>
         <View>
           <Text style={styles.kicker}>{schoolClass.className}</Text>
@@ -17475,7 +18579,7 @@ function AccountProfileScreen({
           <Text style={styles.chatActionConfirmButtonText}>Slet konto</Text>
         </Pressable>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -17487,18 +18591,27 @@ function OverviewScreen({
   onOpenCalendar,
   onOpenEarnCaps,
   onOpenPointDuel,
+  onRefresh,
+  sessionToken,
 }) {
-  const [selectedMood, setSelectedMood] = useState('klar');
-  const [moodModalOpen, setMoodModalOpen] = useState(false);
-  const [moodUpdatedAt, setMoodUpdatedAt] = useState(null);
-  const [currentMoodDayKey, setCurrentMoodDayKey] = useState(() => moodDayKeyFor());
   const [completedClipIds, setCompletedClipIds] = useState([]);
   const [selectedClipId, setSelectedClipId] = useState(null);
   const [studosCodeModalOpen, setStudosCodeModalOpen] = useState(false);
   const [overviewHeaderScrolled, setOverviewHeaderScrolled] = useState(false);
+  const [overviewRefreshing, setOverviewRefreshing] = useState(false);
+  const [overviewProfileStats, setOverviewProfileStats] = useState({
+    completedDuels: 0,
+    pendingDuels: 0,
+    activeDuels: 0,
+    wonDuels: 0,
+    lostDuels: 0,
+    attendedEvents: 0,
+    accessiblePhotos: 0,
+  });
   const [overviewCardLayouts, setOverviewCardLayouts] = useState({});
   const [currentOverviewTime, setCurrentOverviewTime] = useState(() => Date.now());
   const overviewScrollY = useRef(new Animated.Value(0)).current;
+  const overviewStatsLoadSeqRef = useRef(0);
   const profileName = activeMember?.displayName
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
@@ -17510,29 +18623,77 @@ function OverviewScreen({
     : 1000;
   const formattedCapsBalance = formatOverviewNumber(capsBalance);
   const overviewStats = [
-    { id: 'challenges', icon: 'flash', label: 'Udfordringer', value: '4', color: STUDOS_THEME.red },
-    { id: 'parties', icon: 'wine', label: 'Gilder', value: '3', color: STUDOS_THEME.yellow },
-    { id: 'memories', icon: 'images', label: 'Minder', value: '21', color: STUDOS_THEME.blue },
+    {
+      id: 'duels',
+      icon: 'flash',
+      label: 'Dueller',
+      value: formatOverviewNumber(overviewProfileStats.completedDuels),
+      color: STUDOS_THEME.blue,
+      backgroundColor: '#EEF6FF',
+      borderColor: '#CFE4FF',
+    },
+    {
+      id: 'events',
+      icon: 'calendar',
+      label: 'Events',
+      value: formatOverviewNumber(overviewProfileStats.attendedEvents),
+      color: STUDOS_THEME.yellow,
+      backgroundColor: '#FFF8E8',
+      borderColor: '#FFE1B1',
+    },
+    {
+      id: 'photos',
+      icon: 'images',
+      label: 'Fotos',
+      value: formatOverviewNumber(overviewProfileStats.accessiblePhotos),
+      color: STUDOS_THEME.red,
+      backgroundColor: '#FFF0F1',
+      borderColor: '#FFD2D4',
+    },
   ];
-  const overviewMoods = [
-    { id: 'klar', icon: 'sunny', label: 'Klar' },
-    { id: 'kaos', icon: 'flash', label: 'Kaos' },
-    { id: 'træt', icon: 'moon', label: 'Træt' },
-    { id: 'glad', icon: 'happy', label: 'Glad' },
-    { id: 'presset', icon: 'alarm', label: 'Presset' },
-    { id: 'chill', icon: 'leaf', label: 'Chill' },
+  const overviewDuelStats = [
+    {
+      id: 'pending',
+      label: 'Afventer svar',
+      value: formatOverviewNumber(overviewProfileStats.pendingDuels),
+      color: STUDOS_THEME.yellow,
+      backgroundColor: '#FFF8E8',
+      borderColor: '#FFE1B1',
+      icon: 'hourglass-outline',
+    },
+    {
+      id: 'active',
+      label: 'Aktive dyste',
+      value: formatOverviewNumber(overviewProfileStats.activeDuels),
+      color: STUDOS_THEME.blue,
+      backgroundColor: '#EEF6FF',
+      borderColor: '#CFE4FF',
+      icon: 'flash-outline',
+    },
+    {
+      id: 'won',
+      label: 'Vundet',
+      value: formatOverviewNumber(overviewProfileStats.wonDuels),
+      color: '#1F9D55',
+      backgroundColor: '#EEFBEF',
+      borderColor: '#CDEFD1',
+      icon: 'trophy-outline',
+    },
+    {
+      id: 'lost',
+      label: 'Tabte',
+      value: formatOverviewNumber(overviewProfileStats.lostDuels),
+      color: STUDOS_THEME.red,
+      backgroundColor: '#FFF0F1',
+      borderColor: '#FFD2D4',
+      icon: 'close-circle-outline',
+    },
   ];
-  const validMoodIds = useMemo(() => new Set(overviewMoods.map((mood) => mood.id)), []);
-  const moodStorageKey = useMemo(
-    () => `${OVERVIEW_MOOD_STORAGE_KEY}.${activeMember?.id ?? 'guest'}`,
-    [activeMember?.id],
-  );
-  const validClipIds = useMemo(() => new Set(CHAT_THREAD_HEADER_COUNTERS.map((counter) => counter.id)), []);
+  const validClipIds = useMemo(() => new Set(OVERVIEW_CLIP_COUNTERS.map((counter) => counter.id)), []);
   const clipsStorageKey = useMemo(
     () => `${OVERVIEW_CLIPS_STORAGE_KEY}.${activeMember?.id ?? 'guest'}`,
     [activeMember?.id],
   );
-  const activeMood = overviewMoods.find((mood) => mood.id === selectedMood) ?? overviewMoods[0];
   const overviewTodayKey = useMemo(() => formatInputDate(new Date(currentOverviewTime)), [currentOverviewTime]);
   const upcomingCalendarEvents = useMemo(() => {
     return uniqueById(events ?? [])
@@ -17552,67 +18713,6 @@ function OverviewScreen({
     [overviewTodayKey, upcomingCalendarEvents],
   );
   const visibleFutureUpcomingCalendarEvents = futureUpcomingCalendarEvents.slice(0, 3);
-  const hasCheckedInToday = Boolean(moodUpdatedAt) && moodDayKeyFor(moodUpdatedAt) === currentMoodDayKey;
-  const overviewMoodQuestion = hasCheckedInToday ? 'Din vibe er live 🥳' : 'Hvordan er din vibe i dag?';
-  const overviewMoodUpdatedText = hasCheckedInToday
-    ? `Sidst opdateret: ${formatMoodUpdatedAt(moodUpdatedAt)}`
-    : 'Ikke checket ind endnu';
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      const nextDayKey = moodDayKeyFor();
-
-      setCurrentMoodDayKey(nextDayKey);
-      setSelectedMood('klar');
-      setMoodUpdatedAt(null);
-      SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
-    }, millisecondsUntilNextMidnight());
-
-    return () => clearTimeout(timeout);
-  }, [currentMoodDayKey, moodStorageKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    SessionStore.getItemAsync(moodStorageKey)
-      .then((storedMood) => {
-        if (cancelled || !storedMood) {
-          if (!cancelled) {
-            setSelectedMood('klar');
-            setMoodUpdatedAt(null);
-          }
-
-          return;
-        }
-
-        let parsedMood = null;
-
-        try {
-          parsedMood = JSON.parse(storedMood);
-        } catch {
-          parsedMood = null;
-        }
-
-        const updatedAt = parsedMood?.updatedAt ? new Date(parsedMood.updatedAt) : null;
-        const storedDayKey = parsedMood?.dayKey || moodDayKeyFor(updatedAt);
-        const validStoredMood = parsedMood?.moodId && validMoodIds.has(parsedMood.moodId);
-
-        if (validStoredMood && storedDayKey === moodDayKeyFor()) {
-          setSelectedMood(parsedMood.moodId);
-          setMoodUpdatedAt(updatedAt && !Number.isNaN(updatedAt.getTime()) ? updatedAt : new Date());
-          setCurrentMoodDayKey(storedDayKey);
-          return;
-        }
-
-        setSelectedMood('klar');
-        setMoodUpdatedAt(null);
-        SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [moodStorageKey, validMoodIds]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -17621,19 +18721,6 @@ function OverviewScreen({
 
     return () => clearInterval(interval);
   }, []);
-
-  useEffect(() => {
-    const liveDayKey = moodDayKeyFor(new Date(currentOverviewTime));
-
-    if (!liveDayKey || liveDayKey === currentMoodDayKey) {
-      return;
-    }
-
-    setCurrentMoodDayKey(liveDayKey);
-    setSelectedMood('klar');
-    setMoodUpdatedAt(null);
-    SessionStore.deleteItemAsync(moodStorageKey).catch(() => {});
-  }, [currentMoodDayKey, currentOverviewTime, moodStorageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -17675,26 +18762,8 @@ function OverviewScreen({
     };
   }, [clipsStorageKey, validClipIds]);
 
-  const updateMood = (moodId) => {
-    if (!validMoodIds.has(moodId)) {
-      return;
-    }
-
-    const updatedAt = new Date();
-    const dayKey = moodDayKeyFor(updatedAt);
-
-    setSelectedMood(moodId);
-    setMoodUpdatedAt(updatedAt);
-    setCurrentMoodDayKey(dayKey);
-    setMoodModalOpen(false);
-    SessionStore.setItemAsync(moodStorageKey, JSON.stringify({
-      moodId,
-      dayKey,
-      updatedAt: updatedAt.toISOString(),
-    })).catch(() => {});
-  };
-  const selectedClipIndex = CHAT_THREAD_HEADER_COUNTERS.findIndex((counter) => counter.id === selectedClipId);
-  const selectedClip = selectedClipIndex >= 0 ? CHAT_THREAD_HEADER_COUNTERS[selectedClipIndex] : null;
+  const selectedClipIndex = OVERVIEW_CLIP_COUNTERS.findIndex((counter) => counter.id === selectedClipId);
+  const selectedClip = selectedClipIndex >= 0 ? OVERVIEW_CLIP_COUNTERS[selectedClipIndex] : null;
   const selectedClipCompleted = selectedClip ? completedClipIds.includes(selectedClip.id) : false;
   const updateClipCompleted = (completed) => {
     if (!selectedClip) {
@@ -17719,6 +18788,77 @@ function OverviewScreen({
     });
     setSelectedClipId(null);
   };
+  const loadOverviewProfileStats = useCallback(async () => {
+    if (!sessionToken) {
+      setOverviewProfileStats({
+        completedDuels: 0,
+        pendingDuels: 0,
+        activeDuels: 0,
+        wonDuels: 0,
+        lostDuels: 0,
+        attendedEvents: 0,
+        accessiblePhotos: 0,
+      });
+      return;
+    }
+
+    const requestSeq = overviewStatsLoadSeqRef.current + 1;
+    overviewStatsLoadSeqRef.current = requestSeq;
+
+    try {
+      const data = await apiFetch('/overview/stats', { authToken: sessionToken });
+
+      if (overviewStatsLoadSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      const stats = data?.stats ?? {};
+      const safeCount = (value) => {
+        const count = Number(value);
+
+        return Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+      };
+
+      setOverviewProfileStats({
+        completedDuels: safeCount(stats.completedDuels),
+        pendingDuels: safeCount(stats.pendingDuels),
+        activeDuels: safeCount(stats.activeDuels),
+        wonDuels: safeCount(stats.wonDuels),
+        lostDuels: safeCount(stats.lostDuels),
+        attendedEvents: safeCount(stats.attendedEvents),
+        accessiblePhotos: safeCount(stats.accessiblePhotos),
+      });
+    } catch {
+      // The overview can still render; the next refresh/poll will retry the counters.
+    }
+  }, [sessionToken]);
+  useEffect(() => {
+    loadOverviewProfileStats();
+  }, [loadOverviewProfileStats]);
+  useEffect(() => {
+    if (!sessionToken) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      loadOverviewProfileStats();
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [loadOverviewProfileStats, sessionToken]);
+  useEffect(() => {
+    if (IS_WEB || !sessionToken) {
+      return undefined;
+    }
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        loadOverviewProfileStats();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [loadOverviewProfileStats, sessionToken]);
   const handleOverviewScroll = useMemo(() => Animated.event(
     [{ nativeEvent: { contentOffset: { y: overviewScrollY } } }],
     {
@@ -17729,6 +18869,18 @@ function OverviewScreen({
       useNativeDriver: false,
     },
   ), [overviewScrollY]);
+  const refreshOverview = useCallback(async () => {
+    setOverviewRefreshing(true);
+
+    try {
+      await Promise.all([
+        typeof onRefresh === 'function' ? onRefresh() : Promise.resolve(),
+        loadOverviewProfileStats(),
+      ]);
+    } finally {
+      setOverviewRefreshing(false);
+    }
+  }, [loadOverviewProfileStats, onRefresh]);
   const overviewHeaderContainerStyle = useMemo(() => ({
     transform: [
       {
@@ -17879,7 +19031,7 @@ function OverviewScreen({
           <OverviewTitle />
           <View style={styles.overviewCountdownInline}>
             <Text style={styles.overviewCountdownNumber}>{countdown}</Text>
-            <Text style={styles.overviewCountdownLabel}>dage til{'\n'}studenterugen</Text>
+            <Text style={styles.overviewCountdownLabel}>dage til{'\n'}dimission</Text>
           </View>
         </Animated.View>
         <View pointerEvents="none" style={styles.overviewHeaderFeather}>
@@ -17892,6 +19044,13 @@ function OverviewScreen({
         contentContainerStyle={styles.overviewScrollContent}
         keyboardShouldPersistTaps="handled"
         onScroll={handleOverviewScroll}
+        refreshControl={(
+          <StudosRefreshControl
+            offset={OVERVIEW_HEADER_HEIGHT}
+            onRefresh={refreshOverview}
+            refreshing={overviewRefreshing}
+          />
+        )}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.overviewScroll}
@@ -17903,50 +19062,65 @@ function OverviewScreen({
         >
           <View style={styles.overviewStudosCard}>
             <View pointerEvents="none" style={styles.overviewStudosAccentRail}>
-              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentRed]} />
-              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentYellow]} />
               <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentBlue]} />
+              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentYellow]} />
+              <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentRed]} />
             </View>
-            <Pressable
-              accessibilityLabel="Vis QR-kode"
-              accessibilityRole="button"
-              disabled={!activeMember?.personalCode}
-              onPress={() => setStudosCodeModalOpen(true)}
-              style={({ pressed }) => [
-                styles.overviewStudosQrCornerButton,
-                !activeMember?.personalCode ? styles.overviewStudosQrButtonDisabled : null,
-                pressed ? styles.footerItemPressed : null,
-              ]}
-            >
-              <Ionicons name="qr-code" size={18} color={STUDOS_THEME.ink} />
-            </Pressable>
             <View style={styles.overviewStudosTopRow}>
               <View style={styles.overviewStudosIdentity}>
+                <View style={styles.overviewStudosAvatarTop}>
+                  <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
+                </View>
                 <View style={styles.overviewStudosCopy}>
-                  <View style={styles.overviewStudosAvatarTop}>
-                    <Avatar profile={activeMember ?? { displayName: profileName }} variant="chatHeader" />
-                  </View>
+                  <Text numberOfLines={1} style={styles.overviewStudosEyebrow}>
+                    Mit Studos
+                  </Text>
                   <Text numberOfLines={1} style={styles.overviewStudosName}>
                     {profileName}
                   </Text>
-                  <View style={styles.overviewStudosAwardRow}>
-                    <View style={styles.overviewStudosAwardIcon}>
-                      <View style={styles.overviewStudosAwardRibbonRow}>
-                        <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonBlue]} />
-                        <View style={[styles.overviewStudosAwardRibbon, styles.overviewStudosAwardRibbonRed]} />
-                      </View>
-                      <View style={styles.overviewStudosAwardMedal}>
-                        <View style={styles.overviewStudosAwardMedalDot} />
-                      </View>
-                    </View>
-                    <Text numberOfLines={1} style={styles.overviewStudosAwardText}>
-                      Klassens stræber
-                    </Text>
-                  </View>
                 </View>
               </View>
+              <Pressable
+                accessibilityLabel="Vis QR-kode"
+                accessibilityRole="button"
+                disabled={!activeMember?.personalCode}
+                onPress={() => setStudosCodeModalOpen(true)}
+                style={({ pressed }) => [
+                  styles.overviewStudosQrCornerButton,
+                  !activeMember?.personalCode ? styles.overviewStudosQrButtonDisabled : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="qr-code" size={19} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+            <View style={styles.overviewStudosStats}>
+              {overviewStats.map((stat) => {
+                return (
+                  <View
+                    key={stat.id}
+                    style={[
+                      styles.overviewStudosStat,
+                      { backgroundColor: stat.backgroundColor, borderColor: stat.borderColor },
+                    ]}
+                  >
+                    <Ionicons name={stat.icon} size={13} color={stat.color} />
+                    <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.76}
+                      style={styles.overviewStudosStatLabel}
+                    >
+                      {stat.label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+            <View style={styles.overviewStudosClipSection}>
               <View style={styles.overviewClipIconGrid}>
-                {CHAT_THREAD_HEADER_COUNTERS.map((counter, index) => {
+                {OVERVIEW_CLIP_COUNTERS.map((counter, index) => {
                   const completed = completedClipIds.includes(counter.id);
 
                   return (
@@ -17965,13 +19139,13 @@ function OverviewScreen({
                       {counter.id === 'wave' ? (
                         <MaterialCommunityIcons
                           name="waves"
-                          size={24}
+                          size={22}
                           color={completed ? '#1F9D55' : STUDOS_THEME.ink}
                         />
                       ) : (
                         <Ionicons
                           name={counter.icon}
-                          size={23}
+                          size={21}
                           color={completed ? '#1F9D55' : STUDOS_THEME.ink}
                         />
                       )}
@@ -17988,24 +19162,6 @@ function OverviewScreen({
                   );
                 })}
               </View>
-            </View>
-            <View style={styles.overviewStudosStats}>
-              {overviewStats.map((stat) => {
-                return (
-                  <View key={stat.id} style={styles.overviewStudosStat}>
-                    <Ionicons name={stat.icon} size={13} color={stat.color} />
-                    <Text style={styles.overviewStudosStatValue}>{stat.value}</Text>
-                    <Text
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.76}
-                      style={styles.overviewStudosStatLabel}
-                    >
-                      {stat.label}
-                    </Text>
-                  </View>
-                );
-              })}
             </View>
             <View style={styles.overviewStudosCapsBottomRow}>
               <View style={styles.overviewStudosCapsBottomCoinShell}>
@@ -18060,47 +19216,6 @@ function OverviewScreen({
                 />
               ))}
             </View>
-          </View>
-        </Animated.View>
-        <Animated.View
-          onLayout={setOverviewCardLayout('dailyMood')}
-          style={overviewCardScrollStyle('dailyMood')}
-        >
-          <View style={styles.overviewMoodStandaloneCard}>
-            <View style={styles.overviewMoodHeaderCopy}>
-              <Text numberOfLines={1} style={styles.overviewMoodQuestion}>
-                {overviewMoodQuestion}
-              </Text>
-              <Text numberOfLines={1} style={styles.overviewMoodUpdatedText}>
-                {overviewMoodUpdatedText}
-              </Text>
-            </View>
-            <Pressable
-              accessibilityLabel="Vælg stemning"
-              accessibilityRole="button"
-              onPress={() => setMoodModalOpen(true)}
-              style={({ pressed }) => [
-                styles.overviewMoodCurrentBadge,
-                hasCheckedInToday
-                  ? styles.overviewMoodCurrentBadgeCheckedIn
-                  : styles.overviewMoodCurrentBadgeNeedsCheckIn,
-                pressed ? styles.footerItemPressed : null,
-              ]}
-            >
-              <Ionicons name={activeMood.icon} size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.overviewMoodCurrentText,
-                  hasCheckedInToday
-                    ? styles.overviewMoodCurrentTextOnBlue
-                    : styles.overviewMoodCurrentTextOnAccent,
-                ]}
-              >
-                {activeMood.label}
-              </Text>
-              <Ionicons name="chevron-forward" size={18} color={hasCheckedInToday ? STUDOS_THEME.ink : '#FFFFFF'} />
-            </Pressable>
           </View>
         </Animated.View>
         <Animated.View
@@ -18218,51 +19333,36 @@ function OverviewScreen({
           <View style={styles.overviewClassDuelsCard}>
             <View style={styles.overviewClassDuelsHeader}>
               <View style={styles.overviewClassDuelsIconWrap}>
-                <View style={styles.overviewClassDuelsIcon}>
-                  <Ionicons
-                    name="shield"
-                    size={25}
-                    color={STUDOS_THEME.ink}
-                    style={styles.overviewClassDuelsShieldOutline}
-                  />
-                  <Ionicons
-                    name="shield"
-                    size={21}
-                    color="#FFFFFF"
-                    style={styles.overviewClassDuelsShieldFill}
-                  />
-                  <MaterialCommunityIcons
-                    name="sword-cross"
-                    size={18}
-                    color={STUDOS_THEME.red}
-                    style={styles.overviewClassDuelsSwords}
-                  />
-                </View>
+                <DuelTitleGraphic
+                  coinStyle={styles.overviewClassDuelsIconCoin}
+                  style={styles.overviewClassDuelsIcon}
+                />
               </View>
               <View style={styles.overviewClassDuelsCopy}>
                 <Text numberOfLines={1} style={styles.overviewClassDuelsTitle}>
-                  Klassedyster
+                  Dine dyste
                 </Text>
                 <Text numberOfLines={1} style={styles.overviewClassDuelsMeta}>
-                  Udfordringer, Caps og rivaliseringer i klassen
+                  Hold styr på dine svar, aktive dyste og resultater.
                 </Text>
               </View>
             </View>
-            <View style={styles.overviewClassDuelsStatsRow}>
-              <View style={styles.overviewClassDuelsStat}>
-                <Text style={styles.overviewClassDuelsStatValue}>0</Text>
-                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Aktive</Text>
-              </View>
-              <View style={styles.overviewClassDuelsDivider} />
-              <View style={styles.overviewClassDuelsStat}>
-                <Text style={styles.overviewClassDuelsStatValue}>0</Text>
-                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Afventer</Text>
-              </View>
-              <View style={styles.overviewClassDuelsDivider} />
-              <View style={styles.overviewClassDuelsStat}>
-                <Text style={styles.overviewClassDuelsStatValue}>1.000</Text>
-                <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>Caps</Text>
-              </View>
+            <View style={styles.overviewClassDuelsStatsGrid}>
+              {overviewDuelStats.map((stat) => (
+                <View
+                  key={stat.id}
+                  style={[
+                    styles.overviewClassDuelsStat,
+                    { backgroundColor: stat.backgroundColor, borderColor: stat.borderColor },
+                  ]}
+                >
+                  <View style={styles.overviewClassDuelsStatTopRow}>
+                    <Ionicons name={stat.icon} size={15} color={stat.color} />
+                    <Text style={styles.overviewClassDuelsStatValue}>{stat.value}</Text>
+                  </View>
+                  <Text numberOfLines={1} style={styles.overviewClassDuelsStatLabel}>{stat.label}</Text>
+                </View>
+              ))}
             </View>
             <Pressable
               accessibilityRole="button"
@@ -18320,81 +19420,6 @@ function OverviewScreen({
                 </Text>
               </View>
               <StudosCodeQr value={personalStudosCode} />
-            </View>
-          </View>
-        </View>
-      </Modal>
-      <Modal
-        animationType="fade"
-        onRequestClose={() => setMoodModalOpen(false)}
-        transparent
-        visible={moodModalOpen}
-      >
-        <View style={styles.chatModalRoot}>
-          <Pressable
-            accessibilityLabel="Luk stemning"
-            style={styles.chatModalBackdrop}
-            onPress={() => setMoodModalOpen(false)}
-          />
-          <View style={[styles.chatModalPanel, styles.overviewMoodModalPanel]}>
-            <View style={styles.chatModalHeader}>
-              <View>
-                <Text style={styles.chatModalKicker}>Dagens stemning</Text>
-                <Text style={styles.chatModalTitle}>Hvordan er stemningen?</Text>
-              </View>
-              <Pressable
-                accessibilityLabel="Luk"
-                accessibilityRole="button"
-                hitSlop={10}
-                onPress={() => setMoodModalOpen(false)}
-                style={({ pressed }) => [
-                  styles.chatModalCloseButton,
-                  pressed ? styles.footerItemPressed : null,
-                ]}
-              >
-                <Ionicons name="close" size={22} color={STUDOS_THEME.ink} />
-              </Pressable>
-            </View>
-            <View style={styles.overviewMoodModalOptions}>
-              {overviewMoods.map((mood) => {
-                const active = selectedMood === mood.id;
-
-                return (
-                  <Pressable
-                    accessibilityRole="button"
-                    key={mood.id}
-                    onPress={() => updateMood(mood.id)}
-                    style={({ pressed }) => [
-                      styles.overviewMoodModalOption,
-                      active ? styles.overviewMoodModalOptionActive : null,
-                      pressed ? styles.footerItemPressed : null,
-                    ]}
-                  >
-                    <View style={[
-                      styles.overviewMoodModalIcon,
-                      active ? styles.overviewMoodModalIconActive : null,
-                    ]}>
-                      <Ionicons
-                        name={mood.icon}
-                        size={20}
-                        color={STUDOS_THEME.ink}
-                      />
-                    </View>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.overviewMoodModalOptionText,
-                        active ? styles.overviewMoodModalOptionTextActive : null,
-                      ]}
-                    >
-                      {mood.label}
-                    </Text>
-                    {active ? (
-                      <Ionicons name="checkmark-circle" size={20} color={STUDOS_THEME.red} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
             </View>
           </View>
         </View>
@@ -19345,90 +20370,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 3,
     borderBottomLeftRadius: 1,
     borderBottomRightRadius: 1,
-  },
-  sidebarMoodBoardIcon: {
-    position: 'relative',
-    width: 28,
-    height: 27,
-  },
-  sidebarMoodCard: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    width: 15,
-    height: 15,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  sidebarMoodCardBlue: {
-    left: 0,
-    top: 3,
-    backgroundColor: STUDOS_THEME.blue,
-    transform: [{ rotate: '-8deg' }],
-  },
-  sidebarMoodCardYellow: {
-    right: 0,
-    top: 0,
-    backgroundColor: STUDOS_THEME.yellow,
-    transform: [{ rotate: '7deg' }],
-  },
-  sidebarMoodCardRed: {
-    bottom: 0,
-    left: 7,
-    backgroundColor: STUDOS_THEME.red,
-    transform: [{ rotate: '-2deg' }],
-  },
-  sidebarMoodCardLine: {
-    width: 7,
-    height: 2,
-    borderRadius: 2,
-    backgroundColor: STUDOS_THEME.ink,
-    opacity: 0.7,
-  },
-  sidebarMoodCardDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: STUDOS_THEME.ink,
-    opacity: 0.72,
-  },
-  sidebarBadgeRibbonRow: {
-    position: 'absolute',
-    top: 5,
-    flexDirection: 'row',
-    gap: 2,
-  },
-  sidebarBadgeRibbon: {
-    width: 7,
-    height: 15,
-    borderRadius: 2,
-  },
-  sidebarBadgeRibbonLeft: {
-    backgroundColor: STUDOS_THEME.blue,
-    transform: [{ rotate: '-14deg' }],
-  },
-  sidebarBadgeRibbonRight: {
-    backgroundColor: STUDOS_THEME.red,
-    transform: [{ rotate: '14deg' }],
-  },
-  sidebarBadgeMedal: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 14,
-    width: 18,
-    height: 18,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: STUDOS_THEME.red,
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  sidebarBadgeMedalDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 6,
-    backgroundColor: STUDOS_THEME.blue,
   },
   sidebarBookIcon: {
     position: 'relative',
@@ -22432,7 +23373,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   overviewStudosCard: {
-    gap: 16,
+    gap: 12,
     position: 'relative',
     marginBottom: 22,
     borderColor: '#E5E8EF',
@@ -22441,9 +23382,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
     backgroundColor: '#FFFFFF',
     overflow: 'visible',
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
     paddingBottom: 14,
-    paddingTop: 22,
+    paddingTop: 17,
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.12,
@@ -22500,26 +23441,23 @@ const styles = StyleSheet.create({
   overviewStudosQrCornerButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'absolute',
-    top: 21,
-    left: 14,
-    width: 32,
-    height: 32,
-    borderColor: '#FFE1B1',
-    borderRadius: 16,
+    flexShrink: 0,
+    width: 40,
+    height: 40,
+    borderColor: '#FFDCA2',
+    borderRadius: 20,
     borderWidth: 1,
     backgroundColor: '#FFF8E8',
     shadowColor: STUDOS_THEME.yellow,
-    shadowOffset: { width: 0, height: 9 },
-    shadowOpacity: 0.36,
-    shadowRadius: 13,
-    elevation: 9,
-    zIndex: 4,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 6,
   },
   overviewStudosTopRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     justifyContent: 'space-between',
     position: 'relative',
     zIndex: 3,
@@ -22528,86 +23466,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
-    justifyContent: 'center',
+    gap: 10,
+    justifyContent: 'flex-start',
     minWidth: 0,
   },
   overviewStudosCopy: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     flex: 1,
-    gap: 5,
+    gap: 1,
     minWidth: 0,
   },
   overviewStudosAvatarTop: {
-    marginBottom: 1,
+    flexShrink: 0,
+  },
+  overviewStudosEyebrow: {
+    color: STUDOS_THEME.red,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+    textTransform: 'uppercase',
   },
   overviewStudosName: {
     color: STUDOS_THEME.ink,
-    fontSize: 18,
-    fontWeight: '800',
+    fontSize: 19,
+    fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 22,
+    lineHeight: 23,
     maxWidth: '100%',
-    textAlign: 'center',
-  },
-  overviewStudosAwardRow: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    justifyContent: 'center',
-    marginTop: 2,
-    maxWidth: '100%',
-  },
-  overviewStudosAwardIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    width: 18,
-    height: 18,
-  },
-  overviewStudosAwardRibbonRow: {
-    position: 'absolute',
-    top: 1,
-    flexDirection: 'row',
-    gap: 1,
-  },
-  overviewStudosAwardRibbon: {
-    width: 5,
-    height: 9,
-    borderRadius: 1,
-  },
-  overviewStudosAwardRibbonBlue: {
-    backgroundColor: STUDOS_THEME.blue,
-    transform: [{ rotate: '-14deg' }],
-  },
-  overviewStudosAwardRibbonRed: {
-    backgroundColor: STUDOS_THEME.red,
-    transform: [{ rotate: '14deg' }],
-  },
-  overviewStudosAwardMedal: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 8,
-    width: 11,
-    height: 11,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: STUDOS_THEME.ink,
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  overviewStudosAwardMedalDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 3,
-    backgroundColor: STUDOS_THEME.ink,
-  },
-  overviewStudosAwardText: {
-    color: '#65748b',
-    flexShrink: 1,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0,
+    textAlign: 'left',
   },
   overviewStudosQrButtonDisabled: {
     opacity: 0.48,
@@ -22684,7 +23571,7 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 6,
+    gap: 7,
     position: 'relative',
     width: '100%',
     zIndex: 3,
@@ -22693,14 +23580,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
-    gap: 4,
-    minHeight: 29,
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 33,
     minWidth: 0,
-    borderColor: '#EEF1F5',
     borderRadius: 999,
     borderWidth: 1,
-    backgroundColor: '#F7FAFA',
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
   },
   overviewStudosStatValue: {
     color: STUDOS_THEME.ink,
@@ -22711,10 +23597,20 @@ const styles = StyleSheet.create({
   overviewStudosStatLabel: {
     color: '#65748b',
     flex: 1,
-    fontSize: 8.9,
+    fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0,
     minWidth: 0,
+  },
+  overviewStudosClipSection: {
+    position: 'relative',
+    zIndex: 3,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F8FBFA',
+    paddingHorizontal: 9,
+    paddingVertical: 9,
   },
   overviewStudosCapsBottomRow: {
     alignItems: 'center',
@@ -22819,22 +23715,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0,
-  },
-  overviewMoodStandaloneCard: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    borderColor: '#DDE8E5',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 5,
   },
   overviewCapsDuelMark: {
     alignItems: 'center',
@@ -23216,26 +24096,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF6F6',
   },
   overviewClassDuelsIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    width: 27,
-    height: 25,
+    width: 32,
+    height: 32,
+    borderRadius: 12,
+    transform: [{ translateY: 0 }],
   },
-  overviewClassDuelsShieldOutline: {
-    position: 'absolute',
-    top: -2,
-    zIndex: 1,
-  },
-  overviewClassDuelsShieldFill: {
-    position: 'absolute',
-    top: 0,
-    zIndex: 2,
-  },
-  overviewClassDuelsSwords: {
-    position: 'absolute',
-    top: 3,
-    zIndex: 3,
+  overviewClassDuelsIconCoin: {
+    right: 2,
+    top: 2,
+    width: 10,
+    height: 10,
   },
   overviewClassDuelsCopy: {
     flex: 1,
@@ -23256,45 +24126,45 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 14,
   },
-  overviewClassDuelsStatsRow: {
-    alignItems: 'center',
+  overviewClassDuelsStatsGrid: {
     flexDirection: 'row',
-    minHeight: 62,
-    borderColor: '#EEF1F5',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#F7FAFA',
-    paddingHorizontal: 10,
+    flexWrap: 'wrap',
+    gap: 8,
   },
   overviewClassDuelsStat: {
-    alignItems: 'center',
-    flex: 1,
-    gap: 2,
-    justifyContent: 'center',
+    flexBasis: '48%',
+    flexGrow: 1,
+    gap: 6,
+    justifyContent: 'space-between',
+    minHeight: 62,
     minWidth: 0,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  overviewClassDuelsStatTopRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   overviewClassDuelsStatValue: {
     color: STUDOS_THEME.ink,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 19,
+    lineHeight: 21,
   },
   overviewClassDuelsStatLabel: {
     color: '#65748b',
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '900',
     letterSpacing: 0,
     lineHeight: 12,
   },
-  overviewClassDuelsDivider: {
-    width: 1,
-    height: 34,
-    backgroundColor: '#E5E8EF',
-  },
   overviewClassDuelsAction: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-end',
     flexDirection: 'row',
     gap: 4,
     minHeight: 34,
@@ -23307,276 +24177,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
-  },
-  overviewDailyMoodCard: {
-    gap: 14,
-    borderColor: '#E5E8EF',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#FFFFFF',
-    padding: 15,
-    shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.1,
-    shadowRadius: 18,
-    elevation: 6,
-  },
-  overviewDailyMoodHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-  },
-  overviewDailyMoodIconWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 42,
-    height: 42,
-    borderColor: '#FFE1B1',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#FFF8E8',
-  },
-  overviewDailyMoodCopy: {
-    flex: 1,
-    gap: 2,
-    minWidth: 0,
-  },
-  overviewDailyMoodTitle: {
-    color: STUDOS_THEME.ink,
-    fontSize: 14,
-    fontWeight: '900',
-    letterSpacing: 0,
-    lineHeight: 17,
-  },
-  overviewDailyMoodMeta: {
-    color: '#65748b',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0,
-    lineHeight: 14,
-  },
-  overviewDailyMoodCurrent: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 11,
-    minHeight: 64,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  overviewDailyMoodCurrentNeedsCheckIn: {
-    backgroundColor: STUDOS_THEME.red,
-  },
-  overviewDailyMoodCurrentCheckedIn: {
-    backgroundColor: STUDOS_THEME.blue,
-  },
-  overviewDailyMoodCurrentIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 34,
-    height: 34,
-    borderColor: 'rgba(255,255,255,0.35)',
-    borderRadius: 17,
-    borderWidth: 1,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-  overviewDailyMoodCurrentCopy: {
-    flex: 1,
-    gap: 2,
-    minWidth: 0,
-  },
-  overviewDailyMoodCurrentLabel: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '900',
-    letterSpacing: 0,
-    lineHeight: 18,
-  },
-  overviewDailyMoodCurrentLabelCheckedIn: {
-    color: STUDOS_THEME.ink,
-  },
-  overviewDailyMoodCurrentText: {
-    color: 'rgba(255,255,255,0.84)',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0,
-    lineHeight: 14,
-  },
-  overviewDailyMoodCurrentTextCheckedIn: {
-    color: STUDOS_THEME.ink,
-  },
-  overviewStudosMoodRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    position: 'relative',
-    zIndex: 3,
-  },
-  overviewMoodHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'space-between',
-  },
-  overviewMoodHeaderCopy: {
-    alignSelf: 'center',
-    flex: 1,
-    gap: 2,
-    justifyContent: 'center',
-    minHeight: 38,
-    minWidth: 0,
-  },
-  overviewMoodKicker: {
-    color: STUDOS_THEME.red,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-    textTransform: 'uppercase',
-  },
-  overviewMoodQuestion: {
-    color: STUDOS_THEME.ink,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-    lineHeight: 14,
-  },
-  overviewMoodCurrentRow: {
-    alignSelf: 'stretch',
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'flex-start',
-  },
-  overviewMoodCurrentBadge: {
-    alignItems: 'center',
-    flexShrink: 0,
-    flexDirection: 'row',
-    gap: 7,
-    justifyContent: 'center',
-    maxWidth: 150,
-    minWidth: 0,
-    minHeight: 38,
-    borderColor: '#FFE1B1',
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: '#FFF8E8',
-    paddingHorizontal: 12,
-  },
-  overviewMoodCurrentBadgeNeedsCheckIn: {
-    borderColor: '#FF9DA0',
-    backgroundColor: STUDOS_THEME.red,
-  },
-  overviewMoodCurrentBadgeCheckedIn: {
-    borderColor: '#9DF0E7',
-    backgroundColor: STUDOS_THEME.blue,
-  },
-  overviewMoodCurrentText: {
-    color: STUDOS_THEME.ink,
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  overviewMoodCurrentTextOnAccent: {
-    color: '#FFFFFF',
-  },
-  overviewMoodCurrentTextOnBlue: {
-    color: STUDOS_THEME.ink,
-  },
-  overviewMoodSavedText: {
-    color: '#65748b',
-    flexShrink: 0,
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0,
-    maxWidth: 120,
-    textAlign: 'right',
-  },
-  overviewMoodUpdatedRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: -3,
-  },
-  overviewMoodUpdatedText: {
-    color: '#65748b',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0,
-    lineHeight: 13,
-  },
-  overviewMoodOptions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  overviewMoodButton: {
-    alignItems: 'center',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 5,
-    justifyContent: 'center',
-    minHeight: 38,
-    borderColor: '#E5E8EF',
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: '#F7FAFA',
-    paddingHorizontal: 8,
-  },
-  overviewMoodButtonActive: {
-    borderColor: STUDOS_THEME.yellow,
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  overviewMoodButtonText: {
-    color: '#65748b',
-    flexShrink: 1,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-  },
-  overviewMoodButtonTextActive: {
-    color: STUDOS_THEME.ink,
-  },
-  overviewMoodModalPanel: {
-    maxWidth: 420,
-  },
-  overviewMoodModalOptions: {
-    gap: 10,
-  },
-  overviewMoodModalOption: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    minHeight: 58,
-    borderColor: '#E5E8EF',
-    borderRadius: 8,
-    borderWidth: 1,
-    backgroundColor: '#F7FAFA',
-    paddingHorizontal: 12,
-  },
-  overviewMoodModalOptionActive: {
-    borderColor: STUDOS_THEME.yellow,
-    backgroundColor: '#FFF8E8',
-  },
-  overviewMoodModalIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-  },
-  overviewMoodModalIconActive: {
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  overviewMoodModalOptionText: {
-    color: STUDOS_THEME.ink,
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 0,
-  },
-  overviewMoodModalOptionTextActive: {
-    fontWeight: '900',
   },
   earnCapsHeroHeader: {
     alignItems: 'flex-start',
@@ -23898,32 +24498,31 @@ const styles = StyleSheet.create({
   overviewClipIconGrid: {
     alignItems: 'center',
     flexDirection: 'row',
-    flexShrink: 0,
-    flexWrap: 'wrap',
-    gap: 6,
-    justifyContent: 'center',
+    gap: 5,
+    justifyContent: 'space-between',
     position: 'relative',
-    width: 84,
+    width: '100%',
     zIndex: 3,
   },
   overviewClipIconButton: {
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    width: 39,
-    height: 39,
-    borderRadius: 20,
-    backgroundColor: 'transparent',
+    width: 36,
+    height: 36,
+    borderColor: '#E5E8EF',
+    borderRadius: 18,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
   },
   overviewClipIconButtonCompleted: {
     borderColor: '#91E6B6',
-    borderWidth: 1,
     backgroundColor: '#F1FFF7',
     shadowColor: '#22C55E',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.34,
-    shadowRadius: 11,
-    elevation: 7,
+    shadowOpacity: 0.26,
+    shadowRadius: 9,
+    elevation: 5,
   },
   overviewClipCompletedMark: {
     alignItems: 'center',
@@ -24592,11 +25191,11 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     backgroundColor: STUDOS_THEME.yellow,
-    shadowColor: '#D9A83B',
-    shadowOffset: { width: 0, height: 7 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowColor: '#1F9D55',
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.38,
+    shadowRadius: 15,
+    elevation: 9,
   },
   wallsOverlayScrollPad: {
     paddingTop: 36,
@@ -25196,30 +25795,55 @@ const styles = StyleSheet.create({
     maxWidth: 280,
     textAlign: 'center',
   },
-  wallsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+  wallsListFooter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingTop: 4,
+    paddingBottom: 10,
+  },
+  wallsListFooterRetry: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
+    marginTop: 2,
+    marginBottom: 10,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+  },
+  wallsListFooterRetryTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsListFooterRetryText: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    marginTop: 2,
+  },
+  wallsGridRow: {
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
   wallsCardOuter: {
     width: '47.5%',
   },
   wallsCard: {
+    aspectRatio: 1,
     borderRadius: 12,
     borderColor: '#DDE8E5',
     borderWidth: 1,
-    backgroundColor: '#EDF3F1',
+    backgroundColor: '#FFFFFF',
     overflow: 'hidden',
-    shadowColor: STUDOS_THEME.ink,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 3,
   },
   wallsCardCover: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: 156,
+    flex: 1,
+    minHeight: 0,
     backgroundColor: '#EDF3F1',
     position: 'relative',
   },
@@ -25327,24 +25951,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   wallsCardMeta: {
-    position: 'absolute',
-    left: 8,
-    right: 8,
-    bottom: 8,
-    gap: 3,
-    borderRadius: 8,
-    backgroundColor: 'rgba(12,18,34,0.42)',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    minHeight: 52,
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 9,
+    paddingTop: 7,
+    paddingBottom: 8,
   },
   wallsCardName: {
-    color: '#FFFFFF',
-    fontSize: 14,
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0,
-    textShadowColor: 'rgba(23,33,67,0.62)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
   },
   wallsCardDetailRow: {
     flexDirection: 'row',
@@ -25354,13 +25972,10 @@ const styles = StyleSheet.create({
   },
   wallsCardCount: {
     flex: 1,
-    color: 'rgba(255,255,255,0.78)',
-    fontSize: 12,
-    fontWeight: '700',
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '800',
     letterSpacing: 0,
-    textShadowColor: 'rgba(23,33,67,0.58)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
   },
   wallsCardVisibility: {
     color: STUDOS_THEME.ink,
@@ -25369,11 +25984,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     paddingHorizontal: 6,
     paddingVertical: 2,
+    borderColor: '#DDE8E5',
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    borderWidth: 1,
+    backgroundColor: '#F4F8F7',
     overflow: 'hidden',
   },
   wallsCardVisibilityPublic: {
+    borderColor: STUDOS_THEME.blue,
     backgroundColor: STUDOS_THEME.blue,
   },
   wallsAlbumHeader: {
@@ -25392,12 +26010,13 @@ const styles = StyleSheet.create({
   wallsAlbumScrollContent: {
     flexGrow: 1,
     paddingBottom: 24,
-    gap: 16,
   },
-  wallsAlbumGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  wallsAlbumScrollContentEmpty: {
+    justifyContent: 'center',
+  },
+  wallsAlbumGridRow: {
     gap: 4,
+    marginBottom: 4,
   },
   wallsAlbumPhotoCell: {
     borderRadius: 4,
@@ -26972,6 +27591,24 @@ const styles = StyleSheet.create({
     backgroundColor: STUDOS_THEME.red,
     zIndex: 3,
   },
+  duelScreenRoot: {
+    flex: 1,
+    gap: 12,
+    minHeight: 0,
+  },
+  duelScreenHeader: {
+    flexShrink: 0,
+    gap: 12,
+  },
+  duelMainScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  duelMainContent: {
+    flexGrow: 1,
+    gap: 16,
+    paddingBottom: 18,
+  },
   duelScopeSwitch: {
     flexDirection: 'row',
     gap: 6,
@@ -28500,7 +29137,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
-  chatGroupPhotoPreview: {
+  groupAvatarRootChatCircle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#FFF4D8',
+    borderRadius: 21,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  groupAvatarRootChatHeader: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 48,
+    height: 48,
+    borderColor: 'rgba(255,255,255,0.72)',
+    borderRadius: 24,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  groupAvatarRootPicker: {
     alignItems: 'center',
     justifyContent: 'center',
     width: 48,
@@ -28511,10 +29170,223 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
-  chatGroupPhotoPreviewImage: {
+  groupAvatarPhotoChatCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  groupAvatarPhotoChatHeader: {
     width: 48,
     height: 48,
     borderRadius: 24,
+  },
+  groupAvatarPhotoPicker: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  groupAvatarEmpty: {
+    backgroundColor: '#FFFFFF',
+  },
+  groupAvatarTile: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    borderColor: '#FFFFFF',
+    backgroundColor: '#F7FAFA',
+    overflow: 'hidden',
+  },
+  groupAvatarTileSingle: {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  groupAvatarTileLeft: {
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: '50%',
+    borderRightWidth: 1,
+  },
+  groupAvatarTileRight: {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: '50%',
+  },
+  groupAvatarTileTop: {
+    top: 0,
+    right: 0,
+    left: 0,
+    height: '50%',
+    borderBottomWidth: 1,
+  },
+  groupAvatarTileBottomLeft: {
+    bottom: 0,
+    left: 0,
+    width: '50%',
+    height: '50%',
+    borderRightWidth: 1,
+  },
+  groupAvatarTileBottomRight: {
+    right: 0,
+    bottom: 0,
+    width: '50%',
+    height: '50%',
+  },
+  groupAvatarTileImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  groupAvatarInitialsTile: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupAvatarInitialsText: {
+    width: '90%',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 13,
+    textAlign: 'center',
+  },
+  groupAvatarInitialsTextDark: {
+    color: STUDOS_THEME.ink,
+  },
+  groupAvatarInitialsTextLight: {
+    color: '#FFFFFF',
+  },
+  chatGroupInfoPanel: {
+    gap: 13,
+    maxHeight: 650,
+    borderColor: '#DDE8E5',
+    borderWidth: 1,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  chatGroupInfoHeaderTitle: {
+    flex: 1,
+    minWidth: 0,
+  },
+  chatGroupInfoSummary: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 66,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  chatGroupInfoSummaryCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  chatGroupInfoTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 19,
+  },
+  chatGroupInfoMeta: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  chatGroupInfoMemberScroll: {
+    maxHeight: 270,
+  },
+  chatGroupInfoMemberList: {
+    gap: 8,
+  },
+  chatGroupInfoMemberRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 56,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  chatGroupInfoMemberCopy: {
+    flex: 1,
+    gap: 4,
+    minWidth: 0,
+  },
+  chatGroupInfoMemberNameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    minWidth: 0,
+  },
+  chatGroupInfoMemberName: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  chatGroupInfoRolePill: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 0,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 11,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderColor: '#FFE1B1',
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: STUDOS_THEME.yellow,
+    overflow: 'hidden',
+  },
+  chatGroupInfoStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+  },
+  chatGroupInfoStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: '#C9D0DA',
+  },
+  chatGroupInfoStatusDotOnline: {
+    backgroundColor: '#31D158',
+  },
+  chatGroupInfoStatusText: {
+    color: '#65748b',
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  chatGroupInfoSubmitButton: {
+    flex: 0,
+    width: '100%',
+  },
+  chatGroupInfoSubmitDisabled: {
+    backgroundColor: '#B7C4C8',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   chatGroupPhotoCopy: {
     flex: 1,
@@ -29228,6 +30100,7 @@ const styles = StyleSheet.create({
     paddingRight: 18,
     paddingTop: CHAT_THREAD_TOP_PADDING + 10,
     paddingBottom: 10,
+    overflow: 'hidden',
     position: 'relative',
     shadowColor: STUDOS_THEME.ink,
     shadowOffset: { width: 0, height: 8 },
@@ -29236,13 +30109,60 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 3,
   },
+  chatThreadHeaderBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+    zIndex: 0,
+  },
+  chatThreadHeaderStripe: {
+    position: 'absolute',
+    borderRadius: 8,
+    opacity: 0.18,
+  },
+  chatThreadHeaderStripeBlue: {
+    top: CHAT_THREAD_TOP_PADDING + 8,
+    right: -30,
+    width: 170,
+    height: 20,
+    backgroundColor: STUDOS_THEME.blue,
+    transform: [{ rotate: '-12deg' }],
+  },
+  chatThreadHeaderStripeYellow: {
+    top: CHAT_THREAD_TOP_PADDING + 43,
+    right: -6,
+    width: 142,
+    height: 16,
+    backgroundColor: STUDOS_THEME.yellow,
+    opacity: 0.28,
+    transform: [{ rotate: '-12deg' }],
+  },
+  chatThreadHeaderStripeRed: {
+    top: CHAT_THREAD_TOP_PADDING + 72,
+    right: -22,
+    width: 188,
+    height: 18,
+    backgroundColor: STUDOS_THEME.red,
+    opacity: 0.14,
+    transform: [{ rotate: '-12deg' }],
+  },
+  chatThreadHeaderWatermark: {
+    position: 'absolute',
+    right: 12,
+    bottom: -10,
+    color: 'rgba(9, 15, 34, 0.055)',
+    fontSize: 44,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
   chatThreadCenteredIdentity: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
     justifyContent: 'space-between',
     maxWidth: '100%',
+    position: 'relative',
     width: '100%',
+    zIndex: 2,
   },
   chatThreadProfileSummary: {
     alignItems: 'center',
@@ -29251,34 +30171,105 @@ const styles = StyleSheet.create({
     gap: 10,
     minWidth: 0,
   },
-  chatThreadCounterGrid: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexShrink: 0,
-    flexWrap: 'wrap',
-    gap: 5,
-    justifyContent: 'flex-end',
-    width: 102,
+  chatThreadProfileSummaryInteractive: {
+    borderRadius: 8,
   },
-  chatThreadCounterPill: {
+  chatThreadProfileSummaryPressed: {
+    opacity: 0.78,
+  },
+  chatThreadGroupInfoButton: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 4,
-    justifyContent: 'space-between',
-    width: 48,
-    height: 22,
-    borderColor: 'rgba(255, 255, 255, 0.5)',
+    gap: 1,
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 44,
+    height: 32,
+    borderColor: '#DDE8E5',
+    borderRadius: 16,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  chatThreadMemberStatsStack: {
+    flexShrink: 0,
+    gap: 5,
+    width: 112,
+  },
+  chatThreadMemberCapsPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    minHeight: 34,
+    width: '100%',
+    borderColor: '#FFE1B1',
     borderRadius: 999,
     borderWidth: 1,
-    backgroundColor: 'rgba(255, 248, 231, 0.9)',
-    paddingHorizontal: 5,
+    backgroundColor: '#FFF8E8',
+    paddingLeft: 7,
+    paddingRight: 10,
   },
-  chatThreadCounterText: {
+  chatThreadMemberCapsCoin: {
+    width: 22,
+    height: 22,
+  },
+  chatThreadMemberCapsCopy: {
+    minWidth: 0,
+  },
+  chatThreadMemberCapsValue: {
     color: STUDOS_THEME.ink,
-    fontSize: 10,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  chatThreadMemberCapsLabel: {
+    color: '#65748b',
+    fontSize: 8.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 10,
+    textTransform: 'uppercase',
+  },
+  chatThreadMemberDuelPillRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  chatThreadMemberDuelPill: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    minWidth: 0,
+    height: 28,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  chatThreadMemberDuelPillWon: {
+    borderColor: '#9DF0E7',
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  chatThreadMemberDuelPillLost: {
+    borderColor: '#FF9DA0',
+    backgroundColor: STUDOS_THEME.red,
+  },
+  chatThreadMemberDuelPillValue: {
+    fontSize: 11,
+    fontWeight: '900',
     letterSpacing: 0,
     lineHeight: 12,
+  },
+  chatThreadMemberDuelPillLabel: {
+    fontSize: 7.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 9,
+    textTransform: 'uppercase',
+  },
+  chatThreadMemberDuelPillTextDark: {
+    color: STUDOS_THEME.ink,
+  },
+  chatThreadMemberDuelPillTextLight: {
+    color: '#FFFFFF',
   },
   chatThreadBackButton: {
     alignItems: 'center',
@@ -29290,6 +30281,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     backgroundColor: 'transparent',
+    zIndex: 3,
   },
   chatThreadAvatarStatusWrap: {
     position: 'relative',
@@ -29305,20 +30297,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     backgroundColor: '#31D158',
   },
-  chatThreadGroupAvatar: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
-    overflow: 'hidden',
-  },
-  chatThreadGroupPhoto: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-  },
   chatThreadPageTitleWrap: {
     alignItems: 'flex-start',
     flex: 1,
@@ -29331,57 +30309,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0,
     textAlign: 'left',
-  },
-  chatThreadPageMetaRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: 4,
-    maxWidth: '100%',
-  },
-  chatThreadAwardIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    width: 16,
-    height: 16,
-  },
-  chatThreadAwardRibbonRow: {
-    position: 'absolute',
-    top: 1,
-    flexDirection: 'row',
-    gap: 1,
-  },
-  chatThreadAwardRibbon: {
-    width: 4,
-    height: 8,
-    borderRadius: 1,
-  },
-  chatThreadAwardRibbonLeft: {
-    backgroundColor: STUDOS_THEME.blue,
-    transform: [{ rotate: '-14deg' }],
-  },
-  chatThreadAwardRibbonRight: {
-    backgroundColor: STUDOS_THEME.red,
-    transform: [{ rotate: '14deg' }],
-  },
-  chatThreadAwardMedal: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 7,
-    width: 10,
-    height: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: STUDOS_THEME.red,
-    backgroundColor: STUDOS_THEME.yellow,
-  },
-  chatThreadAwardMedalDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 3,
-    backgroundColor: STUDOS_THEME.blue,
   },
   chatThreadPageMeta: {
     color: STUDOS_THEME.ink,
@@ -29509,6 +30436,11 @@ const styles = StyleSheet.create({
   chatMessageAvatarStatusWrap: {
     position: 'relative',
   },
+  chatBubbleStack: {
+    alignItems: 'flex-start',
+    flexShrink: 1,
+    maxWidth: '74%',
+  },
   chatMessageOnlineDot: {
     position: 'absolute',
     right: -1,
@@ -29523,7 +30455,7 @@ const styles = StyleSheet.create({
   },
   chatBubble: {
     flexShrink: 1,
-    maxWidth: '74%',
+    maxWidth: '100%',
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -29602,11 +30534,13 @@ const styles = StyleSheet.create({
     opacity: 0.64,
   },
   chatSenderName: {
-    color: '#FF6F73',
-    fontSize: 11,
+    color: '#65748b',
+    fontSize: 10,
     fontWeight: '900',
     letterSpacing: 0,
-    marginBottom: 2,
+    lineHeight: 12,
+    marginBottom: 3,
+    marginLeft: 8,
   },
   chatMessageText: {
     color: STUDOS_THEME.ink,
@@ -29804,22 +30738,6 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#FFFFFF',
     transform: [{ rotate: '38deg' }],
-  },
-  chatConversationIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 42,
-    height: 42,
-    borderColor: '#FFF4D8',
-    borderRadius: 21,
-    borderWidth: 1,
-    backgroundColor: '#FFFFFF',
-    overflow: 'hidden',
-  },
-  chatConversationGroupPhoto: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
   },
   chatConversationCopy: {
     flex: 1,

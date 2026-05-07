@@ -161,7 +161,8 @@ Kernen er:
 - Profilbilleder, eventcovers og gruppechat-billeder via Laravel `Storage`.
 - Events med dato/tid, cover, invitationer, RSVP, rediger/slet og rapportering.
 - Chat med direkte samtaler, gruppechats, Reverb/polling, mute, hide, leave,
-  delete, report og block.
+  delete, report, block, gruppeinfo, tilfoej medlemmer og aendring af
+  gruppechatnavn.
 - Connections via personlig Studos-kode.
 - Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
   Klassedyst, ugens gode gerning og weekly check-in.
@@ -217,8 +218,12 @@ GET  /api/chat/conversations
 POST /api/chat/conversations/direct
 POST /api/chat/conversations/group
 POST /api/chat/conversations/{conversation}/messages
+POST /api/chat/conversations/{conversation}/participants
+PATCH /api/chat/conversations/{conversation}
 POST /api/chat/conversations/{conversation}/report
 POST /api/chat/conversations/{conversation}/block
+POST /api/chat/conversations/{conversation}/leave
+DELETE /api/chat/conversations/{conversation}
 POST /api/chat/messages/{message}/report
 DELETE /api/chat/messages/{message}
 DELETE /api/members/me
@@ -235,9 +240,11 @@ DELETE /api/gallery-photos/{photo}
 POST /api/gallery-photos/{photo}/report
 ```
 
-`GET /api/galleries` returnerer ogsaa `previewPhotos` med op til fire nyeste
-albumfotos pr. galleri. Mobilappen bruger dem til automatisk cover-fallback,
-hvis brugeren ikke har valgt et specifikt cover.
+`GET /api/galleries` understotter paginering og server-side filtrering via
+`page`, `perPage`, `visibility`, `sort` og `q`. Svaret indeholder
+`pagination` samt `previewPhotos` med op til fire nyeste albumfotos pr.
+galleri. Mobilappen bruger dem til automatisk cover-fallback, hvis brugeren
+ikke har valgt et specifikt cover.
 
 ## Public Landing Page
 
@@ -268,7 +275,7 @@ Feature-sektionen:
   `footer-calendar.png`, `footer-chat.png` og `footer-walls.png`.
 - Nye lokale screenshots ligger i `public/assets/index-mockups/`:
   `Kalender.png`, `Chats.png`, `Dyst.png`, `Walls.png`, `Overblik.png`,
-  `Spil.png`, `Klasseawards.png` og `Klassedyst.png`.
+  `Spil.png` og `Klassedyst.png`.
 
 Header/footer pr. 2026-05-01:
 
@@ -310,7 +317,7 @@ Footer-navigation:
 
 Sidebar:
 
-- `Din klasse`: Optjen Caps, Leaderboard, Dagens stemning, Klasseawards,
+- `Din klasse`: Optjen Caps, Leaderboard,
   Tilfaeldig vaelger.
 - `Andre klasser`: Andre klasser, Klassedyster.
 - `Kommende`: Wallet og Blaa bog er laast.
@@ -333,7 +340,6 @@ Overblik:
   Optjen Caps.
 - `Min kommende kalender` viser alle dagens events og maks 3 kommende events.
 - Klik paa et event i Overblik aabner Kalender paa den rigtige dag/eventkort.
-- `Dagens stemning` gemmes lokalt pr. bruger og resetter ved lokal midnat.
 - Der er nederste kort til `Seneste walls aktivitet` og `Klassedyster`.
 
 Kalender:
@@ -350,7 +356,12 @@ Chat:
 
 - Direkte chats, gruppechats, gruppebillede og unread-count.
 - Long-press paa samtaler/beskeder giver handlinger.
-- Rapportering, blokering og moderation logs er startet.
+- Gruppechats har delt avatar-fallback med op til tre medlemmer, klikbar
+  gruppeheader, medlemsliste, ejer-pill, tilfoej medlemmer og aendring af
+  chatnavn for ejeren.
+- Gruppechat-beskeder viser afsenderens fornavn diskret over boblen paa andres
+  beskeder, saa stock-avatar/initialer ikke er eneste identifikation.
+- Rapportering, direkte blokering og moderation logs er startet.
 - Realtime bruger Laravel Reverb, med polling fallback.
 
 Klassedyst:
@@ -527,12 +538,20 @@ Release-blokkere foer Apple/Google:
 
 - Kontosletning er implementeret i appen (`DELETE /api/members/me`) med
   tydelig irreversibel advarsel og anonymiseringsflow.
+- Chat er funktionelt TestFlight-klar, men production-builds skal tvinges til
+  HTTPS-only backend/Reverb via EAS env (`EXPO_PUBLIC_API_URL`,
+  `EXPO_PUBLIC_REVERB_HOST`, `EXPO_PUBLIC_REVERB_PORT=443`,
+  `EXPO_PUBLIC_REVERB_SCHEME=https`). Release-builds maa ikke falde tilbage til
+  lokale `http://localhost`, `.local`, `10.*` eller `192.168.*` endpoints.
 - Privatlivspolitik, vilkaar/EULA og supportside skal vaere live og linket fra
   appen/store listings.
 - App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
   profilbilleder/uploads, chatindhold, events, push-token og supportdata.
 - Der skal vaere en reel admin/moderationsside til rapporter, blocks og
   moderation violations.
+- Foer App Store-release boer gruppechat-medlemslisten have konkrete
+  medlemshandlinger til `Rapporter medlem` og `Bloker medlem`, saa UGC-kravet
+  om brugerblokering og rapportering ogsaa er tydeligt inde i gruppechat.
 - UGC-vilkaar skal klart forbyde chikane, diskrimination, trusler, seksuelt
   indhold, ulovligt indhold og misbrug af billeder/chat.
 - Review-notes skal have demo-login, forklaring af invitekode og hvor reviewer
@@ -547,10 +566,9 @@ Release-blokkere foer Apple/Google:
 
 - Wallet.
 - Blaa bog.
-- Klasseawards/afstemninger.
 - Push-notifikationer for dyster.
-- Backend-persistens for Dagens stemning og hueklip.
-- Kalender-push og daglig stemningsreminder.
+- Backend-persistens for hueklip.
+- Kalender-push.
 - Glemt adgangskode/email reset.
 - Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
@@ -584,7 +602,7 @@ upload:
 
 ```bash
 php -l app/Http/Controllers/StudosController.php
-npm --workspace @studenter-app/mobile exec -- expo export --platform web --output-dir /private/tmp/studos-mobile-export-gallery-cover-scrim
+npm --workspace @studenter-app/mobile exec -- expo export --platform web --output-dir /private/tmp/studos-mobile-export-refresh-all
 php artisan test
 ```
 
@@ -592,11 +610,14 @@ Resultat:
 
 - `StudosController.php` lint OK.
 - Expo web-export for mobilappen bygger OK.
-- `php artisan test`: 40 feature-/unit-tests passer, men 1 eksisterende
+- `php artisan test`: 41 feature-/unit-tests passer, men 1 eksisterende
   push-token-test fejler fortsat (`authenticated member can register android
   push token`: forventet 422, fik 200). Fejlen er ikke relateret til
-  Galleri-cover/preview-aendringerne.
-- Walls `/api/galleries` returnerer nu `previewPhotos` til cover fallback.
+  Galleri-pagination/preview-aendringerne.
+- Walls `/api/galleries` returnerer nu paginerede album med server-side
+  kategori, sortering, sogning og `previewPhotos` til cover fallback.
+- Mobilappen bruger nu Studos-farvet pull-to-refresh paa de primære
+  server-drevne sider.
 
 Tidligere koert 2026-05-06 efter Walls v1, UX og device adaptation:
 
@@ -648,6 +669,9 @@ Resultat:
 - Reverb skal koere med production-host/keys, saa chat og Dyst realtime virker.
 - `APP_URL`, `EXPO_PUBLIC_API_URL`, Reverb env og storage/public upload-setup
   skal pege paa production-domainer.
+- iOS/TestFlight production builds skal bruge EAS environment secrets til
+  HTTPS-only API/Reverb. Kontroller at appen ikke proever lokale HTTP endpoints
+  i archive/review-builds.
 
 ## Naeste Gode Skridt
 
@@ -657,13 +681,15 @@ Resultat:
 2. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
    Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
    realtime/polling og Caps-refundering.
-3. Koer to-enheds QA af chat, kalender, uploads, blocking/reporting og login.
+3. Koer to-enheds QA af chat, gruppechat-info, kalender, uploads,
+   blocking/reporting og login.
 4. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
    backups og production env.
 5. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
 6. Faa account deletion/support-flow helt review-klar.
-7. Lav admin/moderationsside til rapporter, blocks og violations.
-8. Goer Dagens stemning/hueklip rigtige i backend.
+7. Lav admin/moderationsside til rapporter, blocks og violations samt
+   gruppechat-medlemshandlinger til rapporter/bloker.
+8. Goer hueklip rigtige i backend.
 9. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
    review notes.
 10. Lav production iOS/TestFlight build og Android production AAB.

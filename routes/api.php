@@ -19,6 +19,7 @@ Route::post('/session/login', [StudosController::class, 'loginWithPassword'])->m
 Route::post('/session/request-code', [StudosController::class, 'requestLoginCode'])->middleware('throttle:6,1');
 Route::post('/session/verify-code', [StudosController::class, 'verifyLoginCode'])->middleware('throttle:10,1');
 Route::get('/session/me', [StudosController::class, 'sessionMe']);
+Route::get('/overview/stats', [StudosController::class, 'overviewStats']);
 Route::get('/class-battle', [StudosController::class, 'classBattle']);
 Route::get('/duels', [StudosController::class, 'duels']);
 Route::post('/duels', [StudosController::class, 'storeDuel'])->middleware('throttle:20,1');
@@ -67,6 +68,8 @@ Route::post('/chat/conversations/direct', [ChatController::class, 'createDirectC
 Route::post('/chat/conversations/group', [ChatController::class, 'createGroupConversation'])->middleware('throttle:10,1');
 Route::get('/chat/conversations/{conversation}/messages', [ChatController::class, 'messages']);
 Route::post('/chat/conversations/{conversation}/messages', [ChatController::class, 'sendMessage'])->middleware('throttle:40,1');
+Route::post('/chat/conversations/{conversation}/participants', [ChatController::class, 'addGroupParticipants'])->middleware('throttle:10,1');
+Route::patch('/chat/conversations/{conversation}', [ChatController::class, 'updateGroupConversation'])->middleware('throttle:10,1');
 Route::post('/chat/conversations/{conversation}/read', [ChatController::class, 'markRead']);
 Route::post('/chat/conversations/{conversation}/mute', [ChatController::class, 'muteConversation']);
 Route::post('/chat/conversations/{conversation}/report', [ChatController::class, 'reportConversation'])->middleware('throttle:10,1');

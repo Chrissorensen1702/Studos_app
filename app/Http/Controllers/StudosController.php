@@ -1516,6 +1516,98 @@ class StudosController extends Controller
         ]);
     }
 
+    public function overviewStats(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        if (Schema::hasTable('point_duels')) {
+            PointDuelMaintenance::expireDueForMember($member);
+        }
+
+        return response()->json([
+            'stats' => $this->overviewStatsForMember($member),
+        ]);
+    }
+
+    private function overviewStatsForMember(object $member): array
+    {
+        $completedDuels = 0;
+        $pendingDuels = 0;
+        $activeDuels = 0;
+        $wonDuels = 0;
+        $lostDuels = 0;
+        $attendedEvents = 0;
+        $accessiblePhotos = 0;
+
+        if (Schema::hasTable('point_duels')) {
+            $memberDuelQuery = fn () => DB::table('point_duels')
+                ->where('class_id', $member->class_id)
+                ->where(function ($query) use ($member): void {
+                    $query
+                        ->where('creator_member_id', $member->id)
+                        ->orWhere('opponent_member_id', $member->id);
+                });
+
+            $completedDuels = $memberDuelQuery()
+                ->where('status', 'completed')
+                ->whereNotNull('winner_member_id')
+                ->count();
+            $pendingDuels = $memberDuelQuery()
+                ->whereIn('status', [
+                    'awaitingOpponent',
+                    'awaitingCreatorConfirm',
+                    'awaitingResultConfirm',
+                    'awaitingJudgeApproval',
+                ])
+                ->count();
+            $activeDuels = $memberDuelQuery()
+                ->where('status', 'active')
+                ->count();
+            $wonDuels = $memberDuelQuery()
+                ->where('status', 'completed')
+                ->where('winner_member_id', $member->id)
+                ->count();
+            $lostDuels = $memberDuelQuery()
+                ->where('status', 'completed')
+                ->whereNotNull('winner_member_id')
+                ->where('winner_member_id', '!=', $member->id)
+                ->count();
+        }
+
+        if (Schema::hasTable('event_rsvps')) {
+            $attendedEvents = DB::table('event_rsvps')
+                ->join('events', 'events.id', '=', 'event_rsvps.event_id')
+                ->where('events.class_id', $member->class_id)
+                ->where('event_rsvps.member_id', $member->id)
+                ->where('event_rsvps.status', 'attending')
+                ->count();
+        }
+
+        if (Schema::hasTable('galleries') && Schema::hasTable('gallery_photos')) {
+            $visibleGalleryIds = DB::table('galleries')
+                ->select('id')
+                ->where('class_id', $member->class_id)
+                ->whereNull('deleted_at');
+
+            $this->applyGalleryVisibilityQuery($visibleGalleryIds, $member);
+
+            $accessiblePhotos = DB::table('gallery_photos')
+                ->whereNull('deleted_at')
+                ->whereIn('gallery_id', $visibleGalleryIds)
+                ->count();
+        }
+
+        return [
+            'completedDuels' => (int) $completedDuels,
+            'pendingDuels' => (int) $pendingDuels,
+            'activeDuels' => (int) $activeDuels,
+            'wonDuels' => (int) $wonDuels,
+            'lostDuels' => (int) $lostDuels,
+            'attendedEvents' => (int) $attendedEvents,
+            'accessiblePhotos' => (int) $accessiblePhotos,
+        ];
+    }
+
     public function registerPushToken(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -3719,6 +3811,9 @@ class StudosController extends Controller
     private const GALLERY_VISIBILITY_VALUES = ['private', 'public'];
     private const GALLERY_AUDIENCE_VALUES   = ['class', 'crew', 'specific'];
     private const GALLERY_PERMISSION_VALUES = ['view', 'add', 'add_delete'];
+    private const GALLERY_SORT_VALUES       = ['recent', 'photos', 'az'];
+    private const GALLERY_PAGE_SIZE_DEFAULT = 24;
+    private const GALLERY_PAGE_SIZE_MAX     = 50;
 
     private function galleryApiShape(object $gallery, array $previewPhotos = []): array
     {
@@ -3753,21 +3848,23 @@ class StudosController extends Controller
             return [];
         }
 
-        $photos = DB::table('gallery_photos')
+        $rankedPhotos = DB::table('gallery_photos')
             ->whereIn('gallery_id', $ids)
             ->whereNull('deleted_at')
+            ->select('gallery_photos.*')
+            ->selectRaw('ROW_NUMBER() OVER (PARTITION BY gallery_id ORDER BY created_at DESC, id DESC) as preview_rank');
+
+        $photos = DB::query()
+            ->fromSub($rankedPhotos, 'ranked_gallery_photos')
+            ->where('preview_rank', '<=', 4)
             ->orderBy('gallery_id')
-            ->orderByDesc('created_at')
+            ->orderBy('preview_rank')
             ->get();
 
         $previewPhotos = [];
 
         foreach ($photos as $photo) {
             $galleryId = (string) $photo->gallery_id;
-
-            if (count($previewPhotos[$galleryId] ?? []) >= 4) {
-                continue;
-            }
 
             $previewPhotos[$galleryId][] = $this->galleryPhotoApiShape($photo);
         }
@@ -3790,23 +3887,108 @@ class StudosController extends Controller
         };
     }
 
+    private function applyGalleryVisibilityQuery($query, object $member): void
+    {
+        $memberId = (string) $member->id;
+        $memberNeedle = '%'.json_encode($memberId).'%';
+
+        $query->where(function ($visible) use ($memberId, $memberNeedle) {
+            $visible
+                ->where(function ($private) use ($memberId) {
+                    $private
+                        ->where('visibility', 'private')
+                        ->where('created_by_member_id', $memberId);
+                })
+                ->orWhere(function ($public) use ($memberId, $memberNeedle) {
+                    $public
+                        ->where('visibility', 'public')
+                        ->where(function ($publicScope) use ($memberId, $memberNeedle) {
+                            $publicScope
+                                ->whereIn('audience', ['class', 'crew'])
+                                ->orWhere(function ($specific) use ($memberId, $memberNeedle) {
+                                    $specific
+                                        ->where('audience', 'specific')
+                                        ->where(function ($specificScope) use ($memberId, $memberNeedle) {
+                                            $specificScope
+                                                ->where('created_by_member_id', $memberId)
+                                                ->orWhere('member_ids', 'like', $memberNeedle);
+                                        });
+                                });
+                        });
+                });
+        });
+    }
+
     public function getGalleries(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
 
-        $galleries = DB::table('galleries')
-            ->where('class_id', $member->class_id)
-            ->whereNull('deleted_at')
-            ->orderByDesc('created_at')
-            ->get();
+        $data = $request->validate([
+            'page'       => ['nullable', 'integer', 'min:1'],
+            'perPage'    => ['nullable', 'integer', 'min:1', 'max:'.self::GALLERY_PAGE_SIZE_MAX],
+            'sort'       => ['nullable', 'string', Rule::in(self::GALLERY_SORT_VALUES)],
+            'visibility' => ['nullable', 'string', Rule::in(['all', ...self::GALLERY_VISIBILITY_VALUES])],
+            'q'          => ['nullable', 'string', 'max:80'],
+        ]);
 
-        $visible = $galleries->filter(fn ($g) => $this->galleryIsVisibleToMember($g, $member))->values();
-        $previewPhotosByGalleryId = $this->galleryPreviewPhotosByGalleryIds($visible->pluck('id')->all());
+        $page = max(1, (int) ($data['page'] ?? 1));
+        $perPage = min(
+            self::GALLERY_PAGE_SIZE_MAX,
+            max(1, (int) ($data['perPage'] ?? self::GALLERY_PAGE_SIZE_DEFAULT))
+        );
+        $sort = $data['sort'] ?? 'recent';
+        $visibility = $data['visibility'] ?? 'all';
+        $search = trim((string) ($data['q'] ?? ''));
+
+        $query = DB::table('galleries')
+            ->where('class_id', $member->class_id)
+            ->whereNull('deleted_at');
+
+        $this->applyGalleryVisibilityQuery($query, $member);
+
+        if ($visibility !== 'all') {
+            $query->where('visibility', $visibility);
+        }
+
+        if ($search !== '') {
+            $query->where('name', 'like', '%'.$search.'%');
+        }
+
+        $total = (clone $query)->count();
+
+        match ($sort) {
+            'photos' => $query
+                ->orderByDesc('photo_count')
+                ->orderByDesc('updated_at')
+                ->orderByDesc('created_at')
+                ->orderByDesc('id'),
+            'az' => $query
+                ->orderByRaw('LOWER(name) ASC')
+                ->orderByDesc('updated_at')
+                ->orderByDesc('created_at')
+                ->orderByDesc('id'),
+            default => $query
+                ->orderByDesc('updated_at')
+                ->orderByDesc('created_at')
+                ->orderByDesc('id'),
+        };
+
+        $galleries = $query
+            ->offset(($page - 1) * $perPage)
+            ->limit($perPage)
+            ->get();
+        $previewPhotosByGalleryId = $this->galleryPreviewPhotosByGalleryIds($galleries->pluck('id')->all());
 
         return response()->json([
-            'galleries' => $visible->map(fn ($g) =>
+            'galleries' => $galleries->map(fn ($g) =>
                 $this->galleryApiShape($g, $previewPhotosByGalleryId[(string) $g->id] ?? [])
             )->all(),
+            'pagination' => [
+                'page'    => $page,
+                'perPage' => $perPage,
+                'total'   => $total,
+                'hasMore' => ($page * $perPage) < $total,
+            ],
         ]);
     }
 

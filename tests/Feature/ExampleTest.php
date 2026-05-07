@@ -76,10 +76,11 @@ class ExampleTest extends TestCase
             ->assertSee('Næste mockup')
             ->assertSee('Kalender og events')
             ->assertSee('Mini games')
-            ->assertSee('Klassewards')
             ->assertSee('Klassedyst')
             ->assertSee('assets/index-mockups/Kalender.png')
-            ->assertSee('assets/index-mockups/Klassedyst.png');
+            ->assertSee('assets/index-mockups/Klassedyst.png')
+            ->assertDontSee('Klassewards')
+            ->assertDontSee('assets/index-mockups/Klasseawards.png');
     }
 
     public function test_old_index_html_redirects_to_app_url(): void
@@ -854,9 +855,428 @@ class ExampleTest extends TestCase
             && $request[0]['channelId'] === 'studos-default');
     }
 
+    public function test_galleries_endpoint_paginates_filters_sorts_and_limits_preview_photos(): void
+    {
+        $this->createActiveDemoMember('gallery-other', 'Gry Galleri', 'gry.gallery@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $now = now();
+        $galleries = [];
+
+        foreach (range(1, 30) as $index) {
+            $isPublic = $index % 2 === 0;
+            $galleries[] = [
+                'id' => 'gallery-'.$index,
+                'class_id' => 'demo-class',
+                'name' => sprintf('Album %02d', $index),
+                'visibility' => $isPublic ? 'public' : 'private',
+                'audience' => $isPublic ? 'class' : null,
+                'permission' => $isPublic ? 'add' : null,
+                'member_ids' => null,
+                'photo_count' => $index,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'demo-owner',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now->copy()->subMinutes(90 - $index)->format('Y-m-d H:i:s'),
+                'updated_at' => $now->copy()->subMinutes(60 - $index)->format('Y-m-d H:i:s'),
+            ];
+        }
+
+        $galleries[] = [
+            'id' => 'hidden-private-gallery',
+            'class_id' => 'demo-class',
+            'name' => 'Skjult privat album',
+            'visibility' => 'private',
+            'audience' => null,
+            'permission' => null,
+            'member_ids' => null,
+            'photo_count' => 999,
+            'cover_image_url' => null,
+            'created_by_member_id' => 'gallery-other',
+            'deleted_at' => null,
+            'deleted_by_member_id' => null,
+            'created_at' => $now->format('Y-m-d H:i:s'),
+            'updated_at' => $now->format('Y-m-d H:i:s'),
+        ];
+
+        DB::table('galleries')->insert($galleries);
+
+        foreach (range(1, 6) as $index) {
+            DB::table('gallery_photos')->insert([
+                'id' => 'gallery-30-photo-'.$index,
+                'gallery_id' => 'gallery-30',
+                'member_id' => 'demo-owner',
+                'image_url' => 'gallery-photos/gallery-30-'.$index.'.jpg',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now->copy()->addMinutes($index)->format('Y-m-d H:i:s'),
+            ]);
+        }
+
+        $response = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/galleries?perPage=5&page=1&sort=photos');
+
+        $response
+            ->assertStatus(200)
+            ->assertJsonPath('pagination.page', 1)
+            ->assertJsonPath('pagination.perPage', 5)
+            ->assertJsonPath('pagination.total', 30)
+            ->assertJsonPath('pagination.hasMore', true)
+            ->assertJsonPath('galleries.0.id', 'gallery-30')
+            ->assertJsonPath('galleries.0.photoCount', 30);
+
+        $this->assertCount(5, $response->json('galleries'));
+        $this->assertCount(4, $response->json('galleries.0.previewPhotos'));
+        $this->assertSame('gallery-30-photo-6', $response->json('galleries.0.previewPhotos.0.id'));
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/galleries?perPage=20&visibility=public&sort=az&q=Album')
+            ->assertStatus(200)
+            ->assertJsonCount(15, 'galleries')
+            ->assertJsonPath('galleries.0.id', 'gallery-2')
+            ->assertJsonPath('galleries.0.visibility', 'public');
+    }
+
+    public function test_overview_stats_count_profile_activity_and_accessible_photos(): void
+    {
+        $this->createActiveDemoMember('stats-member', 'Signe Statistik', 'signe.statistik@example.test');
+        $this->createActiveDemoMember('stats-other', 'Oskar Statistik', 'oskar.statistik@example.test');
+        $this->createActiveDemoMember('stats-third', 'Tilde Statistik', 'tilde.statistik@example.test');
+        $token = $this->issueTestMemberToken('stats-member');
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::table('point_duels')->insert([
+            [
+                'id' => 'stats-duel-win',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-member',
+                'opponent_member_id' => 'stats-other',
+                'judge_member_id' => null,
+                'challenge' => 'Vind testen',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'completed',
+                'winner_member_id' => 'stats-member',
+                'completed_by_member_id' => null,
+                'completed_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-loss',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-other',
+                'opponent_member_id' => 'stats-member',
+                'judge_member_id' => null,
+                'challenge' => 'Tab testen',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'completed',
+                'winner_member_id' => 'stats-other',
+                'completed_by_member_id' => null,
+                'completed_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-cancelled',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-member',
+                'opponent_member_id' => 'stats-other',
+                'judge_member_id' => null,
+                'challenge' => 'Annulleret test',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'cancelled',
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'completed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-awaiting-opponent',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-member',
+                'opponent_member_id' => 'stats-other',
+                'judge_member_id' => null,
+                'challenge' => 'Afventer modstander',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'awaitingOpponent',
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'completed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-awaiting-result',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-other',
+                'opponent_member_id' => 'stats-member',
+                'judge_member_id' => null,
+                'challenge' => 'Afventer resultat',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'awaitingResultConfirm',
+                'winner_member_id' => 'stats-member',
+                'completed_by_member_id' => 'stats-other',
+                'completed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-active',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-member',
+                'opponent_member_id' => 'stats-other',
+                'judge_member_id' => null,
+                'challenge' => 'Aktiv test',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'active',
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'completed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-duel-judge-only',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'stats-other',
+                'opponent_member_id' => 'stats-third',
+                'judge_member_id' => 'stats-member',
+                'challenge' => 'Dommer tæller ikke',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'completed',
+                'winner_member_id' => 'stats-other',
+                'completed_by_member_id' => null,
+                'completed_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        DB::table('events')->insert([
+            [
+                'id' => 'stats-event-attending-1',
+                'class_id' => 'demo-class',
+                'title' => 'Deltaget event 1',
+                'event_date' => '2026-05-01',
+                'rsvp_count' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-event-attending-2',
+                'class_id' => 'demo-class',
+                'title' => 'Deltaget event 2',
+                'event_date' => '2026-05-02',
+                'rsvp_count' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-event-declined',
+                'class_id' => 'demo-class',
+                'title' => 'Ikke deltaget event',
+                'event_date' => '2026-05-03',
+                'rsvp_count' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        DB::table('event_rsvps')->insert([
+            [
+                'id' => 'stats-rsvp-attending-1',
+                'event_id' => 'stats-event-attending-1',
+                'member_id' => 'stats-member',
+                'status' => 'attending',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-rsvp-attending-2',
+                'event_id' => 'stats-event-attending-2',
+                'member_id' => 'stats-member',
+                'status' => 'attending',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-rsvp-declined',
+                'event_id' => 'stats-event-declined',
+                'member_id' => 'stats-member',
+                'status' => 'not_attending',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        DB::table('galleries')->insert([
+            [
+                'id' => 'stats-own-private-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Eget privat album',
+                'visibility' => 'private',
+                'audience' => null,
+                'permission' => null,
+                'member_ids' => null,
+                'photo_count' => 2,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'stats-member',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-public-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Fælles album',
+                'visibility' => 'public',
+                'audience' => 'class',
+                'permission' => 'view',
+                'member_ids' => null,
+                'photo_count' => 3,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'stats-other',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-specific-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Specifikt album',
+                'visibility' => 'public',
+                'audience' => 'specific',
+                'permission' => 'view',
+                'member_ids' => json_encode(['stats-member']),
+                'photo_count' => 4,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'stats-other',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'stats-hidden-private-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Skjult privat album',
+                'visibility' => 'private',
+                'audience' => null,
+                'permission' => null,
+                'member_ids' => null,
+                'photo_count' => 5,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'stats-other',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        foreach ([
+            'stats-own-private-gallery' => 2,
+            'stats-public-gallery' => 3,
+            'stats-specific-gallery' => 4,
+            'stats-hidden-private-gallery' => 5,
+        ] as $galleryId => $count) {
+            foreach (range(1, $count) as $index) {
+                DB::table('gallery_photos')->insert([
+                    'id' => $galleryId.'-photo-'.$index,
+                    'gallery_id' => $galleryId,
+                    'member_id' => 'stats-other',
+                    'image_url' => 'gallery-photos/'.$galleryId.'-'.$index.'.jpg',
+                    'deleted_at' => null,
+                    'deleted_by_member_id' => null,
+                    'created_at' => $now,
+                ]);
+            }
+        }
+
+        DB::table('gallery_photos')
+            ->where('id', 'stats-public-gallery-photo-3')
+            ->update(['deleted_at' => $now, 'deleted_by_member_id' => 'stats-other']);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$token)
+            ->getJson('/api/overview/stats')
+            ->assertStatus(200)
+            ->assertJsonPath('stats.completedDuels', 2)
+            ->assertJsonPath('stats.pendingDuels', 2)
+            ->assertJsonPath('stats.activeDuels', 1)
+            ->assertJsonPath('stats.wonDuels', 1)
+            ->assertJsonPath('stats.lostDuels', 1)
+            ->assertJsonPath('stats.attendedEvents', 2)
+            ->assertJsonPath('stats.accessiblePhotos', 8);
+    }
+
     public function test_direct_chat_uses_auth_member_as_sender_and_tracks_read_status(): void
     {
         $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
+        DB::table('members')->where('id', 'chat-maja')->update(['caps_balance' => 1234]);
+        $duelNow = now()->format('Y-m-d H:i:s');
+        DB::table('point_duels')->insert([
+            [
+                'id' => 'chat-maja-duel-win',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'chat-maja',
+                'opponent_member_id' => 'demo-owner',
+                'judge_member_id' => null,
+                'challenge' => 'Chat vundet dyst',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'completed',
+                'winner_member_id' => 'chat-maja',
+                'completed_by_member_id' => null,
+                'completed_at' => $duelNow,
+                'created_at' => $duelNow,
+                'updated_at' => $duelNow,
+            ],
+            [
+                'id' => 'chat-maja-duel-loss',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'demo-owner',
+                'opponent_member_id' => 'chat-maja',
+                'judge_member_id' => null,
+                'challenge' => 'Chat tabt dyst',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'completed',
+                'winner_member_id' => 'demo-owner',
+                'completed_by_member_id' => null,
+                'completed_at' => $duelNow,
+                'created_at' => $duelNow,
+                'updated_at' => $duelNow,
+            ],
+            [
+                'id' => 'chat-maja-duel-active',
+                'class_id' => 'demo-class',
+                'creator_member_id' => 'chat-maja',
+                'opponent_member_id' => 'demo-owner',
+                'judge_member_id' => null,
+                'challenge' => 'Chat aktiv dyst',
+                'mode' => 'versus',
+                'stake_caps' => 10,
+                'status' => 'active',
+                'winner_member_id' => null,
+                'completed_by_member_id' => null,
+                'completed_at' => null,
+                'created_at' => $duelNow,
+                'updated_at' => $duelNow,
+            ],
+        ]);
         $ownerToken = $this->issueTestMemberToken('demo-owner');
         $majaToken = $this->issueTestMemberToken('chat-maja');
         $ownerDisplayName = DB::table('members')
@@ -879,6 +1299,11 @@ class ExampleTest extends TestCase
             ->assertJsonPath('conversation.title', 'Maja Chat')
             ->assertJsonPath('conversation.canHide', true)
             ->assertJsonPath('conversation.canDeleteForEveryone', false);
+
+        $majaConversationParticipant = collect($conversationResponse->json('conversation.participants'))
+            ->firstWhere('memberId', 'chat-maja');
+        $this->assertSame(1234, $majaConversationParticipant['member']['capsBalance']);
+        $this->assertSame(['won' => 1, 'lost' => 1], $majaConversationParticipant['member']['duelStats']);
 
         $conversationId = $conversationResponse->json('conversation.id');
         $majaPushToken = 'ExpoPushToken['.Str::random(32).']';
@@ -991,6 +1416,8 @@ class ExampleTest extends TestCase
 
         $this->assertTrue($majaParticipant['member']['isOnline']);
         $this->assertNotEmpty($majaParticipant['member']['lastSeenAt']);
+        $this->assertSame(1234, $majaParticipant['member']['capsBalance']);
+        $this->assertSame(['won' => 1, 'lost' => 1], $majaParticipant['member']['duelStats']);
 
         $muteResponse = $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
@@ -1163,8 +1590,10 @@ class ExampleTest extends TestCase
     {
         $this->createActiveDemoMember('chat-maja', 'Maja Chat', 'maja.chat@example.test');
         $this->createActiveDemoMember('chat-tobias', 'Tobias Chat', 'tobias.chat@example.test');
+        $this->createActiveDemoMember('chat-sofie', 'Sofie Chat', 'sofie.chat@example.test');
         $ownerToken = $this->issueTestMemberToken('demo-owner');
         $majaToken = $this->issueTestMemberToken('chat-maja');
+        $tobiasToken = $this->issueTestMemberToken('chat-tobias');
 
         $groupResponse = $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
@@ -1184,6 +1613,56 @@ class ExampleTest extends TestCase
             ->assertJsonPath('conversation.participants.0.role', 'owner');
 
         $conversationId = $groupResponse->json('conversation.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/participants', [
+                'memberIds' => ['chat-sofie'],
+            ])
+            ->assertStatus(403);
+
+        $addResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/'.$conversationId.'/participants', [
+                'memberIds' => ['chat-sofie', 'chat-maja'],
+            ]);
+
+        $addResponse
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertTrue(
+            collect($addResponse->json('conversation.participants'))
+                ->contains(fn (array $participant): bool => $participant['memberId'] === 'chat-sofie' && $participant['role'] === 'member')
+        );
+        $this->assertDatabaseHas('chat_participants', [
+            'conversation_id' => $conversationId,
+            'member_id' => 'chat-sofie',
+            'status' => 'active',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->patchJson('/api/chat/conversations/'.$conversationId, [
+                'title' => 'Ny vognturstitel',
+            ])
+            ->assertStatus(403);
+
+        $renameResponse = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->patchJson('/api/chat/conversations/'.$conversationId, [
+                'title' => 'Ny vognturstitel',
+            ]);
+
+        $renameResponse
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('conversation.title', 'Ny vognturstitel');
+
+        $this->assertDatabaseHas('chat_conversations', [
+            'id' => $conversationId,
+            'title' => 'Ny vognturstitel',
+        ]);
 
         $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)

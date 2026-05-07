@@ -97,9 +97,8 @@ RSVP `Deltager`/`Deltager ikke`. Tidligere events findes via en fuldbredde
 knap nederst paa kalendersiden og beregnes paa lokal dato/tid.
 
 `Overblik` har dynamisk countdown til studenterugen, `Mit Studos`, lokal
-hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste aktivitet`,
-`Klassedyster` og `Dagens stemning`. Dagens stemning gemmes lokalt pr. bruger
-og resetter ved lokal midnat.
+hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste aktivitet`
+og `Klassedyster`.
 
 ## App-shell og navigation
 
@@ -281,7 +280,7 @@ Status pr. 2026-04-28:
 4. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
    invitationer, RSVP og tomme states.
 5. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
-   badge-tekster, testpersoner og ufaerdige sidebar-sider.
+   tekster, testpersoner og ufaerdige sidebar-sider.
 6. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
    privacy/terms/support links, demo-login til review og korrekt content
    rating for brugerchat/UGC.

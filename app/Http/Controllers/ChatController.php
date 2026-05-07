@@ -184,6 +184,45 @@ class ChatController extends Controller
         ], 201);
     }
 
+    public function updateGroupConversation(Request $request, string $conversation): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $chat = $this->conversationForMember($conversation, $member);
+
+        abort_unless($chat->type === 'group', 422, 'Kun gruppechats kan opdateres.');
+        abort_unless($chat->participantRole === 'owner', 403, 'Kun ejeren kan aendre gruppechatten.');
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:120'],
+        ]);
+        $title = ContentModeration::cleanText($data['title'], 'title', 'Gruppenavnet', [
+            'source' => 'chat_group_title_update',
+            'member_id' => $member->id,
+            'class_id' => $member->class_id,
+            'conversation_id' => $chat->id,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        abort_if(trim($title) === '', 422, 'Gruppenavnet maa ikke vaere tomt.');
+
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::transaction(function () use ($chat, $member, $title, $now): void {
+            DB::table('chat_conversations')->where('id', $chat->id)->update([
+                'title' => $title,
+                'updated_at' => $now,
+            ]);
+
+            $this->logChatEvent($chat->id, null, $member->id, null, 'group_renamed', $title);
+        });
+
+        return response()->json([
+            'ok' => true,
+            'conversation' => $this->serializeConversationForMember($chat->id, $member),
+        ]);
+    }
+
     public function messages(Request $request, string $conversation): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -331,6 +370,97 @@ class ChatController extends Controller
                 'last_read_at' => now()->format('Y-m-d H:i:s'),
                 'updated_at' => now()->format('Y-m-d H:i:s'),
             ]);
+
+        return response()->json([
+            'ok' => true,
+            'conversation' => $this->serializeConversationForMember($chat->id, $member),
+        ]);
+    }
+
+    public function addGroupParticipants(Request $request, string $conversation): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $chat = $this->conversationForMember($conversation, $member);
+
+        abort_unless($chat->type === 'group', 422, 'Du kan kun tilfoeje medlemmer til gruppechats.');
+        abort_unless($chat->participantRole === 'owner', 403, 'Kun ejeren kan tilfoeje medlemmer til gruppechatten.');
+
+        $data = $request->validate([
+            'memberIds' => ['required', 'array', 'min:1', 'max:49'],
+            'memberIds.*' => ['required', 'string', 'max:36'],
+        ]);
+        $memberIds = collect($data['memberIds'])
+            ->map(fn (string $memberId): string => trim($memberId))
+            ->reject(fn (string $memberId): bool => $memberId === '' || $memberId === $member->id)
+            ->unique()
+            ->values();
+
+        abort_if($memberIds->isEmpty(), 422, 'Vaelg mindst et nyt medlem.');
+
+        $activeParticipantIds = DB::table('chat_participants')
+            ->where('conversation_id', $chat->id)
+            ->where('status', 'active')
+            ->pluck('member_id')
+            ->map(fn ($memberId): string => (string) $memberId);
+        $newMemberIds = $memberIds
+            ->reject(fn (string $memberId): bool => $activeParticipantIds->contains($memberId))
+            ->values();
+
+        abort_if($newMemberIds->isEmpty(), 422, 'Alle valgte medlemmer er allerede i gruppechatten.');
+
+        $targets = DB::table('members')
+            ->whereIn('id', $newMemberIds)
+            ->where('class_id', $member->class_id)
+            ->where('status', 'active')
+            ->get()
+            ->keyBy('id');
+
+        abort_if($targets->count() !== $newMemberIds->count(), 422, 'Alle nye deltagere skal vaere aktive medlemmer i din klasse.');
+
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::transaction(function () use ($chat, $member, $newMemberIds, $now): void {
+            $existingParticipants = DB::table('chat_participants')
+                ->where('conversation_id', $chat->id)
+                ->whereIn('member_id', $newMemberIds)
+                ->get()
+                ->keyBy('member_id');
+
+            foreach ($newMemberIds as $memberId) {
+                if ($existingParticipants->has($memberId)) {
+                    DB::table('chat_participants')
+                        ->where('conversation_id', $chat->id)
+                        ->where('member_id', $memberId)
+                        ->update([
+                            'role' => 'member',
+                            'status' => 'active',
+                            'joined_at' => $now,
+                            'left_at' => null,
+                            'hidden_at' => null,
+                            'muted_until' => null,
+                            'last_read_message_id' => null,
+                            'last_read_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                } else {
+                    $this->insertChatParticipant($chat->id, $memberId, 'member', $now);
+
+                    DB::table('chat_participants')
+                        ->where('conversation_id', $chat->id)
+                        ->where('member_id', $memberId)
+                        ->update([
+                            'last_read_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                }
+
+                $this->logChatEvent($chat->id, null, $member->id, $memberId, 'participant_added');
+            }
+
+            DB::table('chat_conversations')->where('id', $chat->id)->update([
+                'updated_at' => $now,
+            ]);
+        });
 
         return response()->json([
             'ok' => true,
@@ -916,17 +1046,55 @@ class ChatController extends Controller
             'display_name as displayName',
             'first_name as firstName',
             'profile_photo_url as profilePhotoUrl',
+            'caps_balance as capsBalance',
         ];
 
         if (Schema::hasColumn('members', 'last_seen_at')) {
             $select[] = 'last_seen_at as lastSeenAt';
         }
 
-        return DB::table('members')
+        $members = DB::table('members')
             ->select($select)
             ->whereIn('id', $ids)
             ->get()
             ->keyBy('id');
+
+        $duelStats = $ids
+            ->mapWithKeys(fn ($id): array => [(string) $id => ['won' => 0, 'lost' => 0]]);
+
+        if (Schema::hasTable('point_duels')) {
+            DB::table('point_duels')
+                ->select(['creator_member_id', 'opponent_member_id', 'winner_member_id'])
+                ->where('status', 'completed')
+                ->whereNotNull('winner_member_id')
+                ->where(function ($query) use ($ids): void {
+                    $query
+                        ->whereIn('creator_member_id', $ids)
+                        ->orWhereIn('opponent_member_id', $ids);
+                })
+                ->get()
+                ->each(function (object $duel) use ($duelStats): void {
+                    foreach ([$duel->creator_member_id, $duel->opponent_member_id] as $participantMemberId) {
+                        $memberId = (string) $participantMemberId;
+
+                        if (! $duelStats->has($memberId)) {
+                            continue;
+                        }
+
+                        $current = $duelStats->get($memberId);
+                        $current[(string) $duel->winner_member_id === $memberId ? 'won' : 'lost']++;
+                        $duelStats->put($memberId, $current);
+                    }
+                });
+        }
+
+        return $members->map(function (object $member) use ($duelStats): object {
+            $memberStats = $duelStats->get((string) $member->id, ['won' => 0, 'lost' => 0]);
+            $member->wonDuels = $memberStats['won'];
+            $member->lostDuels = $memberStats['lost'];
+
+            return $member;
+        });
     }
 
     private function serializeMemberPreview(object $member): array
@@ -938,6 +1106,11 @@ class ChatController extends Controller
             'displayName' => $member->displayName,
             'firstName' => $member->firstName,
             'profilePhotoUrl' => UploadedImage::publicUrl($member->profilePhotoUrl),
+            'capsBalance' => (int) ($member->capsBalance ?? $member->caps_balance ?? 1000),
+            'duelStats' => [
+                'won' => (int) ($member->wonDuels ?? 0),
+                'lost' => (int) ($member->lostDuels ?? 0),
+            ],
             'lastSeenAt' => $this->apiDateTime($lastSeenAt),
             'isOnline' => $this->memberIsOnline($lastSeenAt),
         ];
