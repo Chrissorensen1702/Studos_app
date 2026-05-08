@@ -87,6 +87,7 @@ const WALLS_HEADER_CONTROLS_EXPANDED_HEIGHT = 93;
 const WALLS_GALLERIES_PAGE_SIZE = 24;
 const WALLS_REFRESH_CONTROL_OFFSET = 204;
 const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
+const ACTIVITIES_HEADER_HEIGHT = OVERVIEW_HEADER_HEIGHT + 42;
 const CALENDAR_REFRESH_CONTROL_OFFSET = OVERVIEW_HEADER_HEIGHT + 18;
 const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
   const progress = index / 39;
@@ -1906,6 +1907,7 @@ export default function App() {
     || activeTab === 'profile'
     || activeTab === 'calendar'
     || activeTab === 'walls'
+    || activeTab === 'activities'
     || activeTab === 'overview'
     || activeTab === 'challenges'
     || activeTab === 'earnCaps'
@@ -3055,6 +3057,7 @@ export default function App() {
                 activeTab === 'overview' ? styles.appScreenDetached : null,
                 activeTab === 'calendar' ? styles.appScreenDetached : null,
                 activeTab === 'walls' ? styles.appScreenDetached : null,
+                activeTab === 'activities' ? styles.appScreenDetached : null,
                 activeTab === 'walls' ? styles.appScreenWallsDetached : null,
                 activeTab === 'challenges' ? styles.appScreenDetached : null,
                 activeTab === 'earnCaps' ? styles.appScreenDetached : null,
@@ -3377,14 +3380,14 @@ function AppTabScreen({
   weeklyCheckInSnapshot,
 }) {
   const [selectedMiniGame, setSelectedMiniGame] = useState(null);
-  const openCalendarTab = (target) => {
+  const openCalendarTab = useCallback((target) => {
     if (onOpenCalendar) {
       onOpenCalendar(target);
       return;
     }
 
     onChangeTab?.('calendar');
-  };
+  }, [onChangeTab, onOpenCalendar]);
 
   useEffect(() => {
     if (activeTab !== 'randomizer') {
@@ -3435,12 +3438,13 @@ function AppTabScreen({
 
   if (activeTab === 'activities') {
     return (
-      <FeatureScreen
-        icon="pulse"
-        kicker={schoolClass.className}
-        title="Aktiviteter"
-        emptyTitle="Ingen aktivitet endnu"
-        emptyText="Nye opslag, billeder, challenges, Caps og klasseopdateringer samles her."
+      <ActivitiesScreen
+        activeMembers={activeMembers}
+        events={events}
+        onRefresh={onRefreshClassData}
+        onOpenCalendar={openCalendarTab}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
       />
     );
   }
@@ -11975,33 +11979,580 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
   );
 }
 
-function FeatureScreen({ emptyText, emptyTitle, icon, kicker, locked = false, title }) {
+const activityMemberDisplayName = (member) => (
+  member?.displayName
+  || [member?.firstName, member?.lastName].filter(Boolean).join(' ')
+  || 'En bruger'
+);
+
+const formatActivityTime = (value, type) => {
+  const timestamp = Date.parse(value ?? '');
+
+  if (!Number.isFinite(timestamp)) {
+    return '';
+  }
+
+  if (type === 'birthday' && formatInputDate(new Date(timestamp)) === formatInputDate(new Date())) {
+    return 'I dag';
+  }
+
+  const diffMinutes = Math.max(1, Math.floor((Date.now() - timestamp) / 60_000));
+
+  if (diffMinutes < 60) {
+    return diffMinutes === 1 ? '1 minut siden' : `${diffMinutes} minutter siden`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  if (diffHours < 24) {
+    return diffHours === 1 ? '1 time siden' : `${diffHours} timer siden`;
+  }
+
+  if (diffHours < 48) {
+    return 'I går';
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffDays < 7) {
+    return `${diffDays} dage siden`;
+  }
+
+  return new Intl.DateTimeFormat('da-DK', {
+    day: '2-digit',
+    month: 'short',
+  }).format(new Date(timestamp)).replace('.', '');
+};
+
+const buildLocalActivityFallback = ({ activeMembers = [], events = [] }) => {
+  const todayKey = formatInputDate(new Date());
+  const birthdayActivities = activeMembers
+    .filter((member) => {
+      const birthday = String(member?.birthday ?? '');
+
+      return birthday.slice(5, 10) === todayKey.slice(5, 10);
+    })
+    .map((member) => ({
+      id: `fallback-birthday-${member.id}`,
+      type: 'birthday',
+      occurredAt: new Date().toISOString(),
+      actor: member,
+      text: `${activityMemberDisplayName(member)} har fødselsdag i dag!`,
+      meta: 'Fødselsdag',
+      preview: { kind: 'birthday', icon: 'gift' },
+    }));
+  const eventActivities = uniqueById(events)
+    .slice()
+    .sort((first, second) => eventSortTime(second) - eventSortTime(first))
+    .slice(0, 6)
+    .map((event) => ({
+      id: `fallback-event-${event.id}`,
+      type: 'event_created',
+      sourceId: event.id,
+      occurredAt: event.startsAt || `${eventDayKeyFor(event)}T12:00:00.000Z`,
+      actor: event.creator,
+      text: `${activityMemberDisplayName(event.creator)} har oprettet et event`,
+      meta: event.title,
+      preview: { kind: 'event', title: event.title, icon: 'calendar' },
+    }));
+
+  return [...birthdayActivities, ...eventActivities];
+};
+
+const activityItemKey = (activity, index = 0) => String(
+  activity?.id ?? `${activity?.type ?? 'activity'}-${index}`,
+);
+
+const ACTIVITY_TYPE_THEME = {
+  birthday: {
+    icon: 'gift',
+    color: STUDOS_THEME.red,
+    backgroundColor: '#FFF1F2',
+    borderColor: '#FFD5D8',
+  },
+  event_created: {
+    icon: 'calendar',
+    color: '#149A8D',
+    backgroundColor: '#E9FBF8',
+    borderColor: '#BDEFE8',
+  },
+  member_joined: {
+    icon: 'person-add',
+    color: '#149A8D',
+    backgroundColor: '#E9FBF8',
+    borderColor: '#BDEFE8',
+  },
+  gallery_created: {
+    icon: 'images',
+    color: '#B77900',
+    backgroundColor: '#FFF8E8',
+    borderColor: '#FFE2A4',
+  },
+  gallery_photos_uploaded: {
+    icon: 'image',
+    color: STUDOS_THEME.blue,
+    backgroundColor: '#ECFFFC',
+    borderColor: '#BDEFE8',
+  },
+  challenge_completed: {
+    icon: 'sparkles',
+    color: '#B77900',
+    backgroundColor: '#FFF8E8',
+    borderColor: '#FFE2A4',
+  },
+  versus_won: {
+    icon: 'swap-horizontal',
+    color: STUDOS_THEME.blue,
+    backgroundColor: '#FFF1F2',
+    borderColor: '#FFD5D8',
+  },
+};
+
+const DEFAULT_ACTIVITY_TYPE_THEME = {
+  icon: 'pulse',
+  color: STUDOS_THEME.ink,
+  backgroundColor: '#F7FAFA',
+  borderColor: '#DDE8E5',
+};
+
+const ACTIVITY_INFO_POINTS = [
+  'Globale klasseaktiviteter vises her.',
+  'Aktiviteter, som du ikke er en del af, inkluderes ikke af hensyn til GDPR.',
+  'Private albums, skjulte events og aktivitet fra blokerede profiler filtreres væk.',
+  'Loggen viser korte hændelser og undgår følsomme detaljer, f.eks. challenge-indhold.',
+];
+
+function ActivityLogSeparator() {
+  return <View style={styles.activitiesLogSeparator} />;
+}
+
+function ActivityListHeaderSpacer() {
+  return <View pointerEvents="none" style={styles.activitiesHeaderSpacer} />;
+}
+
+function ActivitiesScreen({
+  activeMembers = [],
+  events = [],
+  onOpenCalendar,
+  onRefresh,
+  schoolClass,
+  sessionToken,
+}) {
+  const [activityItems, setActivityItems] = useState([]);
+  const [activityLoading, setActivityLoading] = useState(Boolean(sessionToken));
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  const [activityError, setActivityError] = useState('');
+  const [activityRefreshing, setActivityRefreshing] = useState(false);
+  const [activityHeaderScrolled, setActivityHeaderScrolled] = useState(false);
+  const [activityInfoOpen, setActivityInfoOpen] = useState(false);
+  const activityScrollY = useRef(new Animated.Value(0)).current;
+  const activityMountedRef = useRef(true);
+  const activityLoadSeqRef = useRef(0);
+  const fallbackActivities = useMemo(
+    () => buildLocalActivityFallback({ activeMembers, events }),
+    [activeMembers, events],
+  );
+  const displayedActivities = activityLoaded && !activityError
+    ? activityItems
+    : (activityItems.length ? activityItems : fallbackActivities);
+
+  useEffect(() => {
+    return () => {
+      activityMountedRef.current = false;
+    };
+  }, []);
+
+  const loadActivities = useCallback(async ({ showLoading = false } = {}) => {
+    const requestSeq = activityLoadSeqRef.current + 1;
+    activityLoadSeqRef.current = requestSeq;
+
+    if (!sessionToken) {
+      setActivityItems([]);
+      setActivityLoaded(true);
+      setActivityLoading(false);
+      setActivityError('');
+      return;
+    }
+
+    if (showLoading) {
+      setActivityLoading(true);
+      setActivityLoaded(false);
+    }
+    setActivityError('');
+
+    try {
+      const data = await apiFetch('/activities?limit=40', { authToken: sessionToken });
+
+      if (!activityMountedRef.current || activityLoadSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      setActivityItems(Array.isArray(data?.activities) ? data.activities : []);
+      setActivityLoaded(true);
+    } catch (apiError) {
+      if (!activityMountedRef.current || activityLoadSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      setActivityError(apiError?.message || 'Aktiviteter kunne ikke hentes.');
+      setActivityLoaded(false);
+    } finally {
+      if (activityMountedRef.current && activityLoadSeqRef.current === requestSeq) {
+        setActivityLoading(false);
+      }
+    }
+  }, [sessionToken]);
+
+  useEffect(() => {
+    loadActivities({ showLoading: true });
+  }, [loadActivities]);
+
+  const handleActivityScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { y: activityScrollY } } }],
+    {
+      listener: (event) => {
+        const scrolled = event.nativeEvent.contentOffset.y > 6;
+        setActivityHeaderScrolled((current) => (current === scrolled ? current : scrolled));
+      },
+      useNativeDriver: false,
+    },
+  ), [activityScrollY]);
+
+  const refreshActivities = useCallback(async () => {
+    setActivityRefreshing(true);
+
+    try {
+      await Promise.all([
+        typeof onRefresh === 'function' ? onRefresh() : Promise.resolve(),
+        loadActivities(),
+      ]);
+    } finally {
+      if (activityMountedRef.current) {
+        setActivityRefreshing(false);
+      }
+    }
+  }, [loadActivities, onRefresh]);
+
+  const activityHeaderContainerStyle = useMemo(() => ({
+    transform: [
+      {
+        translateY: activityScrollY.interpolate({
+          inputRange: [0, 44],
+          outputRange: [0, -7],
+          extrapolate: 'clamp',
+        }),
+      },
+    ],
+  }), [activityScrollY]);
+
+  const activityHeaderContentStyle = useMemo(() => ({
+    transform: [
+      {
+        translateY: activityScrollY.interpolate({
+          inputRange: [0, 44],
+          outputRange: [0, -7],
+          extrapolate: 'clamp',
+        }),
+      },
+    ],
+  }), [activityScrollY]);
+
+  const renderActivityItem = useCallback(({ item, index }) => {
+    return (
+      <View style={styles.activitiesLogRowShell}>
+        <ActivityLogRow
+          activity={item}
+          first={index === 0}
+          onOpenCalendar={onOpenCalendar}
+        />
+      </View>
+    );
+  }, [onOpenCalendar]);
+
+  const renderActivityEmptyState = useCallback(() => (
+    <View style={styles.activitiesLogState}>
+      {activityLoading ? (
+        <ActivityIndicator color={STUDOS_THEME.red} />
+      ) : (
+        <Ionicons name={activityError ? 'cloud-offline-outline' : 'pulse'} size={22} color={STUDOS_THEME.red} />
+      )}
+      <Text style={styles.activitiesLogStateText}>
+        {activityLoading
+          ? 'Henter aktivitet...'
+          : activityError || `Der er ingen aktivitet i ${schoolClass?.className ?? 'klassen'} endnu.`}
+      </Text>
+    </View>
+  ), [activityError, activityLoading, schoolClass?.className]);
+
+  const keyExtractor = useCallback((activity, index) => activityItemKey(activity, index), []);
+  const activityInfoModal = activityInfoOpen ? (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => setActivityInfoOpen(false)}
+      transparent
+      visible={activityInfoOpen}
+    >
+      <View style={styles.chatModalRoot}>
+        <Pressable
+          accessibilityLabel="Luk aktivitets-info"
+          onPress={() => setActivityInfoOpen(false)}
+          style={styles.chatModalBackdrop}
+        />
+        <View style={[styles.chatModalPanel, styles.duelInfoPanel]}>
+          <View style={styles.chatModalHeader}>
+            <View style={styles.chatModalHeaderTextColumn}>
+              <Text style={styles.chatModalKicker}>Aktiviteter</Text>
+              <Text style={styles.chatModalTitle}>Hvad vises her?</Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Luk aktivitets-info"
+              onPress={() => setActivityInfoOpen(false)}
+              style={styles.chatModalCloseButton}
+            >
+              <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+            </Pressable>
+          </View>
+
+          <View style={styles.duelInfoList}>
+            {ACTIVITY_INFO_POINTS.map((item, index) => (
+              <View key={item} style={styles.duelInfoStep}>
+                <View style={styles.duelInfoStepNumber}>
+                  <Text style={styles.duelInfoStepNumberText}>{index + 1}</Text>
+                </View>
+                <Text style={styles.duelInfoText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  ) : null;
+
   return (
-    <View style={styles.flowStack}>
-      <View style={styles.tabHeader}>
-        <View style={styles.duelHeaderLeft}>
-          <Text style={styles.kicker}>{kicker}</Text>
-          <Text style={styles.title}>{title}</Text>
+    <View style={styles.activitiesScreenRoot}>
+      {activityInfoModal}
+      <Animated.View style={[
+        styles.overviewHeaderStack,
+        activityHeaderContainerStyle,
+        activityHeaderScrolled ? styles.overviewHeaderStackScrolled : null,
+      ]}>
+        <Animated.View style={[styles.activitiesHeaderContent, activityHeaderContentStyle]}>
+          <View style={styles.overviewHeaderTopRow}>
+            <ActivitiesTitle />
+            <Pressable
+              accessibilityLabel="Læs om aktivitetsloggen"
+              onPress={() => setActivityInfoOpen(true)}
+              style={({ pressed }) => [
+                styles.duelInfoButton,
+                styles.activitiesInfoButton,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[styles.duelInfoButtonText, styles.activitiesInfoButtonText]}>?</Text>
+            </Pressable>
+          </View>
+          <View style={styles.activitiesHeaderSubtextRow}>
+            <Text style={styles.activitiesHeaderSubtext}>
+              Følg de seneste aktiviteter i klassen
+            </Text>
+          </View>
+        </Animated.View>
+        <View pointerEvents="none" style={styles.overviewHeaderFeather}>
+          {OVERVIEW_HEADER_FEATHER_STOPS.map((stop, index) => (
+            <View key={`activities-header-feather-${index}`} style={[styles.overviewHeaderFeatherStop, stop]} />
+          ))}
         </View>
-        <View style={styles.headerIcon}>
-          <Ionicons name={icon} size={28} color="#f6d36d" />
-        </View>
+      </Animated.View>
+
+      <Animated.FlatList
+        contentContainerStyle={styles.activitiesScrollContent}
+        data={displayedActivities}
+        initialNumToRender={10}
+        ItemSeparatorComponent={ActivityLogSeparator}
+        keyboardShouldPersistTaps="handled"
+        keyExtractor={keyExtractor}
+        ListEmptyComponent={renderActivityEmptyState}
+        ListHeaderComponent={ActivityListHeaderSpacer}
+        maxToRenderPerBatch={8}
+        onScroll={handleActivityScroll}
+        removeClippedSubviews={!IS_WEB}
+        refreshControl={(
+          <StudosRefreshControl
+            offset={ACTIVITIES_HEADER_HEIGHT}
+            onRefresh={refreshActivities}
+            refreshing={activityRefreshing}
+          />
+        )}
+        renderItem={renderActivityItem}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        style={styles.activitiesScroll}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+      />
+    </View>
+  );
+}
+
+const ActivityLogRow = React.memo(function ActivityLogRow({ activity, first = false, onOpenCalendar }) {
+  const actor = activity.actor ?? { displayName: 'Studos' };
+  const preview = activity.preview ?? {};
+  const canOpenEvent = activity.type === 'event_created' && activity.sourceId && onOpenCalendar;
+  const typeTheme = ACTIVITY_TYPE_THEME[activity.type] ?? DEFAULT_ACTIVITY_TYPE_THEME;
+  const previewIcon = typeTheme.icon ?? preview.icon ?? DEFAULT_ACTIVITY_TYPE_THEME.icon;
+  const useActorPreview = activity.type === 'event_created' || activity.type === 'member_joined';
+
+  return (
+    <Pressable
+      accessibilityLabel={activity.text}
+      accessibilityRole={canOpenEvent ? 'button' : undefined}
+      disabled={!canOpenEvent}
+      onPress={() => onOpenCalendar?.({ eventId: activity.sourceId })}
+      style={({ pressed }) => [
+        styles.activitiesLogRow,
+        first ? styles.activitiesLogRowLatest : null,
+        pressed ? styles.footerItemPressed : null,
+      ]}
+    >
+      <View style={styles.activitiesLogAvatarWrap}>
+        <Avatar profile={actor} variant="smallCircle" />
       </View>
 
-      <View style={styles.panel}>
-        <View style={[
-          styles.emptyFeatureIcon,
-          locked ? styles.emptyFeatureIconLocked : null,
-        ]}>
-          <Ionicons
-            name={locked ? 'lock-closed' : icon}
-            size={locked ? 28 : 30}
-            color={locked ? STUDOS_THEME.ink : '#ef5b3f'}
-          />
-        </View>
-        <Text style={styles.sectionTitle}>{emptyTitle}</Text>
-        <Text style={styles.feedText}>{emptyText}</Text>
+      <View style={styles.activitiesLogCopy}>
+        <Text
+          numberOfLines={1}
+          style={[styles.activitiesLogTime, first ? styles.activitiesLogTimeLatest : null]}
+        >
+          {formatActivityTime(activity.occurredAt, activity.type)}
+        </Text>
+        <Text style={[styles.activitiesLogText, first ? styles.activitiesLogTextLatest : null]}>
+          {activity.text}
+        </Text>
+        {activity.meta ? (
+          <Text
+            numberOfLines={1}
+            style={[styles.activitiesLogMeta, first ? styles.activitiesLogMetaLatest : null]}
+          >
+            {activity.meta}
+          </Text>
+        ) : null}
       </View>
+
+      {preview.imageUri ? (
+        <View style={styles.activitiesLogPreviewImageWrap}>
+          <Image source={{ uri: preview.imageUri }} style={styles.activitiesLogPreviewImage} />
+          <View
+            style={[
+              styles.activitiesLogPreviewImageBadge,
+              { backgroundColor: typeTheme.backgroundColor, borderColor: typeTheme.borderColor },
+            ]}
+          >
+            <Ionicons name={previewIcon} size={12} color={typeTheme.color} />
+          </View>
+        </View>
+      ) : useActorPreview ? (
+        <View style={styles.activitiesLogPreviewActorAvatar}>
+          <Avatar profile={actor} variant="smallCircle" />
+        </View>
+      ) : (
+        <View
+          style={[
+            styles.activitiesLogPreviewIconBox,
+            { backgroundColor: typeTheme.backgroundColor, borderColor: typeTheme.borderColor },
+          ]}
+        >
+          <Ionicons name={previewIcon} size={19} color={typeTheme.color} />
+        </View>
+      )}
+    </Pressable>
+  );
+});
+
+const OverviewActivityPreviewRow = React.memo(function OverviewActivityPreviewRow({ activity, onOpenActivities }) {
+  const actor = activity.actor ?? { displayName: 'Studos' };
+  const preview = activity.preview ?? {};
+  const typeTheme = ACTIVITY_TYPE_THEME[activity.type] ?? DEFAULT_ACTIVITY_TYPE_THEME;
+  const previewIcon = typeTheme.icon ?? preview.icon ?? DEFAULT_ACTIVITY_TYPE_THEME.icon;
+  const useActorPreview = activity.type === 'event_created' || activity.type === 'member_joined';
+
+  return (
+    <Pressable
+      accessibilityLabel={activity.text}
+      accessibilityRole="button"
+      onPress={onOpenActivities}
+      style={({ pressed }) => [
+        styles.overviewActivityPreviewRow,
+        pressed ? styles.footerItemPressed : null,
+      ]}
+    >
+      {preview.imageUri ? (
+        <View style={styles.overviewActivityPreviewThumbWrap}>
+          <Image source={{ uri: preview.imageUri }} style={styles.overviewActivityPreviewThumb} />
+          <View
+            style={[
+              styles.overviewActivityPreviewBadge,
+              { backgroundColor: typeTheme.backgroundColor, borderColor: typeTheme.borderColor },
+            ]}
+          >
+            <Ionicons name={previewIcon} size={9} color={typeTheme.color} />
+          </View>
+        </View>
+      ) : useActorPreview ? (
+        <View style={styles.overviewActivityPreviewAvatar}>
+          <Avatar profile={actor} variant="smallCircle" />
+        </View>
+      ) : (
+        <View
+          style={[
+            styles.overviewActivityPreviewIconBox,
+            { backgroundColor: typeTheme.backgroundColor, borderColor: typeTheme.borderColor },
+          ]}
+        >
+          <Ionicons name={previewIcon} size={17} color={typeTheme.color} />
+        </View>
+      )}
+      <View style={styles.overviewActivityPreviewCopy}>
+        <Text numberOfLines={2} style={styles.overviewActivityPreviewText}>
+          {activity.text}
+        </Text>
+        <View style={styles.overviewActivityPreviewMetaRow}>
+          <Text numberOfLines={1} style={styles.overviewActivityPreviewTime}>
+            {formatActivityTime(activity.occurredAt, activity.type)}
+          </Text>
+          {activity.meta ? (
+            <>
+              <Text style={styles.overviewActivityPreviewMetaDot}>·</Text>
+              <Text numberOfLines={1} style={styles.overviewActivityPreviewMeta}>
+                {activity.meta}
+              </Text>
+            </>
+          ) : null}
+        </View>
+      </View>
+      <Ionicons name="chevron-forward" size={15} color="#A9B3C2" />
+    </Pressable>
+  );
+});
+
+function ActivitiesTitleGraphic({ style }) {
+  return (
+    <View style={[styles.activitiesTitleGraphic, style]} pointerEvents="none">
+      <View style={styles.activitiesTitleGraphicBack} />
+      <View style={styles.activitiesTitleGraphicFace}>
+        <Ionicons name="pulse" size={19} color={STUDOS_THEME.ink} />
+      </View>
+      <View style={styles.activitiesTitleGraphicDot} />
+    </View>
+  );
+}
+
+function ActivitiesTitle() {
+  return (
+    <View accessible accessibilityLabel="Aktiviteter" style={styles.activitiesPageTitleWrap}>
+      <Text adjustsFontSizeToFit minimumFontScale={0.82} numberOfLines={1} style={styles.overviewPageTitleRest}>
+        Aktiviteter
+      </Text>
+      <ActivitiesTitleGraphic />
     </View>
   );
 }
@@ -18585,6 +19136,7 @@ function AccountProfileScreen({
 
 function OverviewScreen({
   activeMember,
+  activeMembers = [],
   countdown,
   events = [],
   onOpenActivities,
@@ -18599,6 +19151,9 @@ function OverviewScreen({
   const [studosCodeModalOpen, setStudosCodeModalOpen] = useState(false);
   const [overviewHeaderScrolled, setOverviewHeaderScrolled] = useState(false);
   const [overviewRefreshing, setOverviewRefreshing] = useState(false);
+  const [overviewActivities, setOverviewActivities] = useState([]);
+  const [overviewActivitiesLoading, setOverviewActivitiesLoading] = useState(Boolean(sessionToken));
+  const [overviewActivitiesError, setOverviewActivitiesError] = useState('');
   const [overviewProfileStats, setOverviewProfileStats] = useState({
     completedDuels: 0,
     pendingDuels: 0,
@@ -18612,6 +19167,7 @@ function OverviewScreen({
   const [currentOverviewTime, setCurrentOverviewTime] = useState(() => Date.now());
   const overviewScrollY = useRef(new Animated.Value(0)).current;
   const overviewStatsLoadSeqRef = useRef(0);
+  const overviewActivitiesLoadSeqRef = useRef(0);
   const profileName = activeMember?.displayName
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
@@ -18713,6 +19269,16 @@ function OverviewScreen({
     [overviewTodayKey, upcomingCalendarEvents],
   );
   const visibleFutureUpcomingCalendarEvents = futureUpcomingCalendarEvents.slice(0, 3);
+  const localOverviewActivityFallback = useMemo(
+    () => buildLocalActivityFallback({ activeMembers, events }).slice(0, 3),
+    [activeMembers, events],
+  );
+  const overviewActivityPreviewItems = overviewActivities.length
+    ? overviewActivities.slice(0, 3)
+    : (!sessionToken && localOverviewActivityFallback.length ? localOverviewActivityFallback : []);
+  const overviewActivityCountLabel = overviewActivityPreviewItems.length
+    ? `${overviewActivityPreviewItems.length} ${overviewActivityPreviewItems.length === 1 ? 'seneste aktivitet' : 'seneste aktiviteter'}`
+    : 'Opslag, billeder, challenges og Caps fra klassen';
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -18832,9 +19398,49 @@ function OverviewScreen({
       // The overview can still render; the next refresh/poll will retry the counters.
     }
   }, [sessionToken]);
+  const loadOverviewActivities = useCallback(async ({ silent = false } = {}) => {
+    if (!sessionToken) {
+      setOverviewActivities([]);
+      setOverviewActivitiesLoading(false);
+      setOverviewActivitiesError('');
+      return;
+    }
+
+    const requestSeq = overviewActivitiesLoadSeqRef.current + 1;
+    overviewActivitiesLoadSeqRef.current = requestSeq;
+
+    if (!silent) {
+      setOverviewActivitiesLoading(true);
+    }
+
+    try {
+      const data = await apiFetch('/activities?limit=3', { authToken: sessionToken });
+
+      if (overviewActivitiesLoadSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      const activities = Array.isArray(data?.activities) ? data.activities.slice(0, 3) : [];
+      setOverviewActivities(activities);
+      setOverviewActivitiesError('');
+    } catch {
+      if (overviewActivitiesLoadSeqRef.current !== requestSeq) {
+        return;
+      }
+
+      setOverviewActivitiesError('Kunne ikke hente seneste aktivitet.');
+    } finally {
+      if (overviewActivitiesLoadSeqRef.current === requestSeq) {
+        setOverviewActivitiesLoading(false);
+      }
+    }
+  }, [sessionToken]);
   useEffect(() => {
     loadOverviewProfileStats();
   }, [loadOverviewProfileStats]);
+  useEffect(() => {
+    loadOverviewActivities();
+  }, [loadOverviewActivities]);
   useEffect(() => {
     if (!sessionToken) {
       return undefined;
@@ -18842,10 +19448,11 @@ function OverviewScreen({
 
     const interval = setInterval(() => {
       loadOverviewProfileStats();
+      loadOverviewActivities({ silent: true });
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [loadOverviewProfileStats, sessionToken]);
+  }, [loadOverviewActivities, loadOverviewProfileStats, sessionToken]);
   useEffect(() => {
     if (IS_WEB || !sessionToken) {
       return undefined;
@@ -18854,11 +19461,12 @@ function OverviewScreen({
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         loadOverviewProfileStats();
+        loadOverviewActivities({ silent: true });
       }
     });
 
     return () => subscription.remove();
-  }, [loadOverviewProfileStats, sessionToken]);
+  }, [loadOverviewActivities, loadOverviewProfileStats, sessionToken]);
   const handleOverviewScroll = useMemo(() => Animated.event(
     [{ nativeEvent: { contentOffset: { y: overviewScrollY } } }],
     {
@@ -18876,11 +19484,12 @@ function OverviewScreen({
       await Promise.all([
         typeof onRefresh === 'function' ? onRefresh() : Promise.resolve(),
         loadOverviewProfileStats(),
+        loadOverviewActivities(),
       ]);
     } finally {
       setOverviewRefreshing(false);
     }
-  }, [loadOverviewProfileStats, onRefresh]);
+  }, [loadOverviewActivities, loadOverviewProfileStats, onRefresh]);
   const overviewHeaderContainerStyle = useMemo(() => ({
     transform: [
       {
@@ -19296,23 +19905,47 @@ function OverviewScreen({
                   Seneste aktivitet
                 </Text>
                 <Text numberOfLines={1} style={styles.overviewWallsActivityMeta}>
-                  Opslag, billeder, challenges og Caps fra klassen
+                  {overviewActivityCountLabel}
                 </Text>
               </View>
             </View>
-            <View style={styles.overviewWallsActivityEmpty}>
-              <View style={styles.overviewWallsActivityEmptyIcon}>
-                <Ionicons name="sparkles" size={18} color={STUDOS_THEME.red} />
+            {overviewActivityPreviewItems.length ? (
+              <View style={styles.overviewActivityPreviewList}>
+                {overviewActivityPreviewItems.map((activity, index) => (
+                  <OverviewActivityPreviewRow
+                    activity={activity}
+                    key={activityItemKey(activity, index)}
+                    onOpenActivities={onOpenActivities}
+                  />
+                ))}
               </View>
-              <View style={styles.overviewWallsActivityEmptyCopy}>
-                <Text numberOfLines={1} style={styles.overviewWallsActivityEmptyTitle}>
-                  Ingen ny aktivitet endnu
-                </Text>
-                <Text style={styles.overviewWallsActivityEmptyText}>
-                  Når der sker nyt i klassen, vises det her.
-                </Text>
+            ) : (
+              <View style={styles.overviewWallsActivityEmpty}>
+                <View style={styles.overviewWallsActivityEmptyIcon}>
+                  {overviewActivitiesLoading ? (
+                    <ActivityIndicator color={STUDOS_THEME.red} size="small" />
+                  ) : (
+                    <Ionicons
+                      name={overviewActivitiesError ? 'cloud-offline-outline' : 'sparkles'}
+                      size={18}
+                      color={STUDOS_THEME.red}
+                    />
+                  )}
+                </View>
+                <View style={styles.overviewWallsActivityEmptyCopy}>
+                  <Text numberOfLines={1} style={styles.overviewWallsActivityEmptyTitle}>
+                    {overviewActivitiesLoading
+                      ? 'Henter aktivitet...'
+                      : overviewActivitiesError || 'Ingen ny aktivitet endnu'}
+                  </Text>
+                  <Text style={styles.overviewWallsActivityEmptyText}>
+                    {overviewActivitiesError
+                      ? 'Træk ned for at prøve igen.'
+                      : 'Når der sker nyt i klassen, vises det her.'}
+                  </Text>
+                </View>
               </View>
-            </View>
+            )}
             <Pressable
               accessibilityRole="button"
               onPress={onOpenActivities}
@@ -20780,6 +21413,242 @@ const styles = StyleSheet.create({
   },
   flowStack: {
     gap: 16,
+  },
+  activitiesScreenRoot: {
+    flex: 1,
+    marginHorizontal: -APP_SCREEN_PADDING,
+    marginTop: -APP_SCREEN_TOP_PADDING,
+    marginBottom: -20,
+    position: 'relative',
+    backgroundColor: '#F1FBF8',
+  },
+  activitiesScroll: {
+    flex: 1,
+  },
+  activitiesScrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: APP_SCREEN_PADDING,
+    paddingBottom: 28,
+  },
+  activitiesHeaderSpacer: {
+    height: ACTIVITIES_HEADER_HEIGHT + 12,
+  },
+  activitiesHeaderContent: {
+    gap: 3,
+  },
+  activitiesHeaderSubtextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minWidth: 0,
+    paddingLeft: 8,
+    paddingRight: 2,
+  },
+  activitiesHeaderSubtext: {
+    color: '#526078',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  activitiesInfoButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  activitiesInfoButtonText: {
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  activitiesPageTitleWrap: {
+    alignItems: 'flex-end',
+    flex: 1,
+    flexDirection: 'row',
+    minHeight: 44,
+    minWidth: 0,
+    paddingLeft: 8,
+    paddingTop: 10,
+  },
+  activitiesTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 44,
+    height: 38,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  activitiesTitleGraphicBack: {
+    position: 'absolute',
+    right: 1,
+    bottom: 1,
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.blue,
+    transform: [{ rotate: '8deg' }],
+  },
+  activitiesTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 35,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  activitiesTitleGraphicDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  activitiesLogSeparator: {
+    height: 10,
+  },
+  activitiesLogRowShell: {
+    width: '100%',
+  },
+  activitiesLogRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 76,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderLeftColor: 'transparent',
+    borderLeftWidth: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 14,
+    elevation: 1,
+  },
+  activitiesLogRowLatest: {
+    borderLeftColor: STUDOS_THEME.red,
+    backgroundColor: '#F7FAFA',
+  },
+  activitiesLogAvatarWrap: {
+    flexShrink: 0,
+  },
+  activitiesLogCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  activitiesLogTime: {
+    color: '#8B94A6',
+    fontSize: 13,
+    fontWeight: '650',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  activitiesLogTimeLatest: {
+    fontWeight: '800',
+  },
+  activitiesLogText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 16,
+    fontWeight: '650',
+    letterSpacing: 0,
+    lineHeight: 21,
+  },
+  activitiesLogTextLatest: {
+    fontWeight: '900',
+  },
+  activitiesLogMeta: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '650',
+    letterSpacing: 0,
+    marginTop: 1,
+  },
+  activitiesLogMetaLatest: {
+    fontWeight: '800',
+  },
+  activitiesLogPreviewImageWrap: {
+    position: 'relative',
+    width: 52,
+    height: 44,
+    flexShrink: 0,
+  },
+  activitiesLogPreviewImage: {
+    width: 52,
+    height: 44,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+  },
+  activitiesLogPreviewImageBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -5,
+    bottom: -5,
+    width: 22,
+    height: 22,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  activitiesLogPreviewActorAvatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#BDEFE8',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#E9FBF8',
+    overflow: 'hidden',
+  },
+  activitiesLogPreviewIconBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderColor: '#DDE8E5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+  },
+  activitiesLogState: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 72,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  activitiesLogStateText: {
+    color: '#65748b',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   classBattleScreen: {
     flex: 1,
@@ -24009,6 +24878,95 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0,
     lineHeight: 14,
+  },
+  overviewActivityPreviewList: {
+    gap: 8,
+  },
+  overviewActivityPreviewRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    minHeight: 58,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FDFEFE',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  overviewActivityPreviewThumbWrap: {
+    width: 35,
+    height: 35,
+    borderRadius: 9,
+    backgroundColor: '#F7FAFA',
+  },
+  overviewActivityPreviewThumb: {
+    width: 35,
+    height: 35,
+    borderRadius: 9,
+  },
+  overviewActivityPreviewBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    right: -3,
+    bottom: -3,
+    width: 17,
+    height: 17,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  overviewActivityPreviewAvatar: {
+    width: 35,
+    height: 35,
+  },
+  overviewActivityPreviewIconBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 35,
+    height: 35,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  overviewActivityPreviewCopy: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
+  },
+  overviewActivityPreviewText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
+  overviewActivityPreviewMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    minWidth: 0,
+  },
+  overviewActivityPreviewTime: {
+    color: '#65748b',
+    flexShrink: 0,
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 13,
+  },
+  overviewActivityPreviewMetaDot: {
+    color: '#A9B3C2',
+    fontSize: 10.5,
+    fontWeight: '900',
+    lineHeight: 13,
+  },
+  overviewActivityPreviewMeta: {
+    color: '#65748b',
+    flex: 1,
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 13,
   },
   overviewWallsActivityEmpty: {
     alignItems: 'center',
@@ -28651,19 +29609,6 @@ const styles = StyleSheet.create({
   consentLinkText: {
     color: '#1f64cc',
     textDecorationLine: 'underline',
-  },
-  emptyFeatureIcon: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 58,
-    height: 58,
-    borderRadius: 8,
-    backgroundColor: '#fff4ee',
-  },
-  emptyFeatureIconLocked: {
-    borderColor: '#FFE1B1',
-    borderWidth: 1,
-    backgroundColor: '#FFF8E8',
   },
   detailList: {
     gap: 10,

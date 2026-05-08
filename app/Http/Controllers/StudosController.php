@@ -1529,6 +1529,434 @@ class StudosController extends Controller
         ]);
     }
 
+    public function activities(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $limit = min(80, max(1, (int) $request->integer('limit', 40)));
+        $now = now();
+        $blockedMemberIds = $this->activityBlockedMemberIds($member);
+        $memberQuery = DB::table('members')
+            ->where('class_id', $member->class_id)
+            ->where('status', 'active')
+            ->select([
+                'id',
+                'display_name',
+                'first_name',
+                'last_name',
+                'profile_photo_url',
+                'birthday',
+                'joined_at',
+            ]);
+
+        if (Schema::hasColumn('members', 'deleted_at')) {
+            $memberQuery->whereNull('deleted_at');
+        }
+
+        if ($blockedMemberIds->isNotEmpty()) {
+            $memberQuery->whereNotIn('id', $blockedMemberIds->all());
+        }
+
+        $members = $memberQuery
+            ->get()
+            ->keyBy(fn (object $row): string => (string) $row->id);
+        $activities = collect();
+
+        $members->each(function (object $classMember) use ($activities): void {
+            if (blank($classMember->joined_at ?? null)) {
+                return;
+            }
+
+            $name = $this->activityMemberName($classMember);
+
+            $activities->push([
+                'id'         => 'member-joined:'.$classMember->id,
+                'type'       => 'member_joined',
+                'sourceId'   => $classMember->id,
+                'occurredAt' => $this->apiDateTime($classMember->joined_at ?? null),
+                'actor'      => $this->activityMemberShape($classMember),
+                'text'       => $name.' blev medlem af klassen',
+                'meta'       => null,
+                'preview'    => [
+                    'kind' => 'member',
+                    'icon' => 'person-add',
+                ],
+            ]);
+        });
+
+        $members->each(function (object $classMember) use ($activities, $now): void {
+            if (blank($classMember->birthday ?? null)) {
+                return;
+            }
+
+            try {
+                $birthday = Carbon::parse($classMember->birthday);
+            } catch (\Throwable) {
+                return;
+            }
+
+            if ($birthday->format('m-d') !== $now->format('m-d')) {
+                return;
+            }
+
+            $name = $this->activityMemberName($classMember);
+
+            $activities->push([
+                'id'         => 'birthday:'.$now->toDateString().':'.$classMember->id,
+                'type'       => 'birthday',
+                'occurredAt' => $this->apiDateTime($now),
+                'actor'      => $this->activityMemberShape($classMember),
+                'text'       => $name.' har fødselsdag i dag!',
+                'meta'       => 'Fødselsdag',
+                'preview'    => [
+                    'kind' => 'birthday',
+                    'icon' => 'gift',
+                ],
+            ]);
+        });
+
+        if (Schema::hasTable('events')) {
+            $events = DB::table('events')
+                ->where('class_id', $member->class_id)
+                ->orderByDesc('created_at')
+                ->limit(80)
+                ->get();
+            $eventInvites = collect();
+
+            if (Schema::hasTable('event_invites') && $events->isNotEmpty()) {
+                $eventInvites = DB::table('event_invites')
+                    ->whereIn('event_id', $events->pluck('id')->all())
+                    ->get()
+                    ->groupBy('event_id');
+            }
+
+            $events->each(function (object $event) use ($activities, $blockedMemberIds, $eventInvites, $member, $members): void {
+                if ($this->activityInvolvesBlockedMember($blockedMemberIds, $event->created_by_member_id ?? null)) {
+                    return;
+                }
+
+                if (! $this->activityEventIsVisibleToMember($event, $member, $eventInvites)) {
+                    return;
+                }
+
+                $creator = $members->get((string) ($event->created_by_member_id ?? ''));
+                $creatorName = $this->activityMemberName($creator);
+
+                $activities->push([
+                    'id'         => 'event:'.$event->id,
+                    'type'       => 'event_created',
+                    'sourceId'   => $event->id,
+                    'occurredAt' => $this->apiDateTime($event->created_at ?? $event->starts_at ?? $event->event_date ?? null),
+                    'actor'      => $this->activityMemberShape($creator),
+                    'text'       => $creatorName.' har oprettet et event',
+                    'meta'       => $event->title ?? null,
+                    'preview'    => [
+                        'kind'  => 'event',
+                        'title' => $event->title ?? null,
+                        'icon'  => 'calendar',
+                    ],
+                ]);
+            });
+        }
+
+        if (Schema::hasTable('galleries')) {
+            $galleryQuery = DB::table('galleries')
+                ->where('class_id', $member->class_id)
+                ->where('visibility', 'public')
+                ->where(function ($query): void {
+                    $query->whereNull('audience')->orWhere('audience', '!=', 'crew');
+                })
+                ->whereNull('deleted_at');
+
+            $this->applyGalleryVisibilityQuery($galleryQuery, $member, 'galleries');
+
+            $galleryQuery
+                ->orderByDesc('created_at')
+                ->limit(80)
+                ->get()
+                ->each(function (object $gallery) use ($activities, $blockedMemberIds, $members): void {
+                    if ($this->activityInvolvesBlockedMember($blockedMemberIds, $gallery->created_by_member_id ?? null)) {
+                        return;
+                    }
+
+                    $creator = $members->get((string) ($gallery->created_by_member_id ?? ''));
+                    $creatorName = $this->activityMemberName($creator);
+
+                    $activities->push([
+                        'id'         => 'gallery:'.$gallery->id,
+                        'type'       => 'gallery_created',
+                        'sourceId'   => $gallery->id,
+                        'occurredAt' => $this->apiDateTime($gallery->created_at ?? null),
+                        'actor'      => $this->activityMemberShape($creator),
+                        'text'       => $creatorName.' har oprettet et fælles album',
+                        'meta'       => $gallery->name ?? null,
+                        'preview'    => [
+                            'kind'     => 'gallery',
+                            'title'    => $gallery->name ?? null,
+                            'imageUri' => UploadedImage::publicUrl($gallery->cover_image_url ?? null, request()),
+                            'icon'     => 'images',
+                        ],
+                    ]);
+                });
+        }
+
+        if (Schema::hasTable('gallery_photos') && Schema::hasTable('galleries')) {
+            $photoQuery = DB::table('gallery_photos')
+                ->join('galleries', 'galleries.id', '=', 'gallery_photos.gallery_id')
+                ->where('galleries.class_id', $member->class_id)
+                ->where('galleries.visibility', 'public')
+                ->where(function ($query): void {
+                    $query->whereNull('galleries.audience')->orWhere('galleries.audience', '!=', 'crew');
+                })
+                ->whereNull('gallery_photos.deleted_at')
+                ->whereNull('galleries.deleted_at');
+
+            $this->applyGalleryVisibilityQuery($photoQuery, $member, 'galleries');
+
+            $photoGroups = [];
+            $photoQuery
+                ->orderByDesc('gallery_photos.created_at')
+                ->limit(100)
+                ->get([
+                    'gallery_photos.id as photoId',
+                    'gallery_photos.gallery_id as galleryId',
+                    'gallery_photos.member_id as memberId',
+                    'gallery_photos.image_url as imageUrl',
+                    'gallery_photos.created_at as photoCreatedAt',
+                    'galleries.name as galleryName',
+                    'galleries.created_by_member_id as galleryCreatorId',
+                ])
+                ->each(function (object $photo) use (&$photoGroups): void {
+                    $bucketTime = 'unknown';
+
+                    if (! blank($photo->photoCreatedAt ?? null)) {
+                        try {
+                            $bucketTime = Carbon::parse($photo->photoCreatedAt)->format('Y-m-d H:i');
+                        } catch (\Throwable) {
+                            $bucketTime = (string) $photo->photoId;
+                        }
+                    }
+
+                    $key = implode('|', [
+                        (string) $photo->galleryId,
+                        (string) ($photo->memberId ?? ''),
+                        $bucketTime,
+                    ]);
+
+                    $photoGroups[$key] ??= [
+                        'galleryId'        => $photo->galleryId,
+                        'memberId'         => $photo->memberId,
+                        'galleryCreatorId' => $photo->galleryCreatorId,
+                        'galleryName'      => $photo->galleryName,
+                        'imageUrl'         => $photo->imageUrl,
+                        'createdAt'        => $photo->photoCreatedAt,
+                        'count'            => 0,
+                    ];
+                    $photoGroups[$key]['count']++;
+                });
+
+            foreach ($photoGroups as $group) {
+                if ($this->activityInvolvesBlockedMember(
+                    $blockedMemberIds,
+                    $group['memberId'] ?? null,
+                    $group['galleryCreatorId'] ?? null,
+                )) {
+                    continue;
+                }
+
+                $uploader = $members->get((string) ($group['memberId'] ?? ''));
+                $uploaderName = $this->activityMemberName($uploader);
+                $count = (int) $group['count'];
+
+                $activities->push([
+                    'id'         => 'gallery-photos:'.$group['galleryId'].':'.$group['memberId'].':'.md5((string) $group['createdAt']),
+                    'type'       => 'gallery_photos_uploaded',
+                    'sourceId'   => $group['galleryId'],
+                    'occurredAt' => $this->apiDateTime($group['createdAt'] ?? null),
+                    'actor'      => $this->activityMemberShape($uploader),
+                    'text'       => $uploaderName.' har uploadet '.($count === 1 ? 'et billede' : $count.' billeder'),
+                    'meta'       => $group['galleryName'] ?? null,
+                    'preview'    => [
+                        'kind'     => 'photo',
+                        'title'    => $group['galleryName'] ?? null,
+                        'imageUri' => UploadedImage::publicUrl($group['imageUrl'] ?? null, request()),
+                        'icon'     => 'image',
+                    ],
+                ]);
+            }
+        }
+
+        if (Schema::hasTable('point_duels')) {
+            DB::table('point_duels')
+                ->where('class_id', $member->class_id)
+                ->where('status', 'completed')
+                ->whereNotNull('winner_member_id')
+                ->orderByDesc('completed_at')
+                ->orderByDesc('updated_at')
+                ->limit(80)
+                ->get()
+                ->each(function (object $duel) use ($activities, $blockedMemberIds, $members): void {
+                    if ($this->activityInvolvesBlockedMember(
+                        $blockedMemberIds,
+                        $duel->creator_member_id ?? null,
+                        $duel->opponent_member_id ?? null,
+                        $duel->winner_member_id ?? null,
+                    )) {
+                        return;
+                    }
+
+                    $mode = $duel->mode ?? 'versus';
+                    $creator = $members->get((string) ($duel->creator_member_id ?? ''));
+                    $winner = $members->get((string) ($duel->winner_member_id ?? ''));
+
+                    if (! $winner) {
+                        return;
+                    }
+
+                    if ($mode === 'challenge') {
+                        $activities->push([
+                            'id'         => 'duel:challenge:'.$duel->id,
+                            'type'       => 'challenge_completed',
+                            'sourceId'   => $duel->id,
+                            'occurredAt' => $this->apiDateTime($duel->completed_at ?? $duel->updated_at ?? null),
+                            'actor'      => $this->activityMemberShape($winner),
+                            'target'     => $this->activityMemberShape($creator),
+                            'text'       => $this->activityMemberName($winner).' har gennemført en challenge fra '.$this->activityMemberName($creator),
+                            'meta'       => null,
+                            'preview'    => [
+                                'kind' => 'challenge',
+                                'icon' => 'sparkles',
+                            ],
+                        ]);
+
+                        return;
+                    }
+
+                    $loserId = (string) $duel->winner_member_id === (string) $duel->creator_member_id
+                        ? (string) ($duel->opponent_member_id ?? '')
+                        : (string) ($duel->creator_member_id ?? '');
+                    $loser = $members->get($loserId);
+
+                    if (! $loser) {
+                        return;
+                    }
+
+                    $activities->push([
+                        'id'         => 'duel:versus:'.$duel->id,
+                        'type'       => 'versus_won',
+                        'sourceId'   => $duel->id,
+                        'occurredAt' => $this->apiDateTime($duel->completed_at ?? $duel->updated_at ?? null),
+                        'actor'      => $this->activityMemberShape($winner),
+                        'target'     => $this->activityMemberShape($loser),
+                        'text'       => $this->activityMemberName($winner).' har vundet over '.$this->activityMemberName($loser),
+                        'meta'       => 'Mod hinanden',
+                        'preview'    => [
+                            'kind' => 'duel',
+                            'icon' => 'flash',
+                        ],
+                    ]);
+                });
+        }
+
+        $sortedActivities = $activities
+            ->filter(fn (array $activity): bool => filled($activity['occurredAt'] ?? null))
+            ->sortByDesc(fn (array $activity): int => strtotime((string) ($activity['occurredAt'] ?? '')) ?: 0)
+            ->values()
+            ->take($limit)
+            ->values();
+
+        return response()
+            ->json([
+                'activities' => $sortedActivities->all(),
+            ])
+            ->header('Cache-Control', 'private, no-store, max-age=0')
+            ->header('Pragma', 'no-cache');
+    }
+
+    private function activityEventIsVisibleToMember(object $event, object $member, $eventInvites): bool
+    {
+        if (($event->invite_scope ?? 'class') !== 'custom') {
+            return true;
+        }
+
+        if ((string) ($event->created_by_member_id ?? '') === (string) $member->id) {
+            return true;
+        }
+
+        $invitesForEvent = $eventInvites->get($event->id, collect());
+
+        return $invitesForEvent->contains(fn (object $invite): bool =>
+            (string) $invite->member_id === (string) $member->id
+        );
+    }
+
+    private function activityBlockedMemberIds(object $member)
+    {
+        if (! Schema::hasTable('member_blocks')) {
+            return collect();
+        }
+
+        return DB::table('member_blocks')
+            ->where('blocker_member_id', $member->id)
+            ->orWhere('blocked_member_id', $member->id)
+            ->get(['blocker_member_id', 'blocked_member_id'])
+            ->map(fn (object $block): ?string => (
+                (string) $block->blocker_member_id === (string) $member->id
+                    ? $block->blocked_member_id
+                    : $block->blocker_member_id
+            ))
+            ->filter()
+            ->unique()
+            ->values();
+    }
+
+    private function activityInvolvesBlockedMember($blockedMemberIds, ...$memberIds): bool
+    {
+        if (! $blockedMemberIds || $blockedMemberIds->isEmpty()) {
+            return false;
+        }
+
+        foreach ($memberIds as $memberId) {
+            if (! blank($memberId) && $blockedMemberIds->contains((string) $memberId)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function activityMemberShape(?object $member): ?array
+    {
+        if (! $member) {
+            return null;
+        }
+
+        return [
+            'id'              => $member->id,
+            'displayName'     => $this->activityMemberName($member),
+            'profilePhotoUrl' => UploadedImage::publicUrl($member->profile_photo_url ?? $member->profilePhotoUrl ?? null, request()),
+        ];
+    }
+
+    private function activityMemberName(?object $member): string
+    {
+        if (! $member) {
+            return 'En bruger';
+        }
+
+        $name = trim((string) ($member->display_name ?? $member->displayName ?? ''));
+
+        if ($name !== '') {
+            return $name;
+        }
+
+        $fullName = trim(implode(' ', array_filter([
+            $member->first_name ?? $member->firstName ?? '',
+            $member->last_name ?? $member->lastName ?? '',
+        ])));
+
+        return $fullName !== '' ? $fullName : 'En bruger';
+    }
+
     private function overviewStatsForMember(object $member): array
     {
         $completedDuels = 0;
@@ -1613,7 +2041,7 @@ class StudosController extends Controller
         $member = $this->authenticatedMemberFromRequest($request);
         $data = $request->validate([
             'expoPushToken' => ['required', 'string', 'max:255'],
-            'platform' => ['required', Rule::in(['android', 'ios'])],
+            'platform' => ['required', Rule::in(['android'])],
             'deviceName' => ['nullable', 'string', 'max:190'],
             'projectId' => ['nullable', 'string', 'max:190'],
             'appVariant' => ['nullable', 'string', 'max:64'],
@@ -3887,31 +4315,32 @@ class StudosController extends Controller
         };
     }
 
-    private function applyGalleryVisibilityQuery($query, object $member): void
+    private function applyGalleryVisibilityQuery($query, object $member, string $tablePrefix = ''): void
     {
         $memberId = (string) $member->id;
         $memberNeedle = '%'.json_encode($memberId).'%';
+        $column = fn (string $name): string => $tablePrefix !== '' ? $tablePrefix.'.'.$name : $name;
 
-        $query->where(function ($visible) use ($memberId, $memberNeedle) {
+        $query->where(function ($visible) use ($column, $memberId, $memberNeedle) {
             $visible
-                ->where(function ($private) use ($memberId) {
+                ->where(function ($private) use ($column, $memberId) {
                     $private
-                        ->where('visibility', 'private')
-                        ->where('created_by_member_id', $memberId);
+                        ->where($column('visibility'), 'private')
+                        ->where($column('created_by_member_id'), $memberId);
                 })
-                ->orWhere(function ($public) use ($memberId, $memberNeedle) {
+                ->orWhere(function ($public) use ($column, $memberId, $memberNeedle) {
                     $public
-                        ->where('visibility', 'public')
-                        ->where(function ($publicScope) use ($memberId, $memberNeedle) {
+                        ->where($column('visibility'), 'public')
+                        ->where(function ($publicScope) use ($column, $memberId, $memberNeedle) {
                             $publicScope
-                                ->whereIn('audience', ['class', 'crew'])
-                                ->orWhere(function ($specific) use ($memberId, $memberNeedle) {
+                                ->whereIn($column('audience'), ['class', 'crew'])
+                                ->orWhere(function ($specific) use ($column, $memberId, $memberNeedle) {
                                     $specific
-                                        ->where('audience', 'specific')
-                                        ->where(function ($specificScope) use ($memberId, $memberNeedle) {
+                                        ->where($column('audience'), 'specific')
+                                        ->where(function ($specificScope) use ($column, $memberId, $memberNeedle) {
                                             $specificScope
-                                                ->where('created_by_member_id', $memberId)
-                                                ->orWhere('member_ids', 'like', $memberNeedle);
+                                                ->where($column('created_by_member_id'), $memberId)
+                                                ->orWhere($column('member_ids'), 'like', $memberNeedle);
                                         });
                                 });
                         });

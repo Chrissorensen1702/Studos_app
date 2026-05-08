@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-07 efter Walls/galleri cover-fallback,
-sortering/filter-UX, long-press upload, device adaptation og
+Status er opdateret 2026-05-08 efter aktivitetslog, dynamisk
+Overblik-preview, GDPR-filtrering, activity-feed indexes og seneste
 sikkerhedsstramninger.
 
 Se ogsaa:
@@ -55,11 +55,16 @@ Se ogsaa:
 - Walls/galleri er implementeret: klassealbums med synlighedsregler,
   fotoupload, billedvisning, rapportering, kategori-tabs, soegning, sortering
   og dynamisk cover-fallback. Backend bruger `galleries` og `gallery_photos`.
+- Aktivitetsloggen er implementeret som et globalt klassefeed med
+  adgangsfiltrering: brugeren ser kun events, albums og uploads, som brugeren
+  faktisk har adgang til.
+- Overblik-kortet `Seneste aktivitet` henter nu de 3 nyeste aktiviteter fra
+  samme feed og fungerer som live-preview ind til aktivitetsloggen.
 - Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
   (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
   dimensionsbaseret inset-beregning uden externe biblioteker.
-- iOS push-token registrering er aabnet: backend accepterer nu baade `android`
-  og `ios` som platform.
+- Android push-token registrering er bevidst platform-gated til `android`,
+  indtil Apple Developer/APNs-flowet er klar.
 - Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
   nu throttlet 30/min.
 
@@ -166,10 +171,13 @@ Kernen er:
 - Connections via personlig Studos-kode.
 - Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
   Klassedyst, ugens gode gerning og weekly check-in.
-- Android og iOS push-token registrering og chat-push.
+- Android push-token registrering og chat-push. iOS/APNs er parkeret, indtil
+  Apple Developer/provisioning er klar.
 - Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
   synlighedsregler (`private`/`class`/`public`), soft-delete, rapportering og
   album-previewdata til dynamiske cover-collager.
+- Aktiviteter: samlet klassefeed med adgangsfiltrering for events, albums,
+  uploads, foedselsdage, nye klassemedlemmer og Dyst/Challenge-resultater.
 
 Roller pr. 2026-04-29:
 
@@ -195,6 +203,8 @@ POST /api/session/verify-code
 GET  /api/session/me
 POST /api/profile/photo
 GET  /api/class-battle
+GET  /api/overview/stats
+GET  /api/activities
 GET  /api/good-deeds/current
 POST /api/good-deeds/claims
 GET  /api/check-ins/weekly
@@ -245,6 +255,13 @@ POST /api/gallery-photos/{photo}/report
 `pagination` samt `previewPhotos` med op til fire nyeste albumfotos pr.
 galleri. Mobilappen bruger dem til automatisk cover-fallback, hvis brugeren
 ikke har valgt et specifikt cover.
+
+`GET /api/activities` returnerer et kort, filtreret klassefeed med seneste
+relevante aktiviteter. Feedet inkluderer foedselsdage, nye klassemedlemmer,
+oprettede events, oprettede albums, uploadede billeder, vundne `Mod hinanden`
+dyster og gennemfoerte challenges. Endpointet sender kun noedvendige felter
+til mobilappen, filtrerer blokerede/slettede profiler vaek, udelader private
+events/albums brugeren ikke er en del af, og undgaar challenge-detaljer.
 
 ## Public Landing Page
 
@@ -340,7 +357,25 @@ Overblik:
   Optjen Caps.
 - `Min kommende kalender` viser alle dagens events og maks 3 kommende events.
 - Klik paa et event i Overblik aabner Kalender paa den rigtige dag/eventkort.
-- Der er nederste kort til `Seneste walls aktivitet` og `Klassedyster`.
+- `Seneste aktivitet` henter dynamisk de 3 nyeste aktiviteter fra
+  aktivitetsloggen og viser kompakte preview-raekker.
+- Der er nederste kort til `Dine dyste`.
+
+Aktiviteter:
+
+- Siden bruger samme faste header/under-scroll som Overblik.
+- Feedet er globalt for klassen, men ikke offentligt: events, albums og uploads
+  vises kun, hvis brugeren er en del af dem eller har adgang til dem.
+- Viser foedselsdage, nye klassemedlemmer, oprettede events, faelles/private
+  album-oprettelser, billeduploads, vundne `Mod hinanden` dyster og
+  gennemfoerte challenges.
+- Event-oprettelser og nye klassemedlemmer bruger profilbillede/initialer som
+  log-ikon. `Mod hinanden` bruger lyseblaa pile, og Challenge bruger tre
+  stjerner.
+- Kun nyeste aktivitet fremhaeves med fed tekst; resten er roligere for hurtig
+  scanning.
+- Info-knappen forklarer, at loggen kun viser relevante klasseaktiviteter og
+  filtrerer aktivitet, brugeren ikke er en del af, af hensyn til GDPR.
 
 Kalender:
 
@@ -525,6 +560,8 @@ Det der ser godt ud:
 - Appen har ikke lokal dev-server/netvaerkspermission i produktions-iOS config.
 - Photo permission er konkret og knyttet til brugerens egen handling.
 - Chat/events har filtering, rapportering, blokering og throttling.
+- Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
+  private challenge-detaljer i feedet.
 - Android push er feature-gated og ikke aktiv for iOS.
 - Android mikrofonpermission er nu fjernet/blokeret.
 - Backend koerer paa HTTPS i Cloud.
@@ -546,7 +583,8 @@ Release-blokkere foer Apple/Google:
 - Privatlivspolitik, vilkaar/EULA og supportside skal vaere live og linket fra
   appen/store listings.
 - App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
-  profilbilleder/uploads, chatindhold, events, push-token og supportdata.
+  profilbilleder/uploads, aktivitetslog, chatindhold, events, push-token og
+  supportdata.
 - Der skal vaere en reel admin/moderationsside til rapporter, blocks og
   moderation violations.
 - Foer App Store-release boer gruppechat-medlemslisten have konkrete
@@ -597,7 +635,24 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-07 efter Walls cover-fallback, sortering og long-press
+Senest koert 2026-05-08 efter aktivitetslog og dynamisk Overblik-preview:
+
+```bash
+node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
+git diff --check
+php artisan test
+```
+
+Resultat:
+
+- `App.js babel ok`.
+- `git diff --check`: OK.
+- `php artisan test`: 44 tests passer, 599 assertions.
+- `GET /api/activities` er testet for synlighedsfiltrering, blokeringer og
+  minimalt payload.
+- Overblik henter `GET /api/activities?limit=3` til aktivitetskortets preview.
+
+Tidligere koert 2026-05-07 efter Walls cover-fallback, sortering og long-press
 upload:
 
 ```bash
@@ -610,13 +665,9 @@ Resultat:
 
 - `StudosController.php` lint OK.
 - Expo web-export for mobilappen bygger OK.
-- `php artisan test`: 41 feature-/unit-tests passer, men 1 eksisterende
-  push-token-test fejler fortsat (`authenticated member can register android
-  push token`: forventet 422, fik 200). Fejlen er ikke relateret til
-  Galleri-pagination/preview-aendringerne.
 - Walls `/api/galleries` returnerer nu paginerede album med server-side
   kategori, sortering, sogning og `previewPhotos` til cover fallback.
-- Mobilappen bruger nu Studos-farvet pull-to-refresh paa de primære
+- Mobilappen bruger nu Studos-farvet pull-to-refresh paa de primaere
   server-drevne sider.
 
 Tidligere koert 2026-05-06 efter Walls v1, UX og device adaptation:
@@ -631,7 +682,7 @@ Resultat:
 - `apps/mobile/App.js` parser OK.
 - `StudosController.php` lint OK.
 - Walls-endpoints og gallery-migrationer verificeret i kodebasen.
-- iOS push-token platform-validering aabnet (`android` + `ios`).
+- Push-token platform-validering er Android-only, indtil iOS/APNs goeres klar.
 - Rate limit tilfojet paa `/members/code/{code}` (30/min).
 - Device adaptation verificeret: top-bar og footer bruger nu dimensionsbaserede
   insets uden externe native biblioteker.
@@ -675,21 +726,24 @@ Resultat:
 
 ## Naeste Gode Skridt
 
-1. QA Walls paa to brugere/enheder: opret galleri, filter/sortering/soegning,
+1. QA Aktiviteter paa to brugere/enheder: events med/uden invitation,
+   faelles/private albums, billeduploads, medlem-tilfoejelse, foedselsdag,
+   `Mod hinanden`, Challenge og blokering/synlighedsfiltrering.
+2. QA Walls paa to brugere/enheder: opret galleri, filter/sortering/soegning,
    dynamisk cover-fallback ved 0/1/2/3/4 billeder, upload via long-press,
    fullscreen, slet, rapporter og synlighedsregler.
-2. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
+3. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
    Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
    realtime/polling og Caps-refundering.
-3. Koer to-enheds QA af chat, gruppechat-info, kalender, uploads,
+4. Koer to-enheds QA af chat, gruppechat-info, kalender, uploads,
    blocking/reporting og login.
-4. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
+5. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
    backups og production env.
-5. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
-6. Faa account deletion/support-flow helt review-klar.
-7. Lav admin/moderationsside til rapporter, blocks og violations samt
+6. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
+7. Faa account deletion/support-flow helt review-klar.
+8. Lav admin/moderationsside til rapporter, blocks og violations samt
    gruppechat-medlemshandlinger til rapporter/bloker.
-8. Goer hueklip rigtige i backend.
-9. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
+9. Goer hueklip rigtige i backend.
+10. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
    review notes.
-10. Lav production iOS/TestFlight build og Android production AAB.
+11. Lav production iOS/TestFlight build og Android production AAB.

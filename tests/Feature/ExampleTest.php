@@ -855,6 +855,166 @@ class ExampleTest extends TestCase
             && $request[0]['channelId'] === 'studos-default');
     }
 
+    public function test_activities_feed_respects_visibility_blocks_and_minimizes_payload(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $this->createActiveDemoMember('activity-visible-member', 'Visible Ven', 'visible-feed@example.test');
+        $this->createActiveDemoMember('activity-blocked-member', 'Blokeret Person', 'blocked-feed@example.test');
+
+        $now = now();
+        $nowString = $now->format('Y-m-d H:i:s');
+        $todayBirthday = $now->copy()->subYears(18)->format('Y-m-d');
+
+        DB::table('members')
+            ->whereIn('id', ['activity-visible-member', 'activity-blocked-member'])
+            ->update(['birthday' => $todayBirthday]);
+
+        DB::table('member_blocks')->insert([
+            'id' => (string) Str::uuid(),
+            'blocker_member_id' => 'demo-owner',
+            'blocked_member_id' => 'activity-blocked-member',
+            'created_at' => $nowString,
+        ]);
+
+        DB::table('events')->insert([
+            [
+                'id' => 'activity-visible-event',
+                'class_id' => 'demo-class',
+                'title' => 'Inviteret event',
+                'event_date' => $now->toDateString(),
+                'rsvp_count' => 0,
+                'event_type' => 'studentergilde',
+                'starts_at' => $nowString,
+                'created_by_member_id' => 'activity-visible-member',
+                'invite_scope' => 'custom',
+                'created_at' => $nowString,
+                'updated_at' => $nowString,
+            ],
+            [
+                'id' => 'activity-hidden-custom-event',
+                'class_id' => 'demo-class',
+                'title' => 'Skjult custom event',
+                'event_date' => $now->toDateString(),
+                'rsvp_count' => 0,
+                'event_type' => 'studentergilde',
+                'starts_at' => $nowString,
+                'created_by_member_id' => 'activity-visible-member',
+                'invite_scope' => 'custom',
+                'created_at' => $nowString,
+                'updated_at' => $nowString,
+            ],
+            [
+                'id' => 'activity-blocked-event',
+                'class_id' => 'demo-class',
+                'title' => 'Blokeret event',
+                'event_date' => $now->toDateString(),
+                'rsvp_count' => 0,
+                'event_type' => 'studentergilde',
+                'starts_at' => $nowString,
+                'created_by_member_id' => 'activity-blocked-member',
+                'invite_scope' => 'class',
+                'created_at' => $nowString,
+                'updated_at' => $nowString,
+            ],
+        ]);
+
+        DB::table('event_invites')->insert([
+            'id' => (string) Str::uuid(),
+            'event_id' => 'activity-visible-event',
+            'member_id' => 'demo-owner',
+            'invited_by_member_id' => 'activity-visible-member',
+            'created_at' => $nowString,
+            'updated_at' => $nowString,
+        ]);
+
+        DB::table('galleries')->insert([
+            [
+                'id' => 'activity-visible-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Fælles album',
+                'visibility' => 'public',
+                'audience' => 'class',
+                'permission' => 'view',
+                'member_ids' => null,
+                'photo_count' => 0,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'activity-visible-member',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $nowString,
+                'updated_at' => $nowString,
+            ],
+            [
+                'id' => 'activity-blocked-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Blokeret album',
+                'visibility' => 'public',
+                'audience' => 'class',
+                'permission' => 'view',
+                'member_ids' => null,
+                'photo_count' => 0,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'activity-blocked-member',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $nowString,
+                'updated_at' => $nowString,
+            ],
+        ]);
+
+        DB::table('gallery_photos')->insert([
+            [
+                'id' => 'activity-visible-photo',
+                'gallery_id' => 'activity-visible-gallery',
+                'member_id' => 'activity-visible-member',
+                'image_url' => 'uploads/gallery-photos/activity-visible-photo.jpg',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $nowString,
+            ],
+            [
+                'id' => 'activity-blocked-gallery-photo',
+                'gallery_id' => 'activity-blocked-gallery',
+                'member_id' => 'activity-visible-member',
+                'image_url' => 'uploads/gallery-photos/activity-blocked-gallery-photo.jpg',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $nowString,
+            ],
+        ]);
+
+        $response = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/activities?limit=80')
+            ->assertOk();
+
+        $activities = collect($response->json('activities'));
+
+        $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
+        $this->assertTrue($activities->contains(fn (array $activity): bool => ($activity['meta'] ?? null) === 'Inviteret event'));
+        $this->assertTrue($activities->contains(fn (array $activity): bool => ($activity['meta'] ?? null) === 'Fælles album'));
+        $this->assertTrue($activities->contains(fn (array $activity): bool =>
+            ($activity['type'] ?? null) === 'birthday'
+            && str_contains($activity['text'] ?? '', 'Visible Ven')
+        ));
+        $this->assertTrue($activities->contains(fn (array $activity): bool =>
+            ($activity['type'] ?? null) === 'member_joined'
+            && ($activity['actor']['displayName'] ?? null) === 'Visible Ven'
+            && ($activity['preview']['kind'] ?? null) === 'member'
+        ));
+        $this->assertFalse($activities->contains(fn (array $activity): bool => ($activity['meta'] ?? null) === 'Skjult custom event'));
+        $this->assertFalse($activities->contains(fn (array $activity): bool => ($activity['meta'] ?? null) === 'Blokeret album'));
+        $this->assertFalse($activities->contains(fn (array $activity): bool => str_contains($activity['text'] ?? '', 'Blokeret')));
+        $this->assertTrue($activities
+            ->pluck('actor')
+            ->filter()
+            ->every(fn (array $actor): bool =>
+                ! array_key_exists('firstName', $actor)
+                && ! array_key_exists('lastName', $actor)
+                && ! array_key_exists('birthday', $actor)
+            ));
+    }
+
     public function test_galleries_endpoint_paginates_filters_sorts_and_limits_preview_photos(): void
     {
         $this->createActiveDemoMember('gallery-other', 'Gry Galleri', 'gry.gallery@example.test');

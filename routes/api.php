@@ -20,6 +20,7 @@ Route::post('/session/request-code', [StudosController::class, 'requestLoginCode
 Route::post('/session/verify-code', [StudosController::class, 'verifyLoginCode'])->middleware('throttle:10,1');
 Route::get('/session/me', [StudosController::class, 'sessionMe']);
 Route::get('/overview/stats', [StudosController::class, 'overviewStats']);
+Route::get('/activities', [StudosController::class, 'activities'])->middleware('throttle:40,1');
 Route::get('/class-battle', [StudosController::class, 'classBattle']);
 Route::get('/duels', [StudosController::class, 'duels']);
 Route::post('/duels', [StudosController::class, 'storeDuel'])->middleware('throttle:20,1');
