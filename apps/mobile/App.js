@@ -558,15 +558,24 @@ const localApiBaseUrlFromHost = (rawHost) => {
 const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
 const CREATE_CLASS_URL =
   readNonEmptyEnv(process.env.EXPO_PUBLIC_CREATE_CLASS_URL)
-  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'http://MacBook-Air-tilhrende-Chris.local/studenter-app/public/opret-klasse');
+  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'https://studos.dk/opret-klasse');
 const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'support@studos.dk';
+const STUDOS_APP_VERSION = (() => {
+  try {
+    return require('./app.json')?.expo?.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 const WEB_SITE_URL =
   process.env.EXPO_PUBLIC_WEBSITE_URL
   ?? (WEB_PUBLIC_BASE_URL
     ? WEB_PUBLIC_BASE_URL
     : CREATE_CLASS_URL.replace(/\/opret-klasse\/?$/, '').replace(/\/$/, ''));
-const STUDOS_TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
-const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_URL}/#det-med-smaat`;
+const STUDOS_TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL ?? `${WEB_SITE_URL}/brugervilkaar`;
+const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_URL}/privatlivspolitik`;
+const STUDOS_COOKIES_URL = process.env.EXPO_PUBLIC_COOKIES_URL ?? `${WEB_SITE_URL}/cookiepolitik`;
+const STUDOS_DELETE_ACCOUNT_URL = process.env.EXPO_PUBLIC_DELETE_ACCOUNT_URL ?? `${WEB_SITE_URL}/slet-konto`;
 const EXPLICIT_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL);
 const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${normalizeApiBaseUrl(WEB_PUBLIC_BASE_URL)}/api` : null;
 const FALLBACK_CLOUD_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'https://studos.laravel.cloud/api');
@@ -605,7 +614,7 @@ const apiTimeoutForAttempt = (baseUrlCount, index) => {
 };
 preferredApiBaseUrl = UNIQUE_API_BASE_URLS[0] ?? null;
 const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'studos-local-key';
-const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'MacBook-Air-tilhrende-Chris.local';
+const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'localhost';
 const REVERB_PORT = Number(process.env.EXPO_PUBLIC_REVERB_PORT ?? 8080);
 const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'http';
 const REVERB_FORCE_TLS = REVERB_SCHEME === 'https' || REVERB_PORT === 443;
@@ -2633,6 +2642,61 @@ export default function App() {
     }
   }, [session?.token]);
 
+  const disableAndroidNotifications = useCallback(async () => {
+    if (!session?.token) {
+      setNotificationState((current) => ({
+        ...current,
+        error: 'Login mangler.',
+      }));
+      return;
+    }
+
+    setNotificationState((current) => ({
+      ...current,
+      error: '',
+      loading: true,
+      message: 'Slår notifikationer fra...',
+    }));
+
+    try {
+      await apiFetch('/notifications/push-token/disable', {
+        authToken: session.token,
+        method: 'POST',
+        body: JSON.stringify({
+          expoPushToken: notificationState.expoPushToken || null,
+        }),
+      });
+
+      setNotificationState((current) => ({
+        ...current,
+        expoPushToken: '',
+        registeredAt: '',
+        error: '',
+        loading: false,
+        message: 'Notifikationer er slået fra på denne enhed. Du kan altid slå dem til igen.',
+      }));
+    } catch (notificationError) {
+      setNotificationState((current) => ({
+        ...current,
+        error: notificationError.message || 'Notifikationerne kunne ikke slås fra.',
+        loading: false,
+      }));
+    }
+  }, [session?.token, notificationState.expoPushToken]);
+
+  const openSystemAppSettings = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      Linking.openURL('app-settings:').catch(() => {
+        Linking.openSettings?.();
+      });
+      return;
+    }
+
+    if (Linking.openSettings) {
+      Linking.openSettings();
+    }
+  }, []);
+
   const submitInviteCode = async () => {
     const code = inviteCode.trim().toUpperCase();
 
@@ -2907,7 +2971,7 @@ export default function App() {
     });
   };
 
-  const blockClassMember = async (memberId) => {
+  const blockClassMember = async (memberId, reason = 'Blokeret fra kalender') => {
     if (!session?.token) {
       throw new Error('Login mangler.');
     }
@@ -2916,7 +2980,7 @@ export default function App() {
       authToken: session.token,
       method: 'POST',
       body: JSON.stringify({
-        reason: 'Blokeret fra kalender',
+        reason,
       }),
     });
 
@@ -3101,6 +3165,8 @@ export default function App() {
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
                   onSendAndroidNotificationTest={sendAndroidNotificationTest}
+                  onDisableAndroidNotifications={disableAndroidNotifications}
+                  onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
                   profile={profile}
@@ -3150,6 +3216,8 @@ export default function App() {
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
                   onSendAndroidNotificationTest={sendAndroidNotificationTest}
+                  onDisableAndroidNotifications={disableAndroidNotifications}
+                  onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
                   profile={profile}
@@ -3371,6 +3439,8 @@ function AppTabScreen({
   onRespondToEvent,
   onRefreshClassData,
   onSendAndroidNotificationTest,
+  onDisableAndroidNotifications,
+  onOpenSystemAppSettings,
   onUpdateEvent,
   pinnedContent,
   profile,
@@ -3498,6 +3568,7 @@ function AppTabScreen({
       <CrewScreen
         activeMember={activeMember}
         activeMembers={activeMembers}
+        onBlockMember={onBlockMember}
         onOpenDirectChat={onOpenDirectChat}
         onRefreshClassData={onRefreshClassData}
         schoolClass={schoolClass}
@@ -3547,10 +3618,17 @@ function AppTabScreen({
   if (activeTab === 'settings') {
     return (
       <SettingsScreen
+        activeMember={activeMember}
         notificationState={notificationState}
         schoolClass={schoolClass}
+        sessionToken={sessionToken}
         onEnableAndroidNotifications={onEnableAndroidNotifications}
         onSendAndroidNotificationTest={onSendAndroidNotificationTest}
+        onDisableAndroidNotifications={onDisableAndroidNotifications}
+        onOpenSystemAppSettings={onOpenSystemAppSettings}
+        onLogout={onLogout}
+        onDeleteAccount={onDeleteAccount}
+        onRefreshClassData={onRefreshClassData}
       />
     );
   }
@@ -15992,21 +16070,192 @@ function EarnCapsScreen({
   );
 }
 
+const SETTINGS_NOTIFICATION_STATUS_LABELS = {
+  granted: 'Tilladt',
+  denied: 'Afvist',
+  undetermined: 'Ikke besluttet',
+  unknown: 'Ukendt',
+  provisional: 'Foreløbig',
+};
+
 function SettingsScreen({
+  activeMember,
   notificationState,
   schoolClass,
+  sessionToken,
   onEnableAndroidNotifications,
   onSendAndroidNotificationTest,
+  onDisableAndroidNotifications,
+  onOpenSystemAppSettings,
+  onLogout,
+  onDeleteAccount,
+  onRefreshClassData,
 }) {
-  const tokenPreview = notificationState?.expoPushToken
-    ? notificationState.expoPushToken
-    : 'Ikke gemt endnu';
+  const [blockedMembers, setBlockedMembers] = useState([]);
+  const [blockedLoading, setBlockedLoading] = useState(false);
+  const [blockedRefreshing, setBlockedRefreshing] = useState(false);
+  const [blockedError, setBlockedError] = useState('');
+  const [blockedMessage, setBlockedMessage] = useState('');
+  const [unblockingMemberId, setUnblockingMemberId] = useState('');
+  const [deleteAccountConfirmOpen, setDeleteAccountConfirmOpen] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState('');
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
+
+  const permissionStatus = notificationState?.permissionStatus ?? 'unknown';
+  const permissionStatusLabel = SETTINGS_NOTIFICATION_STATUS_LABELS[permissionStatus] ?? permissionStatus;
+  const notificationsActive = Boolean(notificationState?.expoPushToken) && permissionStatus === 'granted';
+  const tokenPreview = notificationState?.expoPushToken || 'Ingen token gemt på enheden.';
+
+  const loadBlocked = useCallback(async ({ refreshing = false } = {}) => {
+    if (!sessionToken) {
+      return;
+    }
+
+    if (refreshing) {
+      setBlockedRefreshing(true);
+    } else {
+      setBlockedLoading(true);
+    }
+
+    setBlockedError('');
+
+    try {
+      const data = await apiFetch('/members/me/blocked', { authToken: sessionToken });
+
+      setBlockedMembers(Array.isArray(data?.blocked) ? data.blocked : []);
+    } catch (apiError) {
+      setBlockedError(apiError.message || 'Listen over blokerede brugere kunne ikke hentes.');
+    } finally {
+      setBlockedLoading(false);
+      setBlockedRefreshing(false);
+    }
+  }, [sessionToken]);
+
+  useEffect(() => {
+    loadBlocked();
+  }, [loadBlocked]);
+
+  const refreshSettings = useCallback(async () => {
+    setBlockedMessage('');
+    await Promise.all([
+      loadBlocked({ refreshing: true }),
+      onRefreshClassData ? onRefreshClassData() : Promise.resolve(),
+    ]);
+  }, [loadBlocked, onRefreshClassData]);
+
+  const unblockMember = useCallback(async (memberId, displayName) => {
+    if (!sessionToken || !memberId || unblockingMemberId) {
+      return;
+    }
+
+    setUnblockingMemberId(memberId);
+    setBlockedError('');
+    setBlockedMessage('');
+
+    try {
+      await apiFetch(`/members/${encodeURIComponent(memberId)}/block`, {
+        authToken: sessionToken,
+        method: 'DELETE',
+      });
+
+      setBlockedMembers((current) => current.filter((entry) => entry.blockedMember?.id !== memberId));
+      setBlockedMessage(`Blokering af ${displayName || 'personen'} er fjernet.`);
+
+      if (onRefreshClassData) {
+        try {
+          await onRefreshClassData();
+        } catch {
+          // ignored — listen er allerede opdateret lokalt
+        }
+      }
+    } catch (apiError) {
+      setBlockedError(apiError.message || 'Blokeringen kunne ikke fjernes.');
+    } finally {
+      setUnblockingMemberId('');
+    }
+  }, [sessionToken, unblockingMemberId, onRefreshClassData]);
+
+  const handleToggleNotifications = useCallback(() => {
+    if (notificationsActive) {
+      onDisableAndroidNotifications?.();
+      return;
+    }
+
+    if (permissionStatus === 'denied') {
+      onOpenSystemAppSettings?.();
+      return;
+    }
+
+    onEnableAndroidNotifications?.();
+  }, [notificationsActive, permissionStatus, onDisableAndroidNotifications, onEnableAndroidNotifications, onOpenSystemAppSettings]);
+
+  const handleLogout = useCallback(async () => {
+    if (logoutLoading || !onLogout) {
+      return;
+    }
+
+    setLogoutLoading(true);
+    try {
+      await onLogout();
+    } finally {
+      setLogoutLoading(false);
+    }
+  }, [logoutLoading, onLogout]);
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (deleteAccountLoading || !onDeleteAccount) {
+      return;
+    }
+
+    setDeleteAccountLoading(true);
+    setDeleteAccountError('');
+
+    try {
+      const ok = await onDeleteAccount();
+
+      if (ok === false) {
+        setDeleteAccountError('Din konto kunne ikke slettes. Prøv igen, eller kontakt support.');
+        return;
+      }
+
+      setDeleteAccountConfirmOpen(false);
+    } catch (apiError) {
+      setDeleteAccountError(apiError?.message || 'Din konto kunne ikke slettes.');
+    } finally {
+      setDeleteAccountLoading(false);
+    }
+  }, [deleteAccountLoading, onDeleteAccount]);
+
+  const openMail = useCallback((subject, body = '') => {
+    const params = [];
+    if (subject) {
+      params.push(`subject=${encodeURIComponent(subject)}`);
+    }
+    if (body) {
+      params.push(`body=${encodeURIComponent(body)}`);
+    }
+    const url = `mailto:${STUDOS_SUPPORT_EMAIL}${params.length ? `?${params.join('&')}` : ''}`;
+    Linking.openURL(url).catch(() => {});
+  }, []);
+
+  const platformLabel = Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web';
 
   return (
-    <View style={styles.flowStack}>
+    <ScrollView
+      contentContainerStyle={styles.flowStack}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={(
+        <StudosRefreshControl
+          onRefresh={refreshSettings}
+          refreshing={blockedRefreshing}
+        />
+      )}
+      showsVerticalScrollIndicator={false}
+    >
       <View style={styles.tabHeader}>
         <View>
-          <Text style={styles.kicker}>{schoolClass.className}</Text>
+          <Text style={styles.kicker}>{schoolClass?.className ?? 'Studos'}</Text>
           <Text style={styles.title}>Indstillinger</Text>
         </View>
         <View style={styles.headerIcon}>
@@ -16017,44 +16266,74 @@ function SettingsScreen({
       <View style={styles.panel}>
         <View style={styles.settingsNotificationHeader}>
           <View style={styles.settingsNotificationIcon}>
-            <Ionicons name="shield-checkmark" size={24} color={STUDOS_THEME.red} />
-          </View>
-          <View style={styles.settingsNotificationCopy}>
-            <Text style={styles.sectionTitle}>Kontakt og moderation</Text>
-            <Text style={styles.feedText}>Kontakt Studos ved sikkerhed, rapporter eller spørgsmål.</Text>
-          </View>
-        </View>
-        <View style={styles.settingsNotificationTokenBox}>
-          <Text style={styles.settingsNotificationTokenLabel}>Support</Text>
-          <Text selectable style={styles.settingsNotificationTokenText}>{STUDOS_SUPPORT_EMAIL}</Text>
-        </View>
-        <Button
-          label="Skriv til support"
-          onPress={() => Linking.openURL(`mailto:${STUDOS_SUPPORT_EMAIL}?subject=${encodeURIComponent('Studos support')}`)}
-        />
-      </View>
-
-      <View style={styles.panel}>
-        <View style={styles.settingsNotificationHeader}>
-          <View style={styles.settingsNotificationIcon}>
             <Ionicons name="notifications" size={24} color={STUDOS_THEME.red} />
           </View>
           <View style={styles.settingsNotificationCopy}>
-            <Text style={styles.sectionTitle}>Android push</Text>
-            <Text style={styles.feedText}>Status: {notificationState?.permissionStatus ?? 'unknown'}</Text>
+            <Text style={styles.sectionTitle}>Notifikationer</Text>
+            <Text style={styles.feedText}>
+              Modtag push om chats, begivenheder og vigtige beskeder fra klassen.
+            </Text>
           </View>
         </View>
+
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityState={{ checked: notificationsActive }}
+          accessibilityLabel={notificationsActive ? 'Slå notifikationer fra' : 'Slå notifikationer til'}
+          disabled={notificationState?.loading}
+          onPress={handleToggleNotifications}
+          style={({ pressed }) => [
+            styles.settingsToggleRow,
+            notificationsActive ? styles.settingsToggleRowActive : null,
+            pressed && !notificationState?.loading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <View style={styles.settingsToggleCopy}>
+            <Text style={styles.settingsToggleTitle}>Push-notifikationer</Text>
+            <Text style={styles.settingsToggleText}>
+              Status: {permissionStatusLabel}{notificationsActive ? ' · Aktiv' : ' · Inaktiv'}
+            </Text>
+          </View>
+          <View style={[styles.settingsToggleSwitch, notificationsActive ? styles.settingsToggleSwitchActive : null]}>
+            <View style={[styles.settingsToggleKnob, notificationsActive ? styles.settingsToggleKnobActive : null]} />
+          </View>
+        </Pressable>
+
+        {notificationState?.loading ? (
+          <View style={styles.settingsInlineLoader}>
+            <ActivityIndicator color={STUDOS_THEME.red} />
+            <Text style={styles.settingsInlineLoaderText}>Opdaterer notifikationer...</Text>
+          </View>
+        ) : null}
 
         {notificationState?.error ? <Text style={styles.errorText}>{notificationState.error}</Text> : null}
         {notificationState?.message ? <Text style={styles.successText}>{notificationState.message}</Text> : null}
 
-        {ANDROID_NOTIFICATIONS_ENABLED ? (
+        {!ANDROID_NOTIFICATIONS_ENABLED ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Kun Android lige nu</Text>
+            <Text style={styles.noticeText}>
+              Push-notifikationer er aktiveret for Android. iOS-understøttelse rulles ud, så snart Apple Developer-kontoen er klar.
+            </Text>
+          </View>
+        ) : null}
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Åbn enhedens notifikationsindstillinger"
+          onPress={onOpenSystemAppSettings}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="open-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Åbn enhedens notifikationsindstillinger</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        {ANDROID_NOTIFICATIONS_ENABLED && notificationsActive ? (
           <>
-            <Button
-              label={notificationState?.expoPushToken ? 'Opdater Android token' : 'Aktivér Android push'}
-              loading={notificationState?.loading}
-              onPress={onEnableAndroidNotifications}
-            />
             <Button
               label="Send testnotifikation"
               loading={notificationState?.testLoading}
@@ -16062,19 +16341,378 @@ function SettingsScreen({
             />
             <View style={styles.settingsNotificationTokenBox}>
               <Text style={styles.settingsNotificationTokenLabel}>Expo push token</Text>
-              <Text selectable style={styles.settingsNotificationTokenText}>{tokenPreview}</Text>
+              <Text numberOfLines={2} selectable style={styles.settingsNotificationTokenText}>{tokenPreview}</Text>
             </View>
           </>
-        ) : (
-          <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Android only</Text>
-            <Text style={styles.noticeText}>
-              iOS springes over, indtil Apple Developer-kontoen er klar.
+        ) : null}
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="ban" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Blokerede brugere</Text>
+            <Text style={styles.feedText}>
+              Blokerede brugere kan ikke kontakte dig, og du ser ikke deres aktivitet.
             </Text>
           </View>
-        )}
+        </View>
+
+        {blockedError ? <Text style={styles.errorText}>{blockedError}</Text> : null}
+        {blockedMessage ? <Text style={styles.successText}>{blockedMessage}</Text> : null}
+
+        {blockedLoading && !blockedRefreshing ? (
+          <View style={styles.settingsInlineLoader}>
+            <ActivityIndicator color={STUDOS_THEME.red} />
+            <Text style={styles.settingsInlineLoaderText}>Henter blokerede brugere...</Text>
+          </View>
+        ) : null}
+
+        {!blockedLoading && blockedMembers.length === 0 ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Ingen blokerede brugere</Text>
+            <Text style={styles.noticeText}>
+              Når du blokerer en bruger, dukker personen op her, så du nemt kan fjerne blokeringen igen.
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.settingsBlockedList}>
+          {blockedMembers.map((entry) => {
+            const member = entry.blockedMember || {};
+            const memberId = String(member.id ?? '');
+            const isUnblocking = unblockingMemberId === memberId;
+
+            return (
+              <View key={entry.id || memberId} style={styles.settingsBlockedRow}>
+                <Avatar profile={member} variant="smallCircle" />
+                <View style={styles.settingsBlockedCopy}>
+                  <Text numberOfLines={1} style={styles.settingsBlockedName}>
+                    {member.displayName || 'Slettet bruger'}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.settingsBlockedMeta}>
+                    {member.class?.className ? `${member.class.className} · ` : ''}
+                    {member.class?.schoolName || 'Studos'}
+                  </Text>
+                  {entry.reason ? (
+                    <Text numberOfLines={1} style={styles.settingsBlockedReason}>
+                      Årsag: {entry.reason}
+                    </Text>
+                  ) : null}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Fjern blokering af ${member.displayName || 'bruger'}`}
+                  disabled={Boolean(unblockingMemberId)}
+                  onPress={() => unblockMember(memberId, member.displayName)}
+                  style={({ pressed }) => [
+                    styles.settingsBlockedAction,
+                    isUnblocking ? styles.settingsBlockedActionLoading : null,
+                    pressed && !unblockingMemberId ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  {isUnblocking ? (
+                    <ActivityIndicator color={STUDOS_THEME.ink} />
+                  ) : (
+                    <>
+                      <Ionicons name="person-add-outline" size={16} color={STUDOS_THEME.ink} />
+                      <Text style={styles.settingsBlockedActionText}>Fjern</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
       </View>
-    </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="shield-checkmark" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Sikkerhed og moderation</Text>
+            <Text style={styles.feedText}>
+              Studos har nul tolerance for stødende indhold og misbrug. Rapportér eller blokér efter behov.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.notice}>
+          <Text style={styles.noticeTitle}>Sådan rapporterer du</Text>
+          <Text style={styles.noticeText}>
+            Brug rapportér-knappen direkte på en chat, besked, begivenhed eller et galleri. Vi gennemgår
+            hver rapport hurtigst muligt og senest inden for 24 timer.
+          </Text>
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Skriv til support"
+          onPress={() => openMail('Studos support')}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="mail-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Skriv til support — {STUDOS_SUPPORT_EMAIL}</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Rapportér stødende indhold"
+          onPress={() => openMail('Rapportér stødende indhold', 'Beskriv kort hvad du har set, og hvor i appen, så vi kan handle hurtigt:\n\n')}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="alert-circle-outline" size={18} color={STUDOS_THEME.red} />
+          <Text style={styles.settingsLinkRowText}>Rapportér stødende indhold eller bruger</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="document-text" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Vilkår og privatliv</Text>
+            <Text style={styles.feedText}>
+              Læs hvordan vi håndterer dine data, samtykke og rettigheder under GDPR.
+            </Text>
+          </View>
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Læs brugervilkår"
+          onPress={() => Linking.openURL(STUDOS_TERMS_URL).catch(() => {})}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="reader-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Brugervilkår</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Læs privatlivspolitik"
+          onPress={() => Linking.openURL(STUDOS_PRIVACY_URL).catch(() => {})}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="lock-closed-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Privatlivspolitik</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Læs cookiepolitik"
+          onPress={() => Linking.openURL(STUDOS_COOKIES_URL).catch(() => {})}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="cafe-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Cookiepolitik</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Anmod om dine data"
+          onPress={() => openMail('Anmodning om indsigt i mine data', 'Jeg anmoder om indsigt i de personoplysninger, Studos har om mig (GDPR art. 15).\n\n')}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="cloud-download-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>Anmod om indsigt i dine data</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="person-circle" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Konto</Text>
+            <Text style={styles.feedText}>
+              Log ud eller slet din konto permanent. Sletning anonymiserer dine personoplysninger.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.settingsNotificationTokenBox}>
+          <Text style={styles.settingsNotificationTokenLabel}>Logget ind som</Text>
+          <Text numberOfLines={1} selectable style={styles.settingsNotificationTokenText}>
+            {activeMember?.displayName || activeMember?.firstName || 'Studos-bruger'}
+            {activeMember?.email ? ` · ${activeMember.email}` : ''}
+          </Text>
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log ud"
+          disabled={logoutLoading}
+          onPress={handleLogout}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed && !logoutLoading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="log-out-outline" size={18} color={STUDOS_THEME.ink} />
+          <Text style={styles.settingsLinkRowText}>{logoutLoading ? 'Logger ud...' : 'Log ud'}</Text>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Slet konto"
+          disabled={deleteAccountLoading}
+          onPress={() => {
+            setDeleteAccountError('');
+            setDeleteAccountConfirmOpen(true);
+          }}
+          style={({ pressed }) => [
+            styles.settingsDangerRow,
+            pressed && !deleteAccountLoading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+          <Text style={styles.settingsDangerRowText}>Slet konto permanent</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="information-circle" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Om Studos</Text>
+            <Text style={styles.feedText}>
+              Information om appen, udgiver og kontakt.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.settingsInfoGrid}>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>App</Text>
+            <Text style={styles.settingsInfoValue}>Studos</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>Version</Text>
+            <Text style={styles.settingsInfoValue}>{STUDOS_APP_VERSION}</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>Platform</Text>
+            <Text style={styles.settingsInfoValue}>{platformLabel}</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>Udgiver</Text>
+            <Text style={styles.settingsInfoValue}>Studos ApS</Text>
+          </View>
+        </View>
+
+        <Text style={styles.settingsFinePrint}>
+          © {new Date().getFullYear()} Studos. Alle rettigheder forbeholdes. Studos er ikke tilknyttet Apple Inc. eller Google LLC.
+        </Text>
+      </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deleteAccountLoading) {
+            setDeleteAccountConfirmOpen(false);
+            setDeleteAccountError('');
+          }
+        }}
+        transparent
+        visible={deleteAccountConfirmOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk kontosletning"
+            disabled={deleteAccountLoading}
+            onPress={() => {
+              if (!deleteAccountLoading) {
+                setDeleteAccountConfirmOpen(false);
+                setDeleteAccountError('');
+              }
+            }}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.chatActionConfirmPanel]}>
+            <View style={[styles.chatActionConfirmIcon, styles.chatActionConfirmIconDanger]}>
+              <Ionicons name="trash" size={24} color="#FFFFFF" />
+            </View>
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>Slet konto?</Text>
+            <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+              Sletning af din konto er permanent. Vi anonymiserer dine personoplysninger og markerer
+              kontoen som slettet, så den ikke længere kan bruges. Login-sessioner og adgangskode
+              bliver slettet, og handlingen kan ikke fortrydes.
+            </Text>
+            {deleteAccountError ? <Text style={styles.errorText}>{deleteAccountError}</Text> : null}
+            <View style={styles.chatActionConfirmButtons}>
+              <Pressable
+                accessibilityLabel="Annuller slet konto"
+                accessibilityRole="button"
+                disabled={deleteAccountLoading}
+                onPress={() => {
+                  setDeleteAccountConfirmOpen(false);
+                  setDeleteAccountError('');
+                }}
+                style={({ pressed }) => [
+                  styles.chatActionCancelButton,
+                  styles.accountProfileActionButtonRow,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.chatActionCancelText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Bekræft slet konto"
+                accessibilityRole="button"
+                disabled={deleteAccountLoading}
+                onPress={handleDeleteAccount}
+                style={({ pressed }) => [
+                  styles.chatActionConfirmButton,
+                  styles.chatActionConfirmButtonDanger,
+                  styles.accountProfileActionButtonRow,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                {deleteAccountLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.chatActionConfirmButtonText}>Slet konto</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
   );
 }
 
@@ -17115,6 +17753,7 @@ function EmergencyContactsScreen({
 function CrewScreen({
   activeMember,
   activeMembers = [],
+  onBlockMember,
   onOpenDirectChat,
   onRefreshClassData,
   schoolClass,
@@ -17127,6 +17766,11 @@ function CrewScreen({
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [crewRefreshing, setCrewRefreshing] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
+  const [crewActionError, setCrewActionError] = useState('');
+  const [crewActionNotice, setCrewActionNotice] = useState('');
+  const [blockingCrewMemberId, setBlockingCrewMemberId] = useState('');
+  const [blockedCrewMemberIds, setBlockedCrewMemberIds] = useState([]);
+  const [pendingBlockCrewMember, setPendingBlockCrewMember] = useState(null);
   const [phoneModalVisible, setPhoneModalVisible] = useState(false);
   const [phoneModalName, setPhoneModalName] = useState('');
   const [phoneModalNumber, setPhoneModalNumber] = useState('');
@@ -17169,6 +17813,12 @@ function CrewScreen({
   useEffect(() => {
     loadCrewConnections();
   }, [loadCrewConnections]);
+
+  useEffect(() => {
+    setBlockedCrewMemberIds([]);
+    setCrewActionError('');
+    setCrewActionNotice('');
+  }, [activeMemberId]);
 
   const refreshCrew = useCallback(() => {
     loadCrewConnections({ refreshing: true });
@@ -17230,168 +17880,308 @@ function CrewScreen({
   }, [connections]);
 
   const showClassCrew = crewSource === 'class';
-  const currentRows = showClassCrew ? classRows : friendRows;
-  return (
-    <ScrollView
-      contentContainerStyle={[styles.flowStack, styles.crewScreen]}
-      keyboardShouldPersistTaps="handled"
-      refreshControl={(
-        <StudosRefreshControl
-          onRefresh={refreshCrew}
-          refreshing={crewRefreshing}
-        />
-      )}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.tabHeader}>
-        <View style={styles.titleWithLogoRow}>
-          <Text style={[styles.title, styles.titleSmallHeader]}>Mit crew</Text>
-          <CrewTitleGraphic />
-        </View>
-      </View>
-      <Text style={styles.feedText}>
-        Her kan du se hele dit crew, både fra klassen og eksterne connections
-      </Text>
+  const currentRows = (showClassCrew ? classRows : friendRows)
+    .filter((entry) => !blockedCrewMemberIds.includes(String(entry.profile?.id ?? '')));
+  const blockCrewMember = useCallback(async (profile, displayName) => {
+    const memberId = String(profile?.id ?? '');
 
-      <View style={[styles.panel, styles.crewPanel]}>
-        <View style={styles.crewSourceTabs}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setCrewSource('class')}
-            style={({ pressed }) => [
-              styles.crewSourceTab,
-              showClassCrew ? styles.crewSourceTabActive : null,
-              pressed ? styles.footerItemPressed : null,
-            ]}
-          >
-            <Text style={[
-              styles.crewSourceTabText,
-              showClassCrew ? styles.crewSourceTabTextActive : null,
-            ]}>
-              Min klasse
-            </Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setCrewSource('friends')}
-            style={({ pressed }) => [
-              styles.crewSourceTab,
-              !showClassCrew ? styles.crewSourceTabActive : null,
-              pressed ? styles.footerItemPressed : null,
-            ]}
-          >
-            <Text style={[
-              styles.crewSourceTabText,
-              !showClassCrew ? styles.crewSourceTabTextActive : null,
-            ]}>
-              Andre venner
-            </Text>
-          </Pressable>
-        </View>
-        {connectionsError && !showClassCrew ? <Text style={styles.errorText}>{connectionsError}</Text> : null}
-        {connectionsLoading && !showClassCrew ? <ActivityIndicator color={STUDOS_THEME.ink} /> : null}
-        {currentRows.length ? (
-          <ScrollView
-            contentContainerStyle={styles.crewMemberList}
-            nestedScrollEnabled
-            showsVerticalScrollIndicator={false}
-            style={styles.crewMemberListScroll}
-          >
-            {currentRows.map((entry) => {
-              const displayName = entry.displayName;
-              const metaText = entry.meta;
-              const profile = entry.profile;
-              const rawPhone = String(profile?.phone ?? '').trim();
-              const normalizedPhone = rawPhone.replace(/[^\d+]/g, '');
-              const canCall = Boolean(normalizedPhone.length);
-              return (
-                <View
-                  key={profile.id || profile.email || displayName}
-                  style={styles.connectionRow}
-                >
-                  <Avatar profile={profile} variant="smallCircle" />
-                  <View style={styles.connectionCopy}>
-                    <Text numberOfLines={1} style={styles.connectionName}>
-                      {displayName}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.connectionMeta}>
-                      {metaText}
-                    </Text>
-                  </View>
-                  <View style={styles.crewMemberActionIcons}>
-                    {onOpenDirectChat && profile?.id ? (
-                      <Pressable
-                        accessibilityLabel={`Åbn chat med ${displayName}`}
-                        accessibilityRole="button"
-                        onPress={() => onOpenDirectChat(profile.id)}
-                        style={({ pressed }) => [
-                          styles.crewMemberChatIconButton,
-                          pressed ? styles.footerItemPressed : null,
-                        ]}
-                      >
-                        <Ionicons name="chatbubble-ellipses-outline" size={21} color={STUDOS_THEME.red} />
-                        <View style={styles.crewMemberChatIconBadge}>
-                          <Ionicons name="add" size={9} color={STUDOS_THEME.ink} />
-                        </View>
-                      </Pressable>
-                    ) : null}
-                  <Pressable
-                    accessibilityLabel={`Ring til ${displayName}`}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setPhoneModalName(displayName);
-                      setPhoneModalNumber(rawPhone || 'Ikke angivet');
-                      setPhoneModalVisible(true);
-                    }}
-                    style={({ pressed }) => [
-                      styles.crewMemberMobileIconButton,
-                      pressed && canCall ? styles.footerItemPressed : null,
-                    ]}
-                  >
-                    <Ionicons
-                        name="call"
-                        size={18}
-                        color="#75DED0"
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-              );
-            })}
-          </ScrollView>
-        ) : (
-          <Text style={styles.emptyText}>
-            {showClassCrew ? 'Der er ingen aktive crew-medlemmer at vise.' : 'Du har ingen venner på Studos endnu.'}
-          </Text>
+    if (!memberId || !onBlockMember || blockingCrewMemberId) {
+      return;
+    }
+
+    setBlockingCrewMemberId(memberId);
+    setCrewActionError('');
+    setCrewActionNotice('');
+
+    try {
+      await onBlockMember(memberId, 'Blokeret fra Mit crew');
+      setBlockedCrewMemberIds((current) => (
+        current.includes(memberId) ? current : [...current, memberId]
+      ));
+      setPendingBlockCrewMember(null);
+      setCrewActionNotice(`${displayName} er blokeret.`);
+    } catch (apiError) {
+      setCrewActionError(apiError?.message || 'Brugeren kunne ikke blokeres.');
+    } finally {
+      setBlockingCrewMemberId('');
+    }
+  }, [blockingCrewMemberId, onBlockMember]);
+  const openCrewBlockConfirm = useCallback((profile, displayName) => {
+    setCrewActionError('');
+    setCrewActionNotice('');
+    setPendingBlockCrewMember({ profile, displayName });
+  }, []);
+  const closeCrewBlockConfirm = useCallback(() => {
+    if (blockingCrewMemberId) {
+      return;
+    }
+
+    setPendingBlockCrewMember(null);
+    setCrewActionError('');
+  }, [blockingCrewMemberId]);
+  const pendingBlockName = pendingBlockCrewMember?.displayName ?? 'brugeren';
+  const pendingBlockProfile = pendingBlockCrewMember?.profile ?? null;
+  const pendingBlockMemberId = String(pendingBlockProfile?.id ?? '');
+  const pendingBlockLoading = Boolean(pendingBlockMemberId && blockingCrewMemberId === pendingBlockMemberId);
+
+  return (
+    <>
+      <ScrollView
+        contentContainerStyle={[styles.flowStack, styles.crewScreen]}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={(
+          <StudosRefreshControl
+            onRefresh={refreshCrew}
+            refreshing={crewRefreshing}
+          />
         )}
-        {phoneModalVisible ? (
-          <View style={styles.crewPhoneModalOverlay}>
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.tabHeader}>
+          <View style={styles.titleWithLogoRow}>
+            <Text style={[styles.title, styles.titleSmallHeader]}>Mit crew</Text>
+            <CrewTitleGraphic />
+          </View>
+        </View>
+        <Text style={styles.feedText}>
+          Her kan du se hele dit crew, både fra klassen og eksterne connections
+        </Text>
+
+        <View style={[styles.panel, styles.crewPanel]}>
+          <View style={styles.crewSourceTabs}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setPhoneModalVisible(false)}
-              style={styles.crewPhoneModalBackdrop}
+              onPress={() => setCrewSource('class')}
+              style={({ pressed }) => [
+                styles.crewSourceTab,
+                showClassCrew ? styles.crewSourceTabActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
             >
-              <View style={styles.crewPhoneModalPanel}>
-                <Text style={styles.crewPhoneModalTitle}>Mobilnummer</Text>
-                <Text style={styles.crewPhoneModalName} numberOfLines={1}>
-                  {phoneModalName}
-                </Text>
-                <Text style={styles.crewPhoneModalNumber} numberOfLines={1}>
-                  {phoneModalNumber}
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setPhoneModalVisible(false)}
-                  style={styles.crewPhoneModalCloseButton}
-                >
-                  <Text style={styles.crewPhoneModalCloseText}>Luk</Text>
-                </Pressable>
-              </View>
+              <Text style={[
+                styles.crewSourceTabText,
+                showClassCrew ? styles.crewSourceTabTextActive : null,
+              ]}>
+                Min klasse
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setCrewSource('friends')}
+              style={({ pressed }) => [
+                styles.crewSourceTab,
+                !showClassCrew ? styles.crewSourceTabActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.crewSourceTabText,
+                !showClassCrew ? styles.crewSourceTabTextActive : null,
+              ]}>
+                Andre venner
+              </Text>
             </Pressable>
           </View>
-        ) : null}
-      </View>
-    </ScrollView>
+          {connectionsError && !showClassCrew ? <Text style={styles.errorText}>{connectionsError}</Text> : null}
+          {crewActionError && !pendingBlockCrewMember ? <Text style={styles.errorText}>{crewActionError}</Text> : null}
+          {crewActionNotice ? <Text style={styles.successText}>{crewActionNotice}</Text> : null}
+          {connectionsLoading && !showClassCrew ? <ActivityIndicator color={STUDOS_THEME.ink} /> : null}
+          {currentRows.length ? (
+            <ScrollView
+              contentContainerStyle={styles.crewMemberList}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={styles.crewMemberListScroll}
+            >
+              {currentRows.map((entry) => {
+                const displayName = entry.displayName;
+                const metaText = entry.meta;
+                const profile = entry.profile;
+                const rawPhone = String(profile?.phone ?? '').trim();
+                const normalizedPhone = rawPhone.replace(/[^\d+]/g, '');
+                const canCall = Boolean(normalizedPhone.length);
+                const profileId = String(profile?.id ?? '');
+                const isBlockingMember = blockingCrewMemberId === profileId;
+                const blockDisabled = Boolean(blockingCrewMemberId) || !profileId;
+
+                return (
+                  <View
+                    key={profile.id || profile.email || displayName}
+                    style={styles.connectionRow}
+                  >
+                    <Avatar profile={profile} variant="smallCircle" />
+                    <View style={styles.connectionCopy}>
+                      <Text numberOfLines={1} style={styles.connectionName}>
+                        {displayName}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.connectionMeta}>
+                        {metaText}
+                      </Text>
+                    </View>
+                    <View style={styles.crewMemberActionIcons}>
+                      {onOpenDirectChat && profile?.id ? (
+                        <Pressable
+                          accessibilityLabel={`Åbn chat med ${displayName}`}
+                          accessibilityRole="button"
+                          onPress={() => onOpenDirectChat(profile.id)}
+                          style={({ pressed }) => [
+                            styles.crewMemberChatIconButton,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Ionicons name="chatbubble-ellipses-outline" size={21} color={STUDOS_THEME.red} />
+                          <View style={styles.crewMemberChatIconBadge}>
+                            <Ionicons name="add" size={9} color={STUDOS_THEME.ink} />
+                          </View>
+                        </Pressable>
+                      ) : null}
+                      {onBlockMember && profileId ? (
+                        <Pressable
+                          accessibilityLabel={`Bloker ${displayName}`}
+                          accessibilityRole="button"
+                          disabled={blockDisabled}
+                          onPress={() => openCrewBlockConfirm(profile, displayName)}
+                          style={({ pressed }) => [
+                            styles.crewMemberBlockIconButton,
+                            blockDisabled && !isBlockingMember ? styles.crewMemberMobileIconButtonDisabled : null,
+                            pressed && !blockDisabled ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          {isBlockingMember ? (
+                            <ActivityIndicator color={STUDOS_THEME.red} size="small" />
+                          ) : (
+                            <Ionicons name="person-remove" size={18} color={STUDOS_THEME.red} />
+                          )}
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        accessibilityLabel={`Ring til ${displayName}`}
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setPhoneModalName(displayName);
+                          setPhoneModalNumber(rawPhone || 'Ikke angivet');
+                          setPhoneModalVisible(true);
+                        }}
+                        style={({ pressed }) => [
+                          styles.crewMemberMobileIconButton,
+                          pressed && canCall ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <Ionicons
+                          name="call"
+                          size={18}
+                          color="#75DED0"
+                        />
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <Text style={styles.emptyText}>
+              {showClassCrew ? 'Der er ingen aktive crew-medlemmer at vise.' : 'Du har ingen venner på Studos endnu.'}
+            </Text>
+          )}
+          {phoneModalVisible ? (
+            <View style={styles.crewPhoneModalOverlay}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setPhoneModalVisible(false)}
+                style={styles.crewPhoneModalBackdrop}
+              >
+                <View style={styles.crewPhoneModalPanel}>
+                  <Text style={styles.crewPhoneModalTitle}>Mobilnummer</Text>
+                  <Text style={styles.crewPhoneModalName} numberOfLines={1}>
+                    {phoneModalName}
+                  </Text>
+                  <Text style={styles.crewPhoneModalNumber} numberOfLines={1}>
+                    {phoneModalNumber}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setPhoneModalVisible(false)}
+                    style={styles.crewPhoneModalCloseButton}
+                  >
+                    <Text style={styles.crewPhoneModalCloseText}>Luk</Text>
+                  </Pressable>
+                </View>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      </ScrollView>
+      <Modal
+        animationType="fade"
+        onRequestClose={closeCrewBlockConfirm}
+        transparent
+        visible={Boolean(pendingBlockCrewMember)}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk blokering"
+            disabled={pendingBlockLoading}
+            onPress={closeCrewBlockConfirm}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.crewBlockConfirmPanel]}>
+            <View style={styles.crewBlockConfirmIcon}>
+              <Ionicons name="person-remove" size={24} color="#FFFFFF" />
+            </View>
+            <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+              Bloker bruger?
+            </Text>
+            <Text style={styles.crewBlockConfirmName} numberOfLines={1}>
+              {pendingBlockName}
+            </Text>
+            <View style={styles.crewBlockConfirmList}>
+              {[
+                'Personen skjules fra Mit crew og relevante klassevisninger.',
+                'Direkte chat med personen skjules, og I kan ikke starte en ny 1:1 chat.',
+                'Aktivitet fra personen filtreres væk, hvor Studos kan knytte aktiviteten til brugeren.',
+                'Blokeringen er personlig og sender ikke automatisk en rapport til moderation.',
+                'Personen får ikke en notifikation om blokeringen.',
+              ].map((point) => (
+                <View key={point} style={styles.crewBlockConfirmPoint}>
+                  <View style={styles.crewBlockConfirmBullet} />
+                  <Text style={styles.crewBlockConfirmPointText}>{point}</Text>
+                </View>
+              ))}
+            </View>
+            {crewActionError ? <Text style={styles.errorText}>{crewActionError}</Text> : null}
+            <View style={styles.chatActionConfirmButtons}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={pendingBlockLoading}
+                onPress={closeCrewBlockConfirm}
+                style={({ pressed }) => [
+                  styles.chatActionCancelButton,
+                  pressed && !pendingBlockLoading ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.chatActionCancelText}>Annuller</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={pendingBlockLoading}
+                onPress={() => blockCrewMember(pendingBlockProfile, pendingBlockName)}
+                style={({ pressed }) => [
+                  styles.chatActionConfirmButton,
+                  styles.chatActionConfirmButtonDanger,
+                  pressed && !pendingBlockLoading ? styles.footerItemPressed : null,
+                ]}
+              >
+                {pendingBlockLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.chatActionConfirmButtonText}>Bloker</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -29145,6 +29935,196 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 16,
   },
+  settingsToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E8EF',
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  settingsToggleRowActive: {
+    borderColor: 'rgba(255, 111, 115, 0.4)',
+    backgroundColor: 'rgba(255, 111, 115, 0.08)',
+  },
+  settingsToggleCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  settingsToggleTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  settingsToggleText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  settingsToggleSwitch: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#D7DDE5',
+    padding: 3,
+    justifyContent: 'center',
+  },
+  settingsToggleSwitchActive: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  settingsToggleKnob: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    alignSelf: 'flex-start',
+  },
+  settingsToggleKnobActive: {
+    alignSelf: 'flex-end',
+  },
+  settingsInlineLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  settingsInlineLoaderText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  settingsLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E8EF',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  settingsLinkRowText: {
+    flex: 1,
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  settingsDangerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  settingsDangerRowText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  settingsBlockedList: {
+    gap: 10,
+  },
+  settingsBlockedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E8EF',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  settingsBlockedCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  settingsBlockedName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  settingsBlockedMeta: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  settingsBlockedReason: {
+    color: '#7e242f',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  settingsBlockedAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 76,
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D7DDE5',
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  settingsBlockedActionLoading: {
+    opacity: 0.8,
+  },
+  settingsBlockedActionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  settingsInfoGrid: {
+    gap: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E8EF',
+    backgroundColor: '#F7FAFA',
+    padding: 12,
+  },
+  settingsInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  settingsInfoLabel: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  settingsInfoValue: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  settingsFinePrint: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 16,
+  },
   notificationPromptPanel: {
     alignItems: 'center',
     gap: 14,
@@ -31969,6 +32949,7 @@ const styles = StyleSheet.create({
   connectionCopy: {
     flex: 1,
     gap: 3,
+    minWidth: 0,
   },
   connectionName: {
     color: '#172143',
@@ -32025,10 +33006,76 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   crewMemberActionIcons: {
-    flexDirection: 'row',
-    gap: 1,
-    marginLeft: -4,
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    marginLeft: -4,
+  },
+  crewMemberBlockIconButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FFF0F1',
+    marginLeft: 0,
+    padding: 0,
+  },
+  crewBlockConfirmPanel: {
+    borderColor: '#FFD0D2',
+    borderWidth: 1,
+    backgroundColor: '#FFFDFD',
+  },
+  crewBlockConfirmIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: STUDOS_THEME.red,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  crewBlockConfirmName: {
+    color: '#65748b',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  crewBlockConfirmList: {
+    gap: 9,
+    borderColor: '#EEF1F5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  crewBlockConfirmPoint: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  crewBlockConfirmBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: STUDOS_THEME.red,
+    marginTop: 7,
+  },
+  crewBlockConfirmPointText: {
+    color: '#526078',
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 17,
   },
   crewMemberMobileIconButton: {
     alignItems: 'center',

@@ -524,6 +524,41 @@ class ExampleTest extends TestCase
             'status' => 'accepted',
         ]);
 
+        $directChat = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/conversations/direct', [
+                'memberId' => 'other-member',
+            ])
+            ->assertStatus(201);
+        $directConversationId = $directChat->json('conversation.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/members/other-member/block', [
+                'reason' => 'Blokeret fra Mit crew',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_blocks', [
+            'blocker_member_id' => 'demo-owner',
+            'blocked_member_id' => 'other-member',
+            'reason' => 'Blokeret fra Mit crew',
+        ]);
+
+        $this->assertNotNull(
+            DB::table('chat_participants')
+                ->where('conversation_id', $directConversationId)
+                ->where('member_id', 'demo-owner')
+                ->value('hidden_at')
+        );
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/members/demo-owner/connections')
+            ->assertStatus(200)
+            ->assertJsonCount(0, 'connections');
+
         $ownCode = DB::table('members')->where('id', 'demo-owner')->value('personal_code');
         $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)

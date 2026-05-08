@@ -36,7 +36,7 @@
           </div>
         </div>
         <a href="{{ route('home') }}#landing-title">Om Studos</a>
-        <a href="{{ route('home') }}#det-med-smaat">Moderation</a>
+        <a href="{{ route('legal.terms') }}">Brugervilkår</a>
         <a href="{{ route('faq') }}">FAQ</a>
         @yield('nav')
       </nav>

@@ -14,8 +14,7 @@
           "photosPermission": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed."
         }
       ],
-      "expo-secure-store",
-      "./plugins/with-android-cleartext"
+      "expo-secure-store"
     ],
     "ios": {
       "bundleIdentifier": "dk.studenterapp.mobile",

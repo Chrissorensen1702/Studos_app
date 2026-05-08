@@ -1060,12 +1060,21 @@ class StudosController extends Controller
 
         abort_if($viewer->id !== $member, 403, 'Du kan kun hente dine egne connections.');
 
+        $blockedMemberIds = $this->blockedMemberIdsForMember($viewer);
         $connections = DB::table('member_connections')
             ->where('requester_member_id', $member)
             ->orWhere('receiver_member_id', $member)
             ->orderByRaw("CASE status WHEN 'pending' THEN 1 WHEN 'accepted' THEN 2 ELSE 3 END")
             ->orderByDesc('created_at')
-            ->get();
+            ->get()
+            ->reject(function (object $connection) use ($member, $blockedMemberIds): bool {
+                $otherMemberId = (string) $connection->requester_member_id === (string) $member
+                    ? $connection->receiver_member_id
+                    : $connection->requester_member_id;
+
+                return $blockedMemberIds->contains((string) $otherMemberId);
+            })
+            ->values();
 
         $otherMemberIds = $connections
             ->flatMap(fn (object $connection): array => [
@@ -1534,7 +1543,7 @@ class StudosController extends Controller
         $member = $this->authenticatedMemberFromRequest($request);
         $limit = min(80, max(1, (int) $request->integer('limit', 40)));
         $now = now();
-        $blockedMemberIds = $this->activityBlockedMemberIds($member);
+        $blockedMemberIds = $this->blockedMemberIdsForMember($member);
         $memberQuery = DB::table('members')
             ->where('class_id', $member->class_id)
             ->where('status', 'active')
@@ -1889,7 +1898,7 @@ class StudosController extends Controller
         );
     }
 
-    private function activityBlockedMemberIds(object $member)
+    private function blockedMemberIdsForMember(object $member)
     {
         if (! Schema::hasTable('member_blocks')) {
             return collect();
@@ -3258,44 +3267,189 @@ class StudosController extends Controller
         $currentMember = $this->authenticatedMemberFromRequest($request);
         $targetMember = DB::table('members')
             ->where('id', $member)
-            ->where('class_id', $currentMember->class_id)
             ->where('status', '!=', 'removed')
             ->first();
 
         abort_unless($targetMember, 404, 'Personen findes ikke.');
         abort_if((string) $targetMember->id === (string) $currentMember->id, 422, 'Du kan ikke blokere dig selv.');
+        $sameClass = (string) $targetMember->class_id === (string) $currentMember->class_id;
+        $acceptedConnection = $sameClass ? true : (
+            Schema::hasTable('member_connections')
+            && DB::table('member_connections')
+                ->where('status', 'accepted')
+                ->where(function ($query) use ($currentMember, $targetMember): void {
+                    $query
+                        ->where(function ($subQuery) use ($currentMember, $targetMember): void {
+                            $subQuery
+                                ->where('requester_member_id', $currentMember->id)
+                                ->where('receiver_member_id', $targetMember->id);
+                        })
+                        ->orWhere(function ($subQuery) use ($currentMember, $targetMember): void {
+                            $subQuery
+                                ->where('requester_member_id', $targetMember->id)
+                                ->where('receiver_member_id', $currentMember->id);
+                        });
+                })
+                ->exists()
+        );
+
+        abort_unless($sameClass || $acceptedConnection, 404, 'Personen findes ikke.');
 
         $data = $request->validate([
             'reason' => ['nullable', 'string', 'max:190'],
         ]);
         $reason = trim($data['reason'] ?? '') ?: 'Blokeret fra kalender';
         $now = now()->format('Y-m-d H:i:s');
-        $existingBlock = DB::table('member_blocks')
-            ->where('blocker_member_id', $currentMember->id)
-            ->where('blocked_member_id', $targetMember->id)
-            ->first();
+        DB::transaction(function () use ($currentMember, $targetMember, $reason, $now): void {
+            $existingBlock = DB::table('member_blocks')
+                ->where('blocker_member_id', $currentMember->id)
+                ->where('blocked_member_id', $targetMember->id)
+                ->first();
 
-        if ($existingBlock) {
-            DB::table('member_blocks')
-                ->where('id', $existingBlock->id)
-                ->update([
+            if ($existingBlock) {
+                DB::table('member_blocks')
+                    ->where('id', $existingBlock->id)
+                    ->update([
+                        'reason' => $reason,
+                        'updated_at' => $now,
+                    ]);
+            } else {
+                DB::table('member_blocks')->insert([
+                    'id' => (string) Str::uuid(),
+                    'blocker_member_id' => $currentMember->id,
+                    'blocked_member_id' => $targetMember->id,
                     'reason' => $reason,
+                    'created_at' => $now,
                     'updated_at' => $now,
                 ]);
-        } else {
-            DB::table('member_blocks')->insert([
-                'id' => (string) Str::uuid(),
-                'blocker_member_id' => $currentMember->id,
-                'blocked_member_id' => $targetMember->id,
-                'reason' => $reason,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-        }
+            }
+
+            if (Schema::hasTable('chat_conversations') && Schema::hasTable('chat_participants')) {
+                $directPairKey = collect([$currentMember->id, $targetMember->id])->sort()->values()->implode(':');
+                $directConversationId = DB::table('chat_conversations')
+                    ->where('type', 'direct')
+                    ->where('direct_pair_key', $directPairKey)
+                    ->value('id');
+
+                if ($directConversationId) {
+                    DB::table('chat_participants')
+                        ->where('conversation_id', $directConversationId)
+                        ->where('member_id', $currentMember->id)
+                        ->update([
+                            'hidden_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                }
+            }
+        });
 
         return response()->json([
             'ok' => true,
             'class' => $this->loadClassById($currentMember->class_id, $currentMember->id),
+        ]);
+    }
+
+    public function listBlockedMembers(Request $request): JsonResponse
+    {
+        $currentMember = $this->authenticatedMemberFromRequest($request);
+
+        if (! Schema::hasTable('member_blocks')) {
+            return response()->json([
+                'blocked' => [],
+            ]);
+        }
+
+        $blocks = DB::table('member_blocks')
+            ->where('blocker_member_id', $currentMember->id)
+            ->orderByDesc('created_at')
+            ->get();
+
+        $memberPreviews = $this->memberPreviews($blocks->pluck('blocked_member_id'));
+
+        $blocked = $blocks
+            ->map(function (object $block) use ($memberPreviews): array {
+                $other = $memberPreviews->get($block->blocked_member_id);
+
+                return [
+                    'id' => $block->id,
+                    'reason' => $block->reason,
+                    'blockedAt' => $this->apiDateTime($block->created_at),
+                    'blockedMember' => $other ? [
+                        'id' => $other->id,
+                        'displayName' => $other->displayName,
+                        'firstName' => $other->firstName,
+                        'profilePhotoUrl' => UploadedImage::publicUrl($other->profilePhotoUrl),
+                        'class' => [
+                            'classId' => $other->classId,
+                            'schoolName' => $other->schoolName,
+                            'className' => $other->className,
+                            'graduationYear' => $other->graduationYear,
+                        ],
+                    ] : [
+                        'id' => $block->blocked_member_id,
+                        'displayName' => 'Slettet bruger',
+                        'firstName' => null,
+                        'profilePhotoUrl' => null,
+                        'class' => null,
+                    ],
+                ];
+            })
+            ->values()
+            ->all();
+
+        return response()->json([
+            'blocked' => $blocked,
+        ]);
+    }
+
+    public function unblockMember(Request $request, string $member): JsonResponse
+    {
+        $currentMember = $this->authenticatedMemberFromRequest($request);
+
+        if (! Schema::hasTable('member_blocks')) {
+            return response()->json(['ok' => true]);
+        }
+
+        $deleted = DB::table('member_blocks')
+            ->where('blocker_member_id', $currentMember->id)
+            ->where('blocked_member_id', $member)
+            ->delete();
+
+        abort_if($deleted === 0, 404, 'Blokeringen findes ikke.');
+
+        return response()->json([
+            'ok' => true,
+            'class' => $this->loadClassById($currentMember->class_id, $currentMember->id),
+        ]);
+    }
+
+    public function disablePushToken(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'expoPushToken' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if (! Schema::hasTable('member_push_tokens')) {
+            return response()->json(['ok' => true, 'disabled' => 0]);
+        }
+
+        $now = now()->format('Y-m-d H:i:s');
+        $query = DB::table('member_push_tokens')
+            ->where('member_id', $member->id);
+
+        if (! blank($data['expoPushToken'] ?? null)) {
+            $query->where('expo_push_token', $data['expoPushToken']);
+        }
+
+        $disabled = $query->update([
+            'disabled_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return response()->json([
+            'ok' => true,
+            'disabled' => $disabled,
         ]);
     }
 
@@ -3626,6 +3780,11 @@ class StudosController extends Controller
     ): array {
         $blockedMemberIds ??= collect();
         $serializedMembers = $members
+            ->filter(fn ($member): bool => (
+                ! $currentMemberId
+                || (string) $member->id === (string) $currentMemberId
+                || ! $blockedMemberIds->contains((string) $member->id)
+            ))
             ->map(fn ($member) => $this->serializeMember(
                 $member,
                 $member->id === $currentMemberId,

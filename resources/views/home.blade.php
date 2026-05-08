@@ -316,11 +316,11 @@
           </div>
 
           <nav class="landing-footer-nav" aria-label="Betingelser og privatliv">
-            <a href="#det-med-smaat">Privatlivspolitik</a>
-            <a href="#det-med-smaat">Handelsbetingelser</a>
-            <a href="#det-med-smaat">Cookiepolitik</a>
-            <a href="#det-med-smaat">Moderation og brug</a>
-            <a href="#det-med-smaat">Support</a>
+            <a href="{{ route('legal.privacy') }}">Privatlivspolitik</a>
+            <a href="{{ route('legal.terms') }}">Brugervilkår</a>
+            <a href="{{ route('legal.cookies') }}">Cookiepolitik</a>
+            <a href="{{ route('legal.delete-account') }}">Slet konto</a>
+            <a href="mailto:hej@studos.dk">Support</a>
           </nav>
         </section>
 

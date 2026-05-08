@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [StudosWebController::class, 'landing'])->name('home');
 Route::get('/faq', [StudosWebController::class, 'faq'])->name('faq');
+Route::get('/brugervilkaar', [StudosWebController::class, 'terms'])->name('legal.terms');
+Route::get('/privatlivspolitik', [StudosWebController::class, 'privacy'])->name('legal.privacy');
+Route::get('/cookiepolitik', [StudosWebController::class, 'cookies'])->name('legal.cookies');
+Route::get('/slet-konto', [StudosWebController::class, 'deleteAccount'])->name('legal.delete-account');
 Route::redirect('/pwa', '/');
 Route::redirect('/pwa/{any}', '/')->where('any', '.*');
 Route::get('/classes/{class}', [StudosWebController::class, 'redirectLegacyClass']);

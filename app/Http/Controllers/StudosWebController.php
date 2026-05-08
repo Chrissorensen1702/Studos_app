@@ -76,6 +76,26 @@ class StudosWebController extends Controller
         return view('faq');
     }
 
+    public function terms(): View
+    {
+        return view('legal.terms');
+    }
+
+    public function privacy(): View
+    {
+        return view('legal.privacy');
+    }
+
+    public function cookies(): View
+    {
+        return view('legal.cookies');
+    }
+
+    public function deleteAccount(): View
+    {
+        return view('legal.delete-account');
+    }
+
     public function createClass(): View
     {
         return view('auth.register-class', [
