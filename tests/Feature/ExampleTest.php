@@ -827,10 +827,11 @@ class ExampleTest extends TestCase
         $this->assertDatabaseMissing('event_rsvps', ['event_id' => $eventId]);
     }
 
-    public function test_authenticated_member_can_register_android_push_token(): void
+    public function test_authenticated_member_can_register_push_tokens(): void
     {
         $ownerToken = $this->issueTestMemberToken('demo-owner');
         $expoPushToken = 'ExpoPushToken['.Str::random(32).']';
+        $iosExpoPushToken = 'ExpoPushToken['.Str::random(32).']';
 
         $this
             ->postJson('/api/notifications/push-token', [
@@ -842,7 +843,7 @@ class ExampleTest extends TestCase
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
             ->postJson('/api/notifications/push-token', [
                 'expoPushToken' => $expoPushToken,
-                'platform' => 'ios',
+                'platform' => 'web',
             ])->assertStatus(422);
 
         $this
@@ -867,6 +868,28 @@ class ExampleTest extends TestCase
             'disabled_at' => null,
         ]);
 
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/notifications/push-token', [
+                'expoPushToken' => $iosExpoPushToken,
+                'platform' => 'ios',
+                'deviceName' => 'Chris iPhone',
+                'projectId' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+                'appVariant' => 'preview',
+                'nativeApplicationVersion' => '0.0.1',
+                'nativeBuildVersion' => '1',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true);
+
+        $this->assertDatabaseHas('member_push_tokens', [
+            'member_id' => 'demo-owner',
+            'expo_push_token' => $iosExpoPushToken,
+            'platform' => 'ios',
+            'device_name' => 'Chris iPhone',
+            'disabled_at' => null,
+        ]);
+
         Http::fake([
             'https://exp.host/--/api/v2/push/send' => Http::response([
                 'data' => [
@@ -879,15 +902,22 @@ class ExampleTest extends TestCase
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
             ->postJson('/api/notifications/test', [
                 'title' => 'Studos test',
-                'body' => 'Android push test.',
+                'body' => 'Push test.',
             ])
             ->assertStatus(200)
-            ->assertJsonPath('sent', 1)
-            ->assertJsonPath('message', 'Testnotifikation sendt til Android.');
+            ->assertJsonPath('sent', 2)
+            ->assertJsonPath('message', 'Testnotifikation sendt.');
 
-        Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
-            && $request[0]['to'] === $expoPushToken
-            && $request[0]['channelId'] === 'studos-default');
+        Http::assertSent(function ($request) use ($expoPushToken, $iosExpoPushToken): bool {
+            $messages = collect($request->data());
+            $androidMessage = $messages->firstWhere('to', $expoPushToken);
+            $iosMessage = $messages->firstWhere('to', $iosExpoPushToken);
+
+            return $request->url() === 'https://exp.host/--/api/v2/push/send'
+                && ($androidMessage['channelId'] ?? null) === 'studos-default'
+                && $iosMessage
+                && ! array_key_exists('channelId', $iosMessage);
+        });
     }
 
     public function test_activities_feed_respects_visibility_blocks_and_minimizes_payload(): void

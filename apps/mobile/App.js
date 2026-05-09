@@ -31,7 +31,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
-const ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.androidNotificationPrompt.v1';
+const NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.pushNotificationPrompt.v1';
 const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
 const EARN_CAPS_CHECKIN_STORAGE_KEY = 'studos.earnCapsCheckIn.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
@@ -70,7 +70,7 @@ const APP_FOOTER_HEIGHT = 10 + 52 + APP_FOOTER_PADDING_BOTTOM;
 const CHAT_THREAD_TOP_PADDING = USE_IOS_SAFE_FRAME ? 54 : ANDROID_STATUS_BAR_HEIGHT + 14;
 const CHAT_THREAD_BOTTOM_PADDING = Platform.OS === 'android' ? APP_FOOTER_PADDING_BOTTOM : IS_MOBILE_WEB ? 0 : 10;
 const CHAT_THREAD_KEYBOARD_VERTICAL_OFFSET = 0;
-const ANDROID_NOTIFICATIONS_ENABLED = Platform.OS === 'android' && !IS_WEB;
+const PUSH_NOTIFICATIONS_ENABLED = (Platform.OS === 'android' || Platform.OS === 'ios') && !IS_WEB;
 const STUDOS_NOTIFICATION_CHANNEL_ID = 'studos-default';
 const STUDOS_EAS_PROJECT_ID = 'b4da2c62-b9cd-442c-b8da-facc8e6dc689';
 const API_DISCOVERY_TIMEOUT_MS = 3500;
@@ -131,25 +131,25 @@ const BrowserSessionStore = {
   },
 };
 const SessionStore = Platform.OS === 'web' ? BrowserSessionStore : SecureStore;
-let androidNotificationHandlerConfigured = false;
+let pushNotificationHandlerConfigured = false;
 let chatRealtimeFallbackLogged = false;
 let preferredApiBaseUrl = null;
 
-const androidExpoRuntimeReady = () => {
-  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+const nativeExpoRuntimeReady = () => {
+  if (!PUSH_NOTIFICATIONS_ENABLED) {
     return false;
   }
 
   return Boolean(globalThis?.expo?.EventEmitter);
 };
 
-const loadAndroidExpoModule = (moduleName) => {
-  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+const loadNativeExpoModule = (moduleName) => {
+  if (!PUSH_NOTIFICATIONS_ENABLED) {
     return null;
   }
 
-  if (!androidExpoRuntimeReady()) {
-    console.warn('Android Expo native runtime is not ready for notification modules.');
+  if (!nativeExpoRuntimeReady()) {
+    console.warn('Expo native runtime is not ready for notification modules.');
     return null;
   }
 
@@ -170,12 +170,12 @@ const loadAndroidExpoModule = (moduleName) => {
   }
 };
 
-const loadAndroidNotificationsModule = () => loadAndroidExpoModule('expo-notifications');
-const loadAndroidDeviceModule = () => loadAndroidExpoModule('expo-device');
-const loadAndroidConstantsModule = () => loadAndroidExpoModule('expo-constants');
+const loadNotificationsModule = () => loadNativeExpoModule('expo-notifications');
+const loadDeviceModule = () => loadNativeExpoModule('expo-device');
+const loadConstantsModule = () => loadNativeExpoModule('expo-constants');
 
-const configureAndroidNotificationHandler = (notifications) => {
-  if (!notifications || androidNotificationHandlerConfigured) {
+const configureNotificationHandler = (notifications) => {
+  if (!notifications || pushNotificationHandlerConfigured) {
     return Boolean(notifications);
   }
 
@@ -188,10 +188,10 @@ const configureAndroidNotificationHandler = (notifications) => {
         shouldShowList: true,
       }),
     });
-    androidNotificationHandlerConfigured = true;
+    pushNotificationHandlerConfigured = true;
     return true;
   } catch (error) {
-    console.warn('Android notification handler could not be configured.', error);
+    console.warn('Notification handler could not be configured.', error);
     return false;
   }
 };
@@ -1656,14 +1656,14 @@ const apiFetch = async (path, options = {}) => {
   throw lastError;
 };
 
-const androidNotificationProjectId = (constants) =>
+const notificationProjectId = (constants) =>
   constants?.expoConfig?.extra?.eas?.projectId
   ?? constants?.easConfig?.projectId
   ?? constants?.manifest2?.extra?.eas?.projectId
   ?? constants?.manifest?.extra?.eas?.projectId
   ?? STUDOS_EAS_PROJECT_ID;
 
-const androidAppVariant = (constants) => {
+const notificationAppVariant = (constants) => {
   if (constants?.expoConfig?.name === 'Studos-dev') {
     return 'development';
   }
@@ -1672,17 +1672,17 @@ const androidAppVariant = (constants) => {
 };
 
 const ensureAndroidNotificationChannelAsync = async () => {
-  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+  if (Platform.OS !== 'android') {
     return;
   }
 
-  const notifications = loadAndroidNotificationsModule();
+  const notifications = loadNotificationsModule();
 
   if (!notifications) {
     throw new Error('Android builden mangler Expo notification-runtime. Installer nyeste Android build og start Metro igen med clear cache.');
   }
 
-  if (!configureAndroidNotificationHandler(notifications)) {
+  if (!configureNotificationHandler(notifications)) {
     throw new Error('Android notification-runtime kunne ikke startes i denne build.');
   }
 
@@ -1694,31 +1694,33 @@ const ensureAndroidNotificationChannelAsync = async () => {
   });
 };
 
-const registerForAndroidPushNotificationsAsync = async () => {
-  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+const registerForPushNotificationsAsync = async () => {
+  if (!PUSH_NOTIFICATIONS_ENABLED) {
     return {
       supported: false,
-      message: 'Push-notifikationer er kun slået til for Android lige nu.',
+      message: 'Push-notifikationer er ikke tilgængelige i web-versionen.',
     };
   }
 
   await ensureAndroidNotificationChannelAsync();
 
-  const notifications = loadAndroidNotificationsModule();
-  const device = loadAndroidDeviceModule();
-  const constants = loadAndroidConstantsModule();
+  const notifications = loadNotificationsModule();
+  const device = loadDeviceModule();
+  const constants = loadConstantsModule();
 
   if (!notifications || !device || !constants) {
     return {
       supported: false,
-      message: 'Android push kræver en ny build med notification-modulerne.',
+      message: 'Push kræver en ny native build med notification-modulerne.',
     };
   }
 
   if (!device.isDevice) {
+    const platformName = Platform.OS === 'ios' ? 'iOS' : 'Android';
+
     return {
       supported: false,
-      message: 'Android push kræver en fysisk enhed, ikke emulator.',
+      message: `${platformName} push testes bedst på en fysisk enhed.`,
     };
   }
 
@@ -1738,7 +1740,7 @@ const registerForAndroidPushNotificationsAsync = async () => {
     };
   }
 
-  const projectId = androidNotificationProjectId(constants);
+  const projectId = notificationProjectId(constants);
 
   if (!projectId) {
     throw new Error('Expo projectId mangler i app-konfigurationen.');
@@ -1751,8 +1753,9 @@ const registerForAndroidPushNotificationsAsync = async () => {
     permissionStatus,
     projectId,
     expoPushToken: pushToken.data,
-    deviceName: device.deviceName || device.modelName || 'Android',
-    appVariant: androidAppVariant(constants),
+    platform: Platform.OS,
+    deviceName: device.deviceName || device.modelName || (Platform.OS === 'ios' ? 'iPhone' : 'Android'),
+    appVariant: notificationAppVariant(constants),
     nativeApplicationVersion: constants?.expoConfig?.version ?? null,
     nativeBuildVersion: constants?.nativeBuildVersion ?? null,
   };
@@ -1890,9 +1893,9 @@ export default function App() {
     expoPushToken: '',
     permissionStatus: 'unknown',
     registeredAt: '',
-    message: ANDROID_NOTIFICATIONS_ENABLED
-      ? 'Android push er ikke aktiveret på denne enhed endnu.'
-      : 'Push-notifikationer er kun slået til for Android lige nu.',
+    message: PUSH_NOTIFICATIONS_ENABLED
+      ? 'Push er ikke aktiveret på denne enhed endnu.'
+      : 'Push-notifikationer er ikke tilgængelige i web-versionen.',
     error: '',
     loading: false,
     testLoading: false,
@@ -2200,15 +2203,15 @@ export default function App() {
 
   useEffect(() => {
     if (
-      !ANDROID_NOTIFICATIONS_ENABLED
+      !PUSH_NOTIFICATIONS_ENABLED
       || (!notificationState.expoPushToken && notificationState.permissionStatus !== 'granted')
     ) {
       return undefined;
     }
 
-    const notifications = loadAndroidNotificationsModule();
+    const notifications = loadNotificationsModule();
 
-    if (!notifications || !configureAndroidNotificationHandler(notifications)) {
+    if (!notifications || !configureNotificationHandler(notifications)) {
       return undefined;
     }
 
@@ -2232,7 +2235,7 @@ export default function App() {
         }
       });
     } catch (error) {
-      console.warn('Android notification listeners could not be registered.', error);
+      console.warn('Notification listeners could not be registered.', error);
       return undefined;
     }
 
@@ -2246,7 +2249,7 @@ export default function App() {
     let isMounted = true;
 
     if (
-      !ANDROID_NOTIFICATIONS_ENABLED
+      !PUSH_NOTIFICATIONS_ENABLED
       || step !== 'overview'
       || !session?.token
       || notificationState.expoPushToken
@@ -2257,7 +2260,7 @@ export default function App() {
       };
     }
 
-    SessionStore.getItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY)
+    SessionStore.getItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY)
       .then((promptSeen) => {
         if (isMounted && promptSeen !== 'seen') {
           setNotificationPromptVisible(true);
@@ -2521,15 +2524,15 @@ export default function App() {
     setNotificationState((current) => ({
       ...current,
       error: '',
-      message: ANDROID_NOTIFICATIONS_ENABLED
-        ? 'Android push er ikke aktiveret på denne enhed endnu.'
-        : 'Push-notifikationer er kun slået til for Android lige nu.',
+      message: PUSH_NOTIFICATIONS_ENABLED
+        ? 'Push er ikke aktiveret på denne enhed endnu.'
+        : 'Push-notifikationer er ikke tilgængelige i web-versionen.',
     }));
     setError('');
     setStep('invite');
   };
 
-  const enableAndroidNotifications = useCallback(async () => {
+  const enablePushNotifications = useCallback(async () => {
     if (!session?.token) {
       setNotificationState((current) => ({
         ...current,
@@ -2542,11 +2545,11 @@ export default function App() {
       ...current,
       error: '',
       loading: true,
-      message: 'Gør Android push klar...',
+      message: 'Gør push klar...',
     }));
 
     try {
-      const registration = await registerForAndroidPushNotificationsAsync();
+      const registration = await registerForPushNotificationsAsync();
 
       if (!registration.expoPushToken) {
         setNotificationState((current) => ({
@@ -2563,7 +2566,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           expoPushToken: registration.expoPushToken,
-          platform: 'android',
+          platform: registration.platform,
           deviceName: registration.deviceName,
           projectId: registration.projectId,
           appVariant: registration.appVariant,
@@ -2579,29 +2582,29 @@ export default function App() {
         registeredAt: new Date().toISOString(),
         error: '',
         loading: false,
-        message: 'Android push er aktiv og token er gemt.',
+        message: 'Push er aktiv og token er gemt.',
       }));
     } catch (notificationError) {
       setNotificationState((current) => ({
         ...current,
-        error: notificationError.message || 'Android push kunne ikke aktiveres.',
+        error: notificationError.message || 'Push kunne ikke aktiveres.',
         loading: false,
       }));
     }
   }, [session?.token]);
 
-  const closeAndroidNotificationPrompt = useCallback(async () => {
+  const closeNotificationPrompt = useCallback(async () => {
     setNotificationPromptVisible(false);
-    await SessionStore.setItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
+    await SessionStore.setItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
   }, []);
 
-  const enableAndroidNotificationsFromPrompt = useCallback(async () => {
+  const enablePushNotificationsFromPrompt = useCallback(async () => {
     setNotificationPromptVisible(false);
-    await SessionStore.setItemAsync(ANDROID_NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
-    await enableAndroidNotifications();
-  }, [enableAndroidNotifications]);
+    await SessionStore.setItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
+    await enablePushNotifications();
+  }, [enablePushNotifications]);
 
-  const sendAndroidNotificationTest = useCallback(async () => {
+  const sendNotificationTest = useCallback(async () => {
     if (!session?.token) {
       setNotificationState((current) => ({
         ...current,
@@ -2623,7 +2626,7 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           title: 'Studos tester lige 🔔',
-          body: 'Hvis den her lander på Android, er push-vejen åben.',
+          body: 'Hvis den her lander, er push-vejen åben.',
         }),
       });
 
@@ -2642,7 +2645,7 @@ export default function App() {
     }
   }, [session?.token]);
 
-  const disableAndroidNotifications = useCallback(async () => {
+  const disablePushNotifications = useCallback(async () => {
     if (!session?.token) {
       setNotificationState((current) => ({
         ...current,
@@ -3151,7 +3154,7 @@ export default function App() {
                   onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
-                  onEnableAndroidNotifications={enableAndroidNotifications}
+                  onEnablePushNotifications={enablePushNotifications}
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
                 onEmergencyContactVisibilityChange={updateEmergencyContactVisibility}
@@ -3164,8 +3167,8 @@ export default function App() {
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
-                  onSendAndroidNotificationTest={sendAndroidNotificationTest}
-                  onDisableAndroidNotifications={disableAndroidNotifications}
+                  onSendNotificationTest={sendNotificationTest}
+                  onDisablePushNotifications={disablePushNotifications}
                   onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
@@ -3202,7 +3205,7 @@ export default function App() {
                   onOpenCalendar={openCalendar}
                   onCreateEvent={createCalendarEvent}
                   onDeleteEvent={deleteCalendarEvent}
-                  onEnableAndroidNotifications={enableAndroidNotifications}
+                  onEnablePushNotifications={enablePushNotifications}
                   onBlockMember={blockClassMember}
                   onCapsBalanceChange={updateActiveMemberCapsBalance}
                 onEmergencyContactVisibilityChange={updateEmergencyContactVisibility}
@@ -3215,8 +3218,8 @@ export default function App() {
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
-                  onSendAndroidNotificationTest={sendAndroidNotificationTest}
-                  onDisableAndroidNotifications={disableAndroidNotifications}
+                  onSendNotificationTest={sendNotificationTest}
+                  onDisablePushNotifications={disablePushNotifications}
                   onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
                   pinnedContent={pinnedContent}
@@ -3247,11 +3250,11 @@ export default function App() {
                 setSidebarOpen(false);
               }}
             />
-            <AndroidNotificationPromptModal
+            <NotificationPromptModal
               loading={notificationState.loading}
               visible={notificationPromptVisible}
-              onDismiss={closeAndroidNotificationPrompt}
-              onEnable={enableAndroidNotificationsFromPrompt}
+              onDismiss={closeNotificationPrompt}
+              onEnable={enablePushNotificationsFromPrompt}
             />
             <WeeklyCheckInRewardModal
               reward={weeklyCheckInReward}
@@ -3424,7 +3427,7 @@ function AppTabScreen({
   onOpenCalendar,
   onCreateEvent,
   onDeleteEvent,
-  onEnableAndroidNotifications,
+  onEnablePushNotifications,
   onBlockMember,
   onCapsBalanceChange,
   onOpenDirectChat,
@@ -3438,8 +3441,8 @@ function AppTabScreen({
   onReportEvent,
   onRespondToEvent,
   onRefreshClassData,
-  onSendAndroidNotificationTest,
-  onDisableAndroidNotifications,
+  onSendNotificationTest,
+  onDisablePushNotifications,
   onOpenSystemAppSettings,
   onUpdateEvent,
   pinnedContent,
@@ -3622,9 +3625,9 @@ function AppTabScreen({
         notificationState={notificationState}
         schoolClass={schoolClass}
         sessionToken={sessionToken}
-        onEnableAndroidNotifications={onEnableAndroidNotifications}
-        onSendAndroidNotificationTest={onSendAndroidNotificationTest}
-        onDisableAndroidNotifications={onDisableAndroidNotifications}
+        onEnablePushNotifications={onEnablePushNotifications}
+        onSendNotificationTest={onSendNotificationTest}
+        onDisablePushNotifications={onDisablePushNotifications}
         onOpenSystemAppSettings={onOpenSystemAppSettings}
         onLogout={onLogout}
         onDeleteAccount={onDeleteAccount}
@@ -16083,9 +16086,9 @@ function SettingsScreen({
   notificationState,
   schoolClass,
   sessionToken,
-  onEnableAndroidNotifications,
-  onSendAndroidNotificationTest,
-  onDisableAndroidNotifications,
+  onEnablePushNotifications,
+  onSendNotificationTest,
+  onDisablePushNotifications,
   onOpenSystemAppSettings,
   onLogout,
   onDeleteAccount,
@@ -16178,7 +16181,7 @@ function SettingsScreen({
 
   const handleToggleNotifications = useCallback(() => {
     if (notificationsActive) {
-      onDisableAndroidNotifications?.();
+      onDisablePushNotifications?.();
       return;
     }
 
@@ -16187,8 +16190,8 @@ function SettingsScreen({
       return;
     }
 
-    onEnableAndroidNotifications?.();
-  }, [notificationsActive, permissionStatus, onDisableAndroidNotifications, onEnableAndroidNotifications, onOpenSystemAppSettings]);
+    onEnablePushNotifications?.();
+  }, [notificationsActive, permissionStatus, onDisablePushNotifications, onEnablePushNotifications, onOpenSystemAppSettings]);
 
   const handleLogout = useCallback(async () => {
     if (logoutLoading || !onLogout) {
@@ -16309,11 +16312,11 @@ function SettingsScreen({
         {notificationState?.error ? <Text style={styles.errorText}>{notificationState.error}</Text> : null}
         {notificationState?.message ? <Text style={styles.successText}>{notificationState.message}</Text> : null}
 
-        {!ANDROID_NOTIFICATIONS_ENABLED ? (
+        {!PUSH_NOTIFICATIONS_ENABLED ? (
           <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Kun Android lige nu</Text>
+            <Text style={styles.noticeTitle}>Kun native app</Text>
             <Text style={styles.noticeText}>
-              Push-notifikationer er aktiveret for Android. iOS-understøttelse rulles ud, så snart Apple Developer-kontoen er klar.
+              Push-notifikationer kræver den installerede iOS- eller Android-app.
             </Text>
           </View>
         ) : null}
@@ -16332,12 +16335,12 @@ function SettingsScreen({
           <Ionicons name="chevron-forward" size={18} color="#65748b" />
         </Pressable>
 
-        {ANDROID_NOTIFICATIONS_ENABLED && notificationsActive ? (
+        {PUSH_NOTIFICATIONS_ENABLED && notificationsActive ? (
           <>
             <Button
               label="Send testnotifikation"
               loading={notificationState?.testLoading}
-              onPress={onSendAndroidNotificationTest}
+              onPress={onSendNotificationTest}
             />
             <View style={styles.settingsNotificationTokenBox}>
               <Text style={styles.settingsNotificationTokenLabel}>Expo push token</Text>
@@ -18361,8 +18364,8 @@ function LockBadge({ style }) {
   );
 }
 
-function AndroidNotificationPromptModal({ loading, visible, onDismiss, onEnable }) {
-  if (!ANDROID_NOTIFICATIONS_ENABLED) {
+function NotificationPromptModal({ loading, visible, onDismiss, onEnable }) {
+  if (!PUSH_NOTIFICATIONS_ENABLED) {
     return null;
   }
 

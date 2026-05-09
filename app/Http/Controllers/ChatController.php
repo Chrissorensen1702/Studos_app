@@ -1150,16 +1150,16 @@ class ChatController extends Controller
             ->where('chat_participants.conversation_id', $chat->id)
             ->where('chat_participants.status', 'active')
             ->where('chat_participants.member_id', '!=', $sender->id)
-            ->where('member_push_tokens.platform', 'android')
+            ->whereIn('member_push_tokens.platform', ['android', 'ios'])
             ->whereNull('member_push_tokens.disabled_at')
             ->where(function ($query) use ($now): void {
                 $query
                     ->whereNull('chat_participants.muted_until')
                     ->orWhere('chat_participants.muted_until', '<=', $now);
             })
-            ->pluck('member_push_tokens.expo_push_token')
+            ->get(['member_push_tokens.expo_push_token', 'member_push_tokens.platform'])
             ->filter()
-            ->unique()
+            ->unique('expo_push_token')
             ->values();
 
         if ($tokens->isEmpty()) {
@@ -1174,21 +1174,29 @@ class ChatController extends Controller
         $chatTitle = $senderName;
         $pushBody = $chatContext ? $chatContext.' · '.$preview : $preview;
         $messages = $tokens
-            ->map(fn (string $token): array => [
-                'to' => $token,
-                'sound' => 'default',
-                'channelId' => 'studos-default',
-                'title' => $chatTitle,
-                'body' => $pushBody,
-                'data' => [
-                    'type' => 'chat_message',
-                    'screen' => 'chat',
-                    'conversationId' => $chat->id,
-                    'messageId' => $messageId,
-                    'senderMemberId' => $sender->id,
-                ],
-            ])
+            ->map(function (object $token) use ($chat, $chatTitle, $messageId, $pushBody, $sender): array {
+                $message = [
+                    'to' => $token->expo_push_token,
+                    'sound' => 'default',
+                    'title' => $chatTitle,
+                    'body' => $pushBody,
+                    'data' => [
+                        'type' => 'chat_message',
+                        'screen' => 'chat',
+                        'conversationId' => $chat->id,
+                        'messageId' => $messageId,
+                        'senderMemberId' => $sender->id,
+                    ],
+                ];
+
+                if ($token->platform === 'android') {
+                    $message['channelId'] = 'studos-default';
+                }
+
+                return $message;
+            })
             ->all();
+        $expoPushTokens = $tokens->pluck('expo_push_token')->values();
 
         try {
             $response = Http::timeout(5)
@@ -1205,7 +1213,7 @@ class ChatController extends Controller
                 return;
             }
 
-            $this->disableInvalidExpoPushTokens($response->json(), $tokens);
+            $this->disableInvalidExpoPushTokens($response->json(), $expoPushTokens);
         } catch (\Throwable $exception) {
             Log::warning('Expo chat push exception.', [
                 'conversation_id' => $chat->id,

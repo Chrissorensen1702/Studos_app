@@ -46,8 +46,8 @@ Se ogsaa:
   Caps-escrow, resultatbekraeftelse, dommerflow, arkiv og 24 timers svarfrist.
 - Dyst opdaterer nu mere levende via Reverb realtime, polling fallback,
   foreground-refresh og optimistisk action-feedback i knapperne.
-- Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
-  er paa plads.
+- Notifikationer for dyster er stadig parkeret som produktflow, men
+  iOS/Android push-token registrering og chat-push er nu klar i kodebasen.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 - Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
   til én klasse. Dette haandhaeves i backend-validering og database-indekset
@@ -63,8 +63,8 @@ Se ogsaa:
 - Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
   (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
   dimensionsbaseret inset-beregning uden externe biblioteker.
-- Android push-token registrering er bevidst platform-gated til `android`,
-  indtil Apple Developer/APNs-flowet er klar.
+- Push-token registrering accepterer nu `android` og `ios`; iOS kraever APNs
+  credentials i EAS foer en rigtig TestFlight/enheds-test.
 - Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
   nu throttlet 30/min.
 
@@ -171,8 +171,7 @@ Kernen er:
 - Connections via personlig Studos-kode.
 - Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
   Klassedyst, ugens gode gerning og weekly check-in.
-- Android push-token registrering og chat-push. iOS/APNs er parkeret, indtil
-  Apple Developer/provisioning er klar.
+- iOS/Android push-token registrering og chat-push via Expo Push Service.
 - Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
   synlighedsregler (`private`/`class`/`public`), soft-delete, rapportering og
   album-previewdata til dynamiske cover-collager.
@@ -469,8 +468,7 @@ Dyst:
 - Realtime bruger private Reverb-kanaler pr. medlem, med polling fallback og
   foreground-refresh, saa Dyst-siden opdaterer uden at brugeren skal forlade
   siden.
-- Notifikationer for dyster er bevidst parkeret, indtil Apple Developer/push-flow
-  er paa plads.
+- Notifikationer for dyster er bevidst parkeret som separat produktflow.
 
 Walls:
 
@@ -516,16 +514,16 @@ iOS:
 - Produktbuild fjerner lokal netvaerkspermission automatisk.
 - Development variant kan bruge lokal netvaerkspermission til dev-server.
 - Photo Library permission forklarer profilbillede og eventcover.
-- iOS push/APNs er bevidst parkeret, indtil Apple Developer/provisioning er
-  paa plads.
+- iOS push bruger `expo-notifications`, `aps-environment` entitlement og Expo
+  Push Service. APNs key/cert skal oprettes/uploades via EAS credentials.
 
 Android:
 
 - Package: `dk.studenterapp.mobile`.
 - Development package: `dk.studenterapp.mobile.dev`.
 - Firebase config findes for begge varianter.
-- Android notifications slaas kun til, naar
-  `STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1`.
+- Android Firebase config auto-vaelges til Android builds; lokal config-check
+  kan stadig koeres med `STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1`.
 - `android.permission.RECORD_AUDIO` er blokeret, fordi appen ikke har en reel
   mikrofonfeature lige nu.
 
@@ -562,7 +560,8 @@ Det der ser godt ud:
 - Chat/events har filtering, rapportering, blokering og throttling.
 - Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
   private challenge-detaljer i feedet.
-- Android push er feature-gated og ikke aktiv for iOS.
+- Push er native-only og klar til baade iOS og Android, naar EAS credentials
+  er sat for platformen.
 - Android mikrofonpermission er nu fjernet/blokeret.
 - Backend koerer paa HTTPS i Cloud.
 - Caps har ingen pengevaerdi, kan ikke koebes, saelges, veksles eller bruges til
@@ -682,7 +681,7 @@ Resultat:
 - `apps/mobile/App.js` parser OK.
 - `StudosController.php` lint OK.
 - Walls-endpoints og gallery-migrationer verificeret i kodebasen.
-- Push-token platform-validering er Android-only, indtil iOS/APNs goeres klar.
+- Push-token platform-validering accepterer nu Android og iOS.
 - Rate limit tilfojet paa `/members/code/{code}` (30/min).
 - Device adaptation verificeret: top-bar og footer bruger nu dimensionsbaserede
   insets uden externe native biblioteker.

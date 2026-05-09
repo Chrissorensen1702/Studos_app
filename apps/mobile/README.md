@@ -196,7 +196,35 @@ Android keyboard-layout er sat til `resize` i `app.json`. Chatinputfeltet er
 tilpasset keyboard paa baade iOS og Android, men skal stadig regressions-testes
 paa rigtige enheder efter stoerre layoutaendringer.
 
-## Android Push / Firebase
+## Push / Expo Notifications
+
+Appen bruger `expo-notifications` og Expo Push Service til baade iOS og
+Android. Klienten registrerer en `ExpoPushToken`, sender `platform: ios` eller
+`platform: android` til Laravel, og backend sender chat-/test-push via
+`https://exp.host/--/api/v2/push/send`.
+
+### iOS Push / APNs
+
+iOS kraever en native build med push entitlement og APNs credentials. Koden er
+klargjort med `expo-notifications` config plugin og `aps-environment` i det
+lokale Xcode-projekt.
+
+1. Log ind i EAS CLI med den Expo-konto, der ejer projektet.
+2. Koer `npx eas-cli credentials --platform ios` fra `apps/mobile`.
+3. Vaelg bundle identifier `dk.studenterapp.mobile`.
+4. Opret/brug en Apple Push Notifications service key, naar EAS spoerger.
+5. Byg en ny iOS intern/TestFlight build:
+
+```bash
+npm run mobile:build:ios
+```
+
+Foerste rigtige test boer koeres paa fysisk iPhone/TestFlight eller en intern
+iOS build. Naar appen har hentet en `ExpoPushToken`, kan `Send
+testnotifikation` i Indstillinger bruges til at teste vejen gennem Laravel og
+Expo Push Service.
+
+### Android Push / Firebase
 
 Push paa Android kraever Firebase/FCM native config. Metro/dev-server kan teste
 JavaScript-flowet, men den native Android app skal vaere bygget med korrekt
@@ -268,9 +296,9 @@ Status pr. 2026-04-28:
 
 ## Fortsaet Herfra
 
-1. Installer seneste Android EAS preview/APK naar buildet er faerdigt, og test
-   notifikationer mellem to Android-enheder: permission popup, token-gemning,
-   chat-push, notification-icon og tap ind i appen.
+1. Installer seneste iOS/Android EAS build naar buildet er faerdigt, og test
+   notifikationer mellem to enheder: permission popup, token-gemning,
+   chat-push, notification-icon paa Android og tap ind i appen.
 2. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
    Reverb paa `8080`: send, read-status, realtime/polling, swipe tilbage,
    long-press, blokering, rapportering og keyboard paa iOS/Android.
@@ -313,8 +341,9 @@ foerst med `npm run mobile:start`, saa appen kan hente JavaScript fra port
 
 Brug `Release`, naar appen skal koere standalone uden Metro.
 
-Hvis Xcode beder om signing/team, vaelg din personlige Apple-konto som Team.
-Push-notifikationer er ikke sat op endnu og parkeres til senere.
+Hvis Xcode beder om signing/team, vaelg dit Apple Developer Team. Push
+kraever at App ID/provisioning har push capability og at EAS/APNs credentials er
+sat, foer Expo Push Service kan levere til iOS.
 
 Projektet har en lokal `tools/pod` wrapper, saa Expo kan finde CocoaPods paa
 denne Mac uden at kraeve system-wide Ruby installation.

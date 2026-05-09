@@ -87,19 +87,17 @@ module.exports = ({ config: staticConfig }) => {
     ];
   }
 
-  if (enableAndroidNotifications) {
-    config.plugins = [
-      ...(config.plugins ?? []),
-      [
-        'expo-notifications',
-        {
-          icon: './assets/notification-icon.png',
-          color: '#EF7476',
-          defaultChannel: 'studos-default',
-        },
-      ],
-    ];
-  }
+  config.plugins = [
+    ...(config.plugins ?? []),
+    [
+      'expo-notifications',
+      {
+        icon: './assets/notification-icon.png',
+        color: '#EF7476',
+        defaultChannel: 'studos-default',
+      },
+    ],
+  ];
 
   return config;
 };

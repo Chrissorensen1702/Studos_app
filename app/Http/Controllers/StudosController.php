@@ -2050,7 +2050,7 @@ class StudosController extends Controller
         $member = $this->authenticatedMemberFromRequest($request);
         $data = $request->validate([
             'expoPushToken' => ['required', 'string', 'max:255'],
-            'platform' => ['required', Rule::in(['android'])],
+            'platform' => ['required', Rule::in(['android', 'ios'])],
             'deviceName' => ['nullable', 'string', 'max:190'],
             'projectId' => ['nullable', 'string', 'max:190'],
             'appVariant' => ['nullable', 'string', 'max:64'],
@@ -2111,24 +2111,31 @@ class StudosController extends Controller
         ]);
         $tokens = DB::table('member_push_tokens')
             ->where('member_id', $member->id)
-            ->where('platform', 'android')
+            ->whereIn('platform', ['android', 'ios'])
             ->whereNull('disabled_at')
-            ->pluck('expo_push_token');
+            ->get(['expo_push_token', 'platform']);
 
-        abort_if($tokens->isEmpty(), 422, 'Der er ikke gemt en Android push-token endnu.');
+        abort_if($tokens->isEmpty(), 422, 'Der er ikke gemt en push-token endnu.');
 
         $messages = $tokens
-            ->map(fn (string $token): array => [
-                'to' => $token,
-                'sound' => 'default',
-                'channelId' => 'studos-default',
-                'title' => $data['title'] ?? 'Studos test',
-                'body' => $data['body'] ?? 'Hvis du ser den her, virker Android push.',
-                'data' => [
-                    'type' => 'test',
-                    'screen' => 'overview',
-                ],
-            ])
+            ->map(function (object $token) use ($data): array {
+                $message = [
+                    'to' => $token->expo_push_token,
+                    'sound' => 'default',
+                    'title' => $data['title'] ?? 'Studos test',
+                    'body' => $data['body'] ?? 'Hvis du ser den her, virker push.',
+                    'data' => [
+                        'type' => 'test',
+                        'screen' => 'overview',
+                    ],
+                ];
+
+                if ($token->platform === 'android') {
+                    $message['channelId'] = 'studos-default';
+                }
+
+                return $message;
+            })
             ->values()
             ->all();
 
@@ -2141,7 +2148,7 @@ class StudosController extends Controller
         return response()->json([
             'ok' => true,
             'sent' => count($messages),
-            'message' => 'Testnotifikation sendt til Android.',
+            'message' => 'Testnotifikation sendt.',
             'expoResponse' => $response->json(),
         ]);
     }
