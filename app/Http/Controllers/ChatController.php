@@ -4,13 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Events\ChatMessageCreated;
 use App\Support\ContentModeration;
+use App\Support\PushNotifier;
 use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -178,6 +177,13 @@ class ChatController extends Controller
                 'memberIds' => $memberIds->all(),
             ]);
         });
+
+        $this->sendGroupChatInvitePush(
+            $conversationId,
+            $title,
+            $member,
+            $memberIds->all(),
+        );
 
         return response()->json([
             'conversation' => $this->serializeConversationForMember($conversationId, $member),
@@ -461,6 +467,13 @@ class ChatController extends Controller
                 'updated_at' => $now,
             ]);
         });
+
+        $this->sendGroupChatInvitePush(
+            $chat->id,
+            $chat->title,
+            $member,
+            $newMemberIds->all(),
+        );
 
         return response()->json([
             'ok' => true,
@@ -1140,108 +1153,73 @@ class ChatController extends Controller
 
     private function sendChatPushNotifications(object $chat, object $sender, string $messageId, string $body): void
     {
-        if (! Schema::hasTable('member_push_tokens')) {
-            return;
-        }
-
         $now = now()->format('Y-m-d H:i:s');
-        $tokens = DB::table('chat_participants')
-            ->join('member_push_tokens', 'member_push_tokens.member_id', '=', 'chat_participants.member_id')
-            ->where('chat_participants.conversation_id', $chat->id)
-            ->where('chat_participants.status', 'active')
-            ->where('chat_participants.member_id', '!=', $sender->id)
-            ->whereIn('member_push_tokens.platform', ['android', 'ios'])
-            ->whereNull('member_push_tokens.disabled_at')
+        $recipientIds = DB::table('chat_participants')
+            ->where('conversation_id', $chat->id)
+            ->where('status', 'active')
+            ->where('member_id', '!=', $sender->id)
             ->where(function ($query) use ($now): void {
                 $query
-                    ->whereNull('chat_participants.muted_until')
-                    ->orWhere('chat_participants.muted_until', '<=', $now);
+                    ->whereNull('muted_until')
+                    ->orWhere('muted_until', '<=', $now);
             })
-            ->get(['member_push_tokens.expo_push_token', 'member_push_tokens.platform'])
-            ->filter()
-            ->unique('expo_push_token')
-            ->values();
+            ->pluck('member_id')
+            ->map(fn ($id): string => (string) $id)
+            ->all();
 
-        if ($tokens->isEmpty()) {
+        if (empty($recipientIds)) {
             return;
         }
 
         $senderName = $sender->display_name ?? 'Studos';
-        $preview = Str::limit(trim(preg_replace('/\s+/', ' ', $body)), 120);
+        $preview = Str::limit(trim((string) preg_replace('/\s+/', ' ', $body)), 120);
         $chatContext = $chat->type === 'group'
             ? (blank($chat->title) ? 'Gruppechat' : $chat->title)
             : null;
-        $chatTitle = $senderName;
-        $pushBody = $chatContext ? $chatContext.' · '.$preview : $preview;
-        $messages = $tokens
-            ->map(function (object $token) use ($chat, $chatTitle, $messageId, $pushBody, $sender): array {
-                $message = [
-                    'to' => $token->expo_push_token,
-                    'sound' => 'default',
-                    'title' => $chatTitle,
-                    'body' => $pushBody,
-                    'data' => [
-                        'type' => 'chat_message',
-                        'screen' => 'chat',
-                        'conversationId' => $chat->id,
-                        'messageId' => $messageId,
-                        'senderMemberId' => $sender->id,
-                    ],
-                ];
 
-                if ($token->platform === 'android') {
-                    $message['channelId'] = 'studos-default';
-                }
-
-                return $message;
-            })
-            ->all();
-        $expoPushTokens = $tokens->pluck('expo_push_token')->values();
-
-        try {
-            $response = Http::timeout(5)
-                ->acceptJson()
-                ->post('https://exp.host/--/api/v2/push/send', $messages);
-
-            if ($response->failed()) {
-                Log::warning('Expo chat push failed.', [
-                    'conversation_id' => $chat->id,
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                ]);
-
-                return;
-            }
-
-            $this->disableInvalidExpoPushTokens($response->json(), $expoPushTokens);
-        } catch (\Throwable $exception) {
-            Log::warning('Expo chat push exception.', [
-                'conversation_id' => $chat->id,
-                'error' => $exception->getMessage(),
-            ]);
-        }
+        PushNotifier::send(PushNotifier::CAT_CHAT_MESSAGE, $recipientIds, [
+            'title' => $senderName,
+            'body' => $chatContext ? $chatContext.' · '.$preview : $preview,
+            'data' => [
+                'conversationId' => $chat->id,
+                'messageId' => $messageId,
+                'senderMemberId' => $sender->id,
+            ],
+            'sourceType' => 'chat_message',
+            'sourceId' => $messageId,
+        ]);
     }
 
-    private function disableInvalidExpoPushTokens(mixed $expoResponse, $tokens): void
+    /**
+     * @param  iterable<int,string>  $newMemberIds
+     */
+    private function sendGroupChatInvitePush(string $conversationId, ?string $title, object $invitedBy, iterable $newMemberIds): void
     {
-        $tickets = collect($expoResponse['data'] ?? []);
-        $invalidTokens = $tickets
+        $recipients = collect($newMemberIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->reject(fn (string $id): bool => $id === (string) $invitedBy->id)
+            ->unique()
             ->values()
-            ->filter(fn ($ticket, int $index): bool => ($ticket['details']['error'] ?? null) === 'DeviceNotRegistered'
-                && filled($tokens->get($index)))
-            ->map(fn ($ticket, int $index): string => $tokens->get($index))
-            ->values();
+            ->all();
 
-        if ($invalidTokens->isEmpty()) {
+        if (empty($recipients)) {
             return;
         }
 
-        DB::table('member_push_tokens')
-            ->whereIn('expo_push_token', $invalidTokens)
-            ->update([
-                'disabled_at' => now()->format('Y-m-d H:i:s'),
-                'updated_at' => now()->format('Y-m-d H:i:s'),
-            ]);
+        $inviterName = $invitedBy->display_name ?? 'Et klassemedlem';
+        $groupName = blank($title) ? 'Gruppechat' : $title;
+
+        PushNotifier::send(PushNotifier::CAT_GROUP_CHAT_INVITE, $recipients, [
+            'title' => 'Du er tilfoejet i en gruppechat',
+            'body' => $inviterName.' tilfoejede dig i "'.$groupName.'".',
+            'data' => [
+                'conversationId' => $conversationId,
+                'invitedByMemberId' => $invitedBy->id,
+            ],
+            'sourceType' => 'group_chat_invite',
+            'sourceId' => $conversationId,
+        ]);
     }
 
     private function directPairKey(string $firstMemberId, string $secondMemberId): string

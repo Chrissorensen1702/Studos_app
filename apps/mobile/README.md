@@ -200,29 +200,51 @@ paa rigtige enheder efter stoerre layoutaendringer.
 
 Appen bruger `expo-notifications` og Expo Push Service til baade iOS og
 Android. Klienten registrerer en `ExpoPushToken`, sender `platform: ios` eller
-`platform: android` til Laravel, og backend sender chat-/test-push via
+`platform: android` til Laravel, og backend sender alle push-notifikationer via
+`App\Support\PushNotifier` og Expo Push Service
 `https://exp.host/--/api/v2/push/send`.
+
+Aktuel status pr. 2026-05-09:
+
+- iOS/APNs push key er oprettet i EAS for bundle id
+  `dk.studenterapp.mobile`.
+- iOS push capability er synkroniseret hos Apple, og preview-build har hentet
+  Expo push token paa fysisk iPhone.
+- Testnotifikation fra Indstillinger er verificeret paa fysisk iPhone.
+- Chat-push er verificeret mod Cloud API fra en anden bruger/enhed.
+- Android Firebase/FCM setup er fortsat aktivt for production og
+  development-client.
+- Backend-notifikationer er udvidet til 17 kategorier: chat, gruppechat-invite,
+  dyster, event-invitationer/aendringer/reminders, RSVP-reminders, galleri,
+  connections, ugens gode gerning og weekly streak.
+- Mobilappen har per-kategori opt-out under Indstillinger -> "Hvad vil du have
+  notifikation om?".
+
+Push er dermed klar som platform for iOS og Android. Test-push og chat-push er
+verificeret paa fysisk iPhone; de nye 17 kategorier skal nu smoke-testes i
+preview/internal builds paa iOS og Android. Klasse-announcements, Caps-optjent
+digest og admin/moderation-pushes er bevidst parkeret til senere.
 
 ### iOS Push / APNs
 
 iOS kraever en native build med push entitlement og APNs credentials. Koden er
-klargjort med `expo-notifications` config plugin og `aps-environment` i det
-lokale Xcode-projekt.
+klargjort med `expo-notifications` config plugin og `aps-environment`, og EAS
+har en Apple Push Notifications key til projektet.
 
 1. Log ind i EAS CLI med den Expo-konto, der ejer projektet.
 2. Koer `npx eas-cli credentials --platform ios` fra `apps/mobile`.
 3. Vaelg bundle identifier `dk.studenterapp.mobile`.
-4. Opret/brug en Apple Push Notifications service key, naar EAS spoerger.
+4. Brug den eksisterende Apple Push Notifications key, eller opret en ny hvis
+   EAS melder at den mangler.
 5. Byg en ny iOS intern/TestFlight build:
 
 ```bash
 npm run mobile:build:ios
 ```
 
-Foerste rigtige test boer koeres paa fysisk iPhone/TestFlight eller en intern
-iOS build. Naar appen har hentet en `ExpoPushToken`, kan `Send
-testnotifikation` i Indstillinger bruges til at teste vejen gennem Laravel og
-Expo Push Service.
+Fysisk iPhone/TestFlight eller en intern iOS build skal bruges til reel test.
+Naar appen har hentet en `ExpoPushToken`, kan `Send testnotifikation` i
+Indstillinger bruges til at teste vejen gennem Laravel og Expo Push Service.
 
 ### Android Push / Firebase
 
@@ -296,20 +318,24 @@ Status pr. 2026-04-28:
 
 ## Fortsaet Herfra
 
-1. Installer seneste iOS/Android EAS build naar buildet er faerdigt, og test
-   notifikationer mellem to enheder: permission popup, token-gemning,
-   chat-push, notification-icon paa Android og tap ind i appen.
-2. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
+1. Byg nye preview/internal builds til iOS og Android og smoke-test
+   system-popup, push-toggle, kategori-opt-out og chat-push paa fysiske
+   enheder.
+2. Smoke-test de nye pushkategorier: Dyst, events, reminders, connections,
+   galleri, ugens gode gerning og weekly streak.
+3. Bekraeft at Laravel Scheduler koerer i Cloud, saa reminder-kommandoerne
+   bliver afviklet.
+4. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
    Reverb paa `8080`: send, read-status, realtime/polling, swipe tilbage,
    long-press, blokering, rapportering og keyboard paa iOS/Android.
-3. Lav admin/moderationsside, saa `member_reports`,
+5. Lav admin/moderationsside, saa `member_reports`,
    `moderation_violations`, blocks og chat-events kan gennemgaas og handles
    paa foer drift.
-4. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
+6. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
    invitationer, RSVP og tomme states.
-5. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
+7. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
    tekster, testpersoner og ufaerdige sidebar-sider.
-6. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
+8. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
    privacy/terms/support links, demo-login til review og korrekt content
    rating for brugerchat/UGC.
 

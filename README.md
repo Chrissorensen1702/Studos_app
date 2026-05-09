@@ -4,8 +4,8 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-08 efter aktivitetslog, dynamisk
-Overblik-preview, GDPR-filtrering, activity-feed indexes og seneste
+Status er opdateret 2026-05-09 efter iOS/APNs setup, verificeret iOS
+test-push, verificeret chat-push mod Cloud API og seneste
 sikkerhedsstramninger.
 
 Se ogsaa:
@@ -46,8 +46,16 @@ Se ogsaa:
   Caps-escrow, resultatbekraeftelse, dommerflow, arkiv og 24 timers svarfrist.
 - Dyst opdaterer nu mere levende via Reverb realtime, polling fallback,
   foreground-refresh og optimistisk action-feedback i knapperne.
-- Notifikationer for dyster er stadig parkeret som produktflow, men
-  iOS/Android push-token registrering og chat-push er nu klar i kodebasen.
+- Push er live i native flowet: iOS/APNs og Android/FCM credentials er sat via
+  EAS/Expo, token-registrering virker for `ios` og `android`, test-push er
+  verificeret paa fysisk iPhone, og chat-push er verificeret mod Cloud API.
+- Push-notifikationer er nu udvidet til 17 kategorier (chat, gruppechat-invite,
+  dyst-invite/response/action/result/expiring, event-invite/change/reminder,
+  RSVP-reminder, gallery-new/photos, connection-request/accepted, good-deed-
+  reminder, streak-reminder). Alle koerer via `App\Support\PushNotifier` med
+  per-kategori opt-out og dedup; reminders koerer som artisan-jobs i
+  `app/Support/NotificationScheduler.php`. Detaljer i afsnittet
+  "Notifikationer" laengere nede.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 - Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
   til én klasse. Dette haandhaeves i backend-validering og database-indekset
@@ -63,8 +71,8 @@ Se ogsaa:
 - Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
   (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
   dimensionsbaseret inset-beregning uden externe biblioteker.
-- Push-token registrering accepterer nu `android` og `ios`; iOS kraever APNs
-  credentials i EAS foer en rigtig TestFlight/enheds-test.
+- Push-token registrering accepterer nu `android` og `ios`; iOS/APNs
+  credentials er oprettet i EAS for `dk.studenterapp.mobile`.
 - Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
   nu throttlet 30/min.
 
@@ -171,7 +179,10 @@ Kernen er:
 - Connections via personlig Studos-kode.
 - Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
   Klassedyst, ugens gode gerning og weekly check-in.
-- iOS/Android push-token registrering og chat-push via Expo Push Service.
+- iOS/Android push-token registrering, test-push og fuld notifikations-suite
+  via Expo Push Service. Backend sender alt via `App\Support\PushNotifier` til
+  Expo, som leverer videre via APNs eller FCM. Per-kategori opt-out gemmes i
+  `member_notification_preferences`; dedup via `notification_dispatch_log`.
 - Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
   synlighedsregler (`private`/`class`/`public`), soft-delete, rapportering og
   album-previewdata til dynamiske cover-collager.
@@ -237,7 +248,12 @@ POST /api/chat/messages/{message}/report
 DELETE /api/chat/messages/{message}
 DELETE /api/members/me
 POST /api/notifications/push-token
+POST /api/notifications/push-token/disable
 POST /api/notifications/test
+GET  /api/notifications/preferences
+PUT  /api/notifications/preferences
+POST /api/connections/request
+POST /api/connections/{connection}/respond
 GET  /api/galleries
 POST /api/galleries
 PUT  /api/galleries/{gallery}
@@ -261,6 +277,87 @@ oprettede events, oprettede albums, uploadede billeder, vundne `Mod hinanden`
 dyster og gennemfoerte challenges. Endpointet sender kun noedvendige felter
 til mobilappen, filtrerer blokerede/slettede profiler vaek, udelader private
 events/albums brugeren ikke er en del af, og undgaar challenge-detaljer.
+
+## Notifikationer
+
+Push-notifikationer leveres via Expo Push Service og koeres centralt gennem
+`App\Support\PushNotifier::send($category, $memberIds, $options)`. Servicen
+respekterer per-kategori opt-out, deduplikerer pushes via
+`notification_dispatch_log`, deaktiverer ugyldige tokens automatisk, og
+afkorter titler til 80 tegn og bodyer til 240 tegn (Apple/Google grænser).
+
+Reminders koerer som artisan-jobs i `App\Support\NotificationScheduler` og er
+schedulet i `routes/console.php`.
+
+Komplet kategorioversigt med praecise titler og bodyer findes i
+`docs/Studos_Notifikationer.md`.
+
+### Kategorier (17 stk.)
+
+| Kategori | Udloeses ved |
+| --- | --- |
+| `chat_message` | Ny besked i samtalen (mute respekteres). |
+| `group_chat_invite` | Tilfoejet til gruppechat (create + addParticipants). |
+| `duel_invite` | Modparten udfordres med en ny dyst/challenge. |
+| `duel_response` | Modparten accepterer eller afviser. |
+| `duel_action_required` | Modpart skal bekraefte resultat eller dommer skal afgoere. |
+| `duel_result` | Dyst er afsluttet (begge parter notificeres). |
+| `duel_expiring` | Cron: deadline_at falder inden for ~2 timer. |
+| `event_invite` | Event oprettet eller nye medlemmer tilfoejet til invite. |
+| `event_change` | Dato, tidspunkt eller sted aendret paa et event. |
+| `event_reminder` | Cron: 24t og 2t foer event starts_at/event_date. |
+| `rsvp_reminder` | Cron: 2-4 dage foer event hvis bruger ikke har svaret RSVP. |
+| `gallery_new` | Nyt offentligt galleri oprettet (audience: everyone/specific). |
+| `gallery_photos` | Nye billeder i offentligt galleri (30-min anti-spam dedup). |
+| `connection_request` | Connection-request modtaget. |
+| `connection_accepted` | Tidligere request er accepteret (inkl. mutual-pending shortcut). |
+| `good_deed_reminder` | Cron: fredag kl. 17:00 hvis ugens gode gerning ikke er claimet. |
+| `streak_reminder` | Cron: dagligt kl. 19:00 hvis streak er paa spil. |
+
+### Cron-schedule
+
+| Kommando | Cadence |
+| --- | --- |
+| `notifications:duels-expiring` | hver time |
+| `notifications:event-reminders` | hver time |
+| `notifications:rsvp-reminders` | dagligt 17:00 |
+| `notifications:good-deed-reminders` | fredag 17:00 |
+| `notifications:streak-reminders` | dagligt 19:00 |
+
+Schedulering kraever at `php artisan schedule:run` koerer hvert minut paa
+serveren (samme krav som dyst-expiry).
+
+### Brugerstyring
+
+Brugere kan slaa hver kategori til/fra under
+**Indstillinger -> "Hvad vil du have notifikation om?"** i mobilappen.
+
+- `GET /api/notifications/preferences` returnerer `{ category: bool }` med
+  defaults (alle `true` hvis ikke gemt).
+- `PUT /api/notifications/preferences` accepterer `{ "preferences": { ... } }`
+  og opdaterer kun de medsendte kategorier.
+- Alle scheduler-jobs respekterer disse opt-outs.
+- Ud over per-kategori er der to overordnede afbrydere bevaret fra tidligere:
+  system-niveau push-permission (iOS/Android indstillinger) og
+  `POST /api/notifications/push-token/disable` (deaktiverer token i DB).
+
+### Tabeller
+
+| Tabel | Formaal |
+| --- | --- |
+| `member_push_tokens` | Eksisterende — Expo-tokens pr. enhed. |
+| `member_notification_preferences` | Per-kategori opt-out (`member_id`, `category`, `enabled`). Unique key paa `(member_id, category)`. |
+| `notification_dispatch_log` | Dedup-historik (`member_id`, `category`, `dedup_key`, `source_type`, `source_id`). Unique key paa `(member_id, dedup_key)` forhindrer duplikat-pushes. |
+
+### Compliance-noter
+
+- **GDPR / dansk lov:** Per-kategori opt-out i UI, alle 17 kategorier er
+  transaktionelle (ingen marketing). Markedsfoeringsloven §10 gaelder ikke.
+- **Apple App Store:** APNs-permission haandteres allerede i Expo-flowet;
+  hver kategori har transaktionel kontekst (ikke marketing).
+- **Google Play:** Android leverer alle pushes via channel `studos-default`.
+  Kanaler kan splittes per kategori senere hvis vi vil eksponere
+  per-kategori System-toggles.
 
 ## Public Landing Page
 
@@ -468,7 +565,8 @@ Dyst:
 - Realtime bruger private Reverb-kanaler pr. medlem, med polling fallback og
   foreground-refresh, saa Dyst-siden opdaterer uden at brugeren skal forlade
   siden.
-- Notifikationer for dyster er bevidst parkeret som separat produktflow.
+- Dyst-notifikationer er koblet paa `PushNotifier` for invitationer,
+  accept/afvis, handling kraeves, resultat og deadline-reminders.
 
 Walls:
 
@@ -515,7 +613,8 @@ iOS:
 - Development variant kan bruge lokal netvaerkspermission til dev-server.
 - Photo Library permission forklarer profilbillede og eventcover.
 - iOS push bruger `expo-notifications`, `aps-environment` entitlement og Expo
-  Push Service. APNs key/cert skal oprettes/uploades via EAS credentials.
+  Push Service. APNs push key er oprettet i EAS credentials for
+  `dk.studenterapp.mobile`.
 
 Android:
 
@@ -560,8 +659,8 @@ Det der ser godt ud:
 - Chat/events har filtering, rapportering, blokering og throttling.
 - Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
   private challenge-detaljer i feedet.
-- Push er native-only og klar til baade iOS og Android, naar EAS credentials
-  er sat for platformen.
+- Push er native-only og klar til baade iOS og Android. iOS test-push og
+  chat-push er verificeret paa fysisk iPhone mod Cloud API.
 - Android mikrofonpermission er nu fjernet/blokeret.
 - Backend koerer paa HTTPS i Cloud.
 - Caps har ingen pengevaerdi, kan ikke koebes, saelges, veksles eller bruges til
@@ -603,9 +702,13 @@ Release-blokkere foer Apple/Google:
 
 - Wallet.
 - Blaa bog.
-- Push-notifikationer for dyster.
 - Backend-persistens for hueklip.
-- Kalender-push.
+- Klasse-announcement/system-push (owner/moderator broadcast og drifts-pushes
+  er bevidst parkeret — opt-out inkluderet i preferences-tabellen senere).
+- Caps-optjent push (digest-version er parkeret indtil aktivitetsmoenster
+  er stoerre).
+- Admin/moderation-pushes (rapport-resultat, fjernet indhold, advarsel) –
+  vente paa admin/moderationsside er klar.
 - Glemt adgangskode/email reset.
 - Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
@@ -634,7 +737,30 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-08 efter aktivitetslog og dynamisk Overblik-preview:
+Senest koert 2026-05-09 efter notifikations-suiten (17 kategorier):
+
+```bash
+php -l app/Support/PushNotifier.php
+php -l app/Support/NotificationScheduler.php
+php -l app/Http/Controllers/StudosController.php
+php -l app/Http/Controllers/ChatController.php
+php -l routes/console.php
+node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
+./vendor/bin/phpunit
+```
+
+Resultat:
+
+- PHP lint: OK paa alle aendrede filer.
+- `App.js parse ok`.
+- `php artisan test`: **68 tests passer, 706 assertions** (inkl. 7 nye
+  `PushNotifierTest`).
+- Chat-push refaktoreret til at bruge `PushNotifier`; eksisterende mute-
+  adfaerd bevaret og daekket af integration.
+- Migration `2026_05_09_020000_create_notification_preferences_and_dispatch_log`
+  opretter `member_notification_preferences` og `notification_dispatch_log`.
+
+Tidligere koert 2026-05-08 efter aktivitetslog og dynamisk Overblik-preview:
 
 ```bash
 node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
@@ -713,9 +839,16 @@ Resultat:
 
 - VIGTIGT: Laravel Scheduler skal vaere aktiv i produktion/cloud. Dyst bruger
   `php artisan duels:expire` hvert minut til at udloebe gamle dyster og
-  refundere escrow-Caps. Lokalt kan det testes med `php artisan schedule:work`;
-  paa server/cloud skal en scheduler/cron kalde `php artisan schedule:run` hvert
-  minut.
+  refundere escrow-Caps, og notifikations-reminders bruger
+  `notifications:duels-expiring`, `notifications:event-reminders`,
+  `notifications:rsvp-reminders`, `notifications:good-deed-reminders` og
+  `notifications:streak-reminders` (se `routes/console.php`). Lokalt kan det
+  testes med `php artisan schedule:work`; paa server/cloud skal en
+  scheduler/cron kalde `php artisan schedule:run` hvert minut.
+- VIGTIGT: Koer `php artisan migrate` ved deploy for at oprette
+  `member_notification_preferences` og `notification_dispatch_log`. Uden disse
+  tabeller fungerer chat-push stadig, men per-kategori opt-out og dedup
+  springes over (`Schema::hasTable` guard i `PushNotifier`).
 - Reverb skal koere med production-host/keys, saa chat og Dyst realtime virker.
 - `APP_URL`, `EXPO_PUBLIC_API_URL`, Reverb env og storage/public upload-setup
   skal pege paa production-domainer.

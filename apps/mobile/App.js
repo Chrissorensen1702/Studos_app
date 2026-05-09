@@ -31,7 +31,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
-const NOTIFICATION_PROMPT_STORAGE_KEY = 'studos.pushNotificationPrompt.v1';
+const PUSH_AUTO_REQUEST_STORAGE_KEY = 'studos.pushAutoRequest.v1';
+const PUSH_MANUAL_DISABLED_STORAGE_KEY = 'studos.pushManualDisabled.v1';
 const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
 const EARN_CAPS_CHECKIN_STORAGE_KEY = 'studos.earnCapsCheckIn.v1';
 const STUDOS_LOGO = require('./assets/icon.png');
@@ -559,7 +560,7 @@ const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
 const CREATE_CLASS_URL =
   readNonEmptyEnv(process.env.EXPO_PUBLIC_CREATE_CLASS_URL)
   ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'https://studos.dk/opret-klasse');
-const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'support@studos.dk';
+const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'hej@studos.dk';
 const STUDOS_APP_VERSION = (() => {
   try {
     return require('./app.json')?.expo?.version ?? '0.0.0';
@@ -1694,7 +1695,7 @@ const ensureAndroidNotificationChannelAsync = async () => {
   });
 };
 
-const registerForPushNotificationsAsync = async () => {
+const registerForPushNotificationsAsync = async ({ requestPermission = true } = {}) => {
   if (!PUSH_NOTIFICATIONS_ENABLED) {
     return {
       supported: false,
@@ -1727,7 +1728,7 @@ const registerForPushNotificationsAsync = async () => {
   const existingPermission = await notifications.getPermissionsAsync();
   let permissionStatus = existingPermission.status;
 
-  if (permissionStatus !== 'granted') {
+  if (permissionStatus !== 'granted' && requestPermission) {
     const requestedPermission = await notifications.requestPermissionsAsync();
     permissionStatus = requestedPermission.status;
   }
@@ -1886,7 +1887,6 @@ export default function App() {
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [pointDuelActionCount, setPointDuelActionCount] = useState(0);
   const [pendingDirectChatMemberId, setPendingDirectChatMemberId] = useState('');
-  const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
   const [weeklyCheckInReward, setWeeklyCheckInReward] = useState(null);
   const [weeklyCheckInSnapshot, setWeeklyCheckInSnapshot] = useState(null);
   const [notificationState, setNotificationState] = useState({
@@ -1902,6 +1902,7 @@ export default function App() {
   });
   const [topBarHeight, setTopBarHeight] = useState(APP_TOP_BAR_HEIGHT);
   const appScrollRef = useRef(null);
+  const pushAutoRequestRef = useRef(false);
   const weeklyCheckInAutoRef = useRef('');
 
   const activeClass = schoolClass ?? session?.class;
@@ -2229,8 +2230,21 @@ export default function App() {
       });
       responseSubscription = notifications.addNotificationResponseReceivedListener((response) => {
         const targetScreen = response?.notification?.request?.content?.data?.screen;
+        const validTabs = new Set([
+          'overview',
+          'chat',
+          'calendar',
+          'walls',
+          'activities',
+          'challenges',
+          'earnCaps',
+          'classBattle',
+          'classmates',
+          'connections',
+          'profile',
+        ]);
 
-        if (targetScreen === 'chat' || targetScreen === 'calendar' || targetScreen === 'overview' || targetScreen === 'classBattle') {
+        if (typeof targetScreen === 'string' && validTabs.has(targetScreen)) {
           setActiveTab(targetScreen);
         }
       });
@@ -2245,37 +2259,45 @@ export default function App() {
     };
   }, [notificationState.expoPushToken, notificationState.permissionStatus]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    if (
-      !PUSH_NOTIFICATIONS_ENABLED
-      || step !== 'overview'
-      || !session?.token
-      || notificationState.expoPushToken
-      || notificationState.permissionStatus === 'granted'
-    ) {
-      return () => {
-        isMounted = false;
-      };
+  const refreshPushPermissionStatus = useCallback(async () => {
+    if (!PUSH_NOTIFICATIONS_ENABLED) {
+      return;
     }
 
-    SessionStore.getItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY)
-      .then((promptSeen) => {
-        if (isMounted && promptSeen !== 'seen') {
-          setNotificationPromptVisible(true);
-        }
-      })
-      .catch(() => {
-        if (isMounted) {
-          setNotificationPromptVisible(true);
-        }
-      });
+    const notifications = loadNotificationsModule();
 
-    return () => {
-      isMounted = false;
-    };
-  }, [notificationState.expoPushToken, notificationState.permissionStatus, session?.token, step]);
+    if (!notifications) {
+      return;
+    }
+
+    try {
+      const permission = await notifications.getPermissionsAsync();
+      const nextStatus = permission?.status;
+
+      if (nextStatus) {
+        setNotificationState((current) => ({
+          ...current,
+          permissionStatus: nextStatus,
+        }));
+      }
+    } catch {
+      // Permission refresh is best-effort when returning from system settings.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!PUSH_NOTIFICATIONS_ENABLED) {
+      return undefined;
+    }
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        refreshPushPermissionStatus();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [refreshPushPermissionStatus]);
 
   const updateProfile = (key, value) => {
     setProfile((current) => ({ ...current, [key]: value }));
@@ -2532,33 +2554,40 @@ export default function App() {
     setStep('invite');
   };
 
-  const enablePushNotifications = useCallback(async () => {
+  const enablePushNotifications = useCallback(async ({ requestPermission = true, silent = false } = {}) => {
     if (!session?.token) {
-      setNotificationState((current) => ({
-        ...current,
-        error: 'Login mangler.',
-      }));
-      return;
+      if (!silent) {
+        setNotificationState((current) => ({
+          ...current,
+          error: 'Login mangler.',
+        }));
+      }
+      return null;
+    }
+
+    if (requestPermission) {
+      await SessionStore.deleteItemAsync(PUSH_MANUAL_DISABLED_STORAGE_KEY).catch(() => {});
     }
 
     setNotificationState((current) => ({
       ...current,
       error: '',
-      loading: true,
-      message: 'Gør push klar...',
+      loading: silent ? current.loading : true,
+      message: silent ? current.message : 'Gør push klar...',
     }));
 
     try {
-      const registration = await registerForPushNotificationsAsync();
+      const registration = await registerForPushNotificationsAsync({ requestPermission });
 
       if (!registration.expoPushToken) {
         setNotificationState((current) => ({
           ...current,
-          error: registration.message ?? 'Kunne ikke hente Expo push token.',
-          loading: false,
+          error: silent ? '' : registration.message ?? 'Kunne ikke hente Expo push token.',
+          loading: silent ? current.loading : false,
           permissionStatus: registration.permissionStatus ?? current.permissionStatus,
+          message: silent ? current.message : registration.message ?? current.message,
         }));
-        return;
+        return registration;
       }
 
       await apiFetch('/notifications/push-token', {
@@ -2581,28 +2610,78 @@ export default function App() {
         permissionStatus: registration.permissionStatus,
         registeredAt: new Date().toISOString(),
         error: '',
-        loading: false,
-        message: 'Push er aktiv og token er gemt.',
+        loading: silent ? current.loading : false,
+        message: silent ? 'Push er aktiv.' : 'Push er aktiv og token er gemt.',
       }));
+      return registration;
     } catch (notificationError) {
       setNotificationState((current) => ({
         ...current,
-        error: notificationError.message || 'Push kunne ikke aktiveres.',
-        loading: false,
+        error: silent ? '' : notificationError.message || 'Push kunne ikke aktiveres.',
+        loading: silent ? current.loading : false,
       }));
+      return null;
     }
   }, [session?.token]);
 
-  const closeNotificationPrompt = useCallback(async () => {
-    setNotificationPromptVisible(false);
-    await SessionStore.setItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
-  }, []);
+  useEffect(() => {
+    let isMounted = true;
 
-  const enablePushNotificationsFromPrompt = useCallback(async () => {
-    setNotificationPromptVisible(false);
-    await SessionStore.setItemAsync(NOTIFICATION_PROMPT_STORAGE_KEY, 'seen');
-    await enablePushNotifications();
-  }, [enablePushNotifications]);
+    if (
+      !PUSH_NOTIFICATIONS_ENABLED
+      || step !== 'overview'
+      || !session?.token
+      || notificationState.expoPushToken
+      || notificationState.loading
+      || pushAutoRequestRef.current
+    ) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    pushAutoRequestRef.current = true;
+
+    (async () => {
+      const [autoRequestSeen, manualDisabled] = await Promise.all([
+        SessionStore.getItemAsync(PUSH_AUTO_REQUEST_STORAGE_KEY).catch(() => null),
+        SessionStore.getItemAsync(PUSH_MANUAL_DISABLED_STORAGE_KEY).catch(() => null),
+      ]);
+
+      if (!isMounted || manualDisabled === 'disabled') {
+        return;
+      }
+
+      const existingRegistration = await enablePushNotifications({
+        requestPermission: false,
+        silent: true,
+      });
+
+      if (!isMounted || existingRegistration?.expoPushToken) {
+        return;
+      }
+
+      const permissionStatus = existingRegistration?.permissionStatus ?? notificationState.permissionStatus;
+
+      if (permissionStatus === 'denied' || permissionStatus === 'granted') {
+        return;
+      }
+
+      if (autoRequestSeen !== 'seen') {
+        await SessionStore.setItemAsync(PUSH_AUTO_REQUEST_STORAGE_KEY, 'seen');
+
+        if (isMounted) {
+          await enablePushNotifications({ requestPermission: true });
+        }
+      }
+    })().finally(() => {
+      pushAutoRequestRef.current = false;
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [enablePushNotifications, notificationState.expoPushToken, notificationState.loading, notificationState.permissionStatus, session?.token, step]);
 
   const sendNotificationTest = useCallback(async () => {
     if (!session?.token) {
@@ -2669,6 +2748,7 @@ export default function App() {
           expoPushToken: notificationState.expoPushToken || null,
         }),
       });
+      await SessionStore.setItemAsync(PUSH_MANUAL_DISABLED_STORAGE_KEY, 'disabled').catch(() => {});
 
       setNotificationState((current) => ({
         ...current,
@@ -3249,12 +3329,6 @@ export default function App() {
                 setActiveTab(route);
                 setSidebarOpen(false);
               }}
-            />
-            <NotificationPromptModal
-              loading={notificationState.loading}
-              visible={notificationPromptVisible}
-              onDismiss={closeNotificationPrompt}
-              onEnable={enablePushNotificationsFromPrompt}
             />
             <WeeklyCheckInRewardModal
               reward={weeklyCheckInReward}
@@ -16081,6 +16155,46 @@ const SETTINGS_NOTIFICATION_STATUS_LABELS = {
   provisional: 'Foreløbig',
 };
 
+const NOTIFICATION_CATEGORY_LABELS = {
+  chat_message: { title: 'Chatbeskeder', description: 'Direkte og gruppe-beskeder.' },
+  group_chat_invite: { title: 'Gruppechat-invitationer', description: 'Når nogen tilføjer dig i en gruppe.' },
+  duel_invite: { title: 'Dyst-invitationer', description: 'Når nogen udfordrer dig.' },
+  duel_response: { title: 'Dyst accepteret/afvist', description: 'Når modparten reagerer på din dyst.' },
+  duel_action_required: { title: 'Dyst kræver handling', description: 'Bekræft resultat eller dommergodkendelse.' },
+  duel_result: { title: 'Dyst-resultat', description: 'Når en dyst er afsluttet.' },
+  duel_expiring: { title: 'Dyst udløber snart', description: 'Påmindelse 1-2 timer før udløb.' },
+  event_invite: { title: 'Eventinvitationer', description: 'Invitationer til gilder og events.' },
+  event_change: { title: 'Eventændringer', description: 'Hvis dato, tid, sted eller gæsteliste ændres.' },
+  event_reminder: { title: 'Event reminders', description: 'Påmindelser dagen før og 2 timer før.' },
+  rsvp_reminder: { title: 'RSVP reminders', description: 'Hvis du ikke har svaret på en invitation.' },
+  gallery_new: { title: 'Nyt album', description: 'Når klassen opretter et nyt fælles album.' },
+  gallery_photos: { title: 'Nye billeder i album', description: 'Kun for albums du følger eller er del af.' },
+  connection_request: { title: 'Connection requests', description: 'Når nogen vil connecte med dig.' },
+  connection_accepted: { title: 'Connection accepteret', description: 'Når din request bliver accepteret.' },
+  good_deed_reminder: { title: 'Ugens gode gerning', description: 'Påmindelse hvis du ikke har claimet endnu.' },
+  streak_reminder: { title: 'Weekly streak', description: 'Påmindelse hvis din streak er ved at gå tabt.' },
+};
+
+const NOTIFICATION_CATEGORY_ORDER = [
+  'chat_message',
+  'group_chat_invite',
+  'duel_invite',
+  'duel_response',
+  'duel_action_required',
+  'duel_result',
+  'duel_expiring',
+  'event_invite',
+  'event_change',
+  'event_reminder',
+  'rsvp_reminder',
+  'gallery_new',
+  'gallery_photos',
+  'connection_request',
+  'connection_accepted',
+  'good_deed_reminder',
+  'streak_reminder',
+];
+
 function SettingsScreen({
   activeMember,
   notificationState,
@@ -16104,6 +16218,10 @@ function SettingsScreen({
   const [deleteAccountError, setDeleteAccountError] = useState('');
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [categoryPreferences, setCategoryPreferences] = useState({});
+  const [prefsLoading, setPrefsLoading] = useState(false);
+  const [prefsError, setPrefsError] = useState('');
+  const [prefsTogglingCategory, setPrefsTogglingCategory] = useState('');
 
   const permissionStatus = notificationState?.permissionStatus ?? 'unknown';
   const permissionStatusLabel = SETTINGS_NOTIFICATION_STATUS_LABELS[permissionStatus] ?? permissionStatus;
@@ -16186,12 +16304,66 @@ function SettingsScreen({
     }
 
     if (permissionStatus === 'denied') {
+      onEnablePushNotifications?.({ requestPermission: true });
       onOpenSystemAppSettings?.();
       return;
     }
 
     onEnablePushNotifications?.();
   }, [notificationsActive, permissionStatus, onDisablePushNotifications, onEnablePushNotifications, onOpenSystemAppSettings]);
+
+  const loadCategoryPreferences = useCallback(async () => {
+    if (!sessionToken) {
+      return;
+    }
+
+    setPrefsLoading(true);
+    setPrefsError('');
+
+    try {
+      const data = await apiFetch('/notifications/preferences', { authToken: sessionToken });
+      const preferences = data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+      setCategoryPreferences(preferences);
+    } catch (apiError) {
+      setPrefsError(apiError.message || 'Kunne ikke hente notifikations-indstillinger.');
+    } finally {
+      setPrefsLoading(false);
+    }
+  }, [sessionToken]);
+
+  useEffect(() => {
+    loadCategoryPreferences();
+  }, [loadCategoryPreferences]);
+
+  const toggleCategoryPreference = useCallback(async (category) => {
+    if (!sessionToken || !category || prefsTogglingCategory) {
+      return;
+    }
+
+    const currentValue = categoryPreferences[category];
+    const nextValue = !(currentValue === undefined ? true : Boolean(currentValue));
+
+    setPrefsTogglingCategory(category);
+    setPrefsError('');
+    setCategoryPreferences((current) => ({ ...current, [category]: nextValue }));
+
+    try {
+      const data = await apiFetch('/notifications/preferences', {
+        authToken: sessionToken,
+        method: 'PUT',
+        body: JSON.stringify({ preferences: { [category]: nextValue } }),
+      });
+
+      if (data?.preferences && typeof data.preferences === 'object') {
+        setCategoryPreferences(data.preferences);
+      }
+    } catch (apiError) {
+      setPrefsError(apiError.message || 'Indstillingen kunne ikke gemmes.');
+      setCategoryPreferences((current) => ({ ...current, [category]: Boolean(currentValue) }));
+    } finally {
+      setPrefsTogglingCategory('');
+    }
+  }, [sessionToken, prefsTogglingCategory, categoryPreferences]);
 
   const handleLogout = useCallback(async () => {
     if (logoutLoading || !onLogout) {
@@ -16348,6 +16520,64 @@ function SettingsScreen({
             </View>
           </>
         ) : null}
+      </View>
+
+      <View style={styles.panel}>
+        <View style={styles.settingsNotificationHeader}>
+          <View style={styles.settingsNotificationIcon}>
+            <Ionicons name="options" size={24} color={STUDOS_THEME.red} />
+          </View>
+          <View style={styles.settingsNotificationCopy}>
+            <Text style={styles.sectionTitle}>Hvad vil du have notifikation om?</Text>
+            <Text style={styles.feedText}>
+              Slå individuelle kategorier til eller fra. Indstillingerne gælder på tværs af dine enheder.
+            </Text>
+          </View>
+        </View>
+
+        {prefsError ? <Text style={styles.errorText}>{prefsError}</Text> : null}
+
+        {prefsLoading ? (
+          <View style={styles.settingsInlineLoader}>
+            <ActivityIndicator color={STUDOS_THEME.red} />
+            <Text style={styles.settingsInlineLoaderText}>Henter indstillinger...</Text>
+          </View>
+        ) : null}
+
+        {NOTIFICATION_CATEGORY_ORDER.map((category) => {
+          const labels = NOTIFICATION_CATEGORY_LABELS[category];
+          if (!labels) {
+            return null;
+          }
+
+          const stored = categoryPreferences[category];
+          const isEnabled = stored === undefined ? true : Boolean(stored);
+          const isToggling = prefsTogglingCategory === category;
+
+          return (
+            <Pressable
+              key={category}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: isEnabled, disabled: !sessionToken || isToggling }}
+              accessibilityLabel={`${labels.title} ${isEnabled ? 'slået til' : 'slået fra'}`}
+              disabled={!sessionToken || isToggling}
+              onPress={() => toggleCategoryPreference(category)}
+              style={({ pressed }) => [
+                styles.settingsToggleRow,
+                isEnabled ? styles.settingsToggleRowActive : null,
+                pressed && !isToggling ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.settingsToggleCopy}>
+                <Text style={styles.settingsToggleTitle}>{labels.title}</Text>
+                <Text style={styles.settingsToggleText}>{labels.description}</Text>
+              </View>
+              <View style={[styles.settingsToggleSwitch, isEnabled ? styles.settingsToggleSwitchActive : null]}>
+                <View style={[styles.settingsToggleKnob, isEnabled ? styles.settingsToggleKnobActive : null]} />
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
 
       <View style={styles.panel}>
@@ -16633,7 +16863,19 @@ function SettingsScreen({
           </View>
           <View style={styles.settingsInfoRow}>
             <Text style={styles.settingsInfoLabel}>Udgiver</Text>
-            <Text style={styles.settingsInfoValue}>Studos ApS</Text>
+            <Text style={styles.settingsInfoValue}>PlateDigital EMV</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>CVR</Text>
+            <Text style={styles.settingsInfoValue}>42456187</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>Adresse</Text>
+            <Text style={styles.settingsInfoValue}>Kærmindevej 12, 7441 Bording</Text>
+          </View>
+          <View style={styles.settingsInfoRow}>
+            <Text style={styles.settingsInfoLabel}>E-mail</Text>
+            <Text style={styles.settingsInfoValue}>{STUDOS_SUPPORT_EMAIL}</Text>
           </View>
         </View>
 
@@ -18361,68 +18603,6 @@ function LockBadge({ style }) {
     <View style={[styles.lockBadge, style]}>
       <Ionicons name="lock-closed" size={8} color={STUDOS_THEME.ink} />
     </View>
-  );
-}
-
-function NotificationPromptModal({ loading, visible, onDismiss, onEnable }) {
-  if (!PUSH_NOTIFICATIONS_ENABLED) {
-    return null;
-  }
-
-  return (
-    <Modal
-      animationType="fade"
-      onRequestClose={onDismiss}
-      transparent
-      visible={visible}
-    >
-      <View style={styles.chatModalRoot}>
-        <Pressable
-          accessibilityLabel="Luk notifikationer"
-          style={styles.chatModalBackdrop}
-          onPress={onDismiss}
-        />
-        <View style={[styles.chatModalPanel, styles.notificationPromptPanel]}>
-          <View style={styles.notificationPromptIcon}>
-            <Ionicons name="notifications" size={28} color={STUDOS_THEME.red} />
-          </View>
-          <View style={styles.notificationPromptCopy}>
-            <Text style={styles.chatModalKicker}>Notifikationer</Text>
-            <Text style={styles.notificationPromptTitle}>Skal Studos prikke dig?</Text>
-            <Text style={styles.notificationPromptText}>
-              Få besked, når der lander nye chats og vigtige ting fra klassen.
-            </Text>
-          </View>
-          <View style={styles.notificationPromptActions}>
-            <Pressable
-              accessibilityRole="button"
-              disabled={loading}
-              onPress={onDismiss}
-              style={({ pressed }) => [
-                styles.notificationPromptSecondaryButton,
-                pressed && !loading ? styles.footerItemPressed : null,
-              ]}
-            >
-              <Text style={styles.notificationPromptSecondaryText}>Ikke nu</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              disabled={loading}
-              onPress={onEnable}
-              style={({ pressed }) => [
-                styles.notificationPromptPrimaryButton,
-                pressed && !loading ? styles.footerItemPressed : null,
-                loading ? styles.primaryButtonDisabled : null,
-              ]}
-            >
-              <Text style={styles.notificationPromptPrimaryText}>
-                {loading ? 'Åbner...' : 'Slå til'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -30114,12 +30294,15 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
     textTransform: 'uppercase',
+    flexShrink: 0,
   },
   settingsInfoValue: {
     color: STUDOS_THEME.ink,
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0,
+    flexShrink: 1,
+    textAlign: 'right',
   },
   settingsFinePrint: {
     color: '#65748b',

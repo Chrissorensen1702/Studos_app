@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Support\ContentModeration;
 use App\Support\PointDuelMaintenance;
+use App\Support\PushNotifier;
 use App\Support\UploadedImage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -470,6 +471,12 @@ class StudosController extends Controller
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duelId);
 
+        $createdDuel = DB::table('point_duels')->where('id', $duelId)->first();
+
+        if ($createdDuel) {
+            $this->pushDuelInvite($createdDuel);
+        }
+
         return response()->json($this->duelResponseForMember($member, $duelId), 201);
     }
 
@@ -522,6 +529,12 @@ class StudosController extends Controller
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
+        $updatedDuel = DB::table('point_duels')->where('id', $duel)->first();
+
+        if ($updatedDuel) {
+            $this->pushDuelResponse($updatedDuel, 'accepted', $member->id);
+        }
+
         return response()->json($this->duelResponseForMember($member, $duel));
     }
 
@@ -548,6 +561,12 @@ class StudosController extends Controller
         }, 3);
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duel);
+
+        $updatedDuel = DB::table('point_duels')->where('id', $duel)->first();
+
+        if ($updatedDuel) {
+            $this->pushDuelResponse($updatedDuel, 'declined', $member->id);
+        }
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -661,6 +680,21 @@ class StudosController extends Controller
         }, 3);
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duel);
+
+        $updatedDuel = DB::table('point_duels')->where('id', $duel)->first();
+
+        if ($updatedDuel) {
+            if ($updatedDuel->status === 'awaitingJudgeApproval' && ! blank($updatedDuel->judge_member_id ?? null)) {
+                $this->pushDuelActionRequired($updatedDuel, 'judge_review', [$updatedDuel->judge_member_id]);
+            } elseif ($updatedDuel->status === 'awaitingResultConfirm') {
+                $opponentId = (string) $member->id === (string) $updatedDuel->creator_member_id
+                    ? $updatedDuel->opponent_member_id
+                    : $updatedDuel->creator_member_id;
+                if (! blank($opponentId)) {
+                    $this->pushDuelActionRequired($updatedDuel, 'confirm_result', [$opponentId]);
+                }
+            }
+        }
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -808,6 +842,12 @@ class StudosController extends Controller
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duel);
 
+        $updatedDuel = DB::table('point_duels')->where('id', $duel)->first();
+
+        if ($updatedDuel && $updatedDuel->status === 'completed') {
+            $this->pushDuelResult($updatedDuel);
+        }
+
         return response()->json($this->duelResponseForMember($member, $duel));
     }
 
@@ -852,6 +892,15 @@ class StudosController extends Controller
         }, 3);
 
         PointDuelMaintenance::dispatchDuelUpdatedById($duel);
+
+        $updatedDuel = DB::table('point_duels')->where('id', $duel)->first();
+
+        if ($updatedDuel && $updatedDuel->status === 'active') {
+            $recipients = collect([$updatedDuel->creator_member_id, $updatedDuel->opponent_member_id])
+                ->reject(fn ($id): bool => (string) $id === (string) $member->id)
+                ->all();
+            $this->pushDuelActionRequired($updatedDuel, 'confirm_result', $recipients);
+        }
 
         return response()->json($this->duelResponseForMember($member, $duel));
     }
@@ -1151,6 +1200,16 @@ class StudosController extends Controller
 
         $memberPreviews = $this->memberPreviews(collect([$requester->id, $receiver->id]));
 
+        if ($connection->status === 'pending') {
+            $this->pushConnectionRequest($connection->id, $requester, $receiver->id);
+        } elseif ($connection->status === 'accepted') {
+            // The mutual-pending shortcut auto-accepted: notify the original requester.
+            $originalRequesterId = $connection->requester_member_id === $requester->id
+                ? $connection->receiver_member_id
+                : $connection->requester_member_id;
+            $this->pushConnectionAccepted($connection->id, $requester, $originalRequesterId);
+        }
+
         return response()->json([
             'connection' => $this->serializeConnection($connection, $requester->id, $memberPreviews),
         ], $statusCode);
@@ -1180,6 +1239,10 @@ class StudosController extends Controller
             $updatedConnection->requester_member_id,
             $updatedConnection->receiver_member_id,
         ]));
+
+        if ($updatedConnection->status === 'accepted') {
+            $this->pushConnectionAccepted($updatedConnection->id, $member, $updatedConnection->requester_member_id);
+        }
 
         return response()->json([
             'connection' => $this->serializeConnection($updatedConnection, $member->id, $memberPreviews),
@@ -2570,6 +2633,367 @@ class StudosController extends Controller
         ];
     }
 
+    private function memberDisplayNamesFor(array $memberIds): array
+    {
+        $memberIds = collect($memberIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($memberIds)) {
+            return [];
+        }
+
+        return DB::table('members')
+            ->whereIn('id', $memberIds)
+            ->pluck('display_name', 'id')
+            ->all();
+    }
+
+    private function pushDuelInvite(object $duel): void
+    {
+        if (blank($duel->opponent_member_id ?? null)) {
+            return;
+        }
+
+        $names = $this->memberDisplayNamesFor([$duel->creator_member_id, $duel->opponent_member_id]);
+        $creatorName = $names[$duel->creator_member_id] ?? 'Et klassemedlem';
+        $isChallenge = ($duel->mode ?? 'versus') === 'challenge';
+        $challenge = Str::limit((string) ($duel->challenge ?? ''), 100);
+
+        PushNotifier::send(PushNotifier::CAT_DUEL_INVITE, [$duel->opponent_member_id], [
+            'title' => $isChallenge ? 'Ny challenge til dig' : 'Du er udfordret til en dyst',
+            'body' => $creatorName.': '.$challenge,
+            'data' => [
+                'duelId' => $duel->id,
+                'creatorMemberId' => $duel->creator_member_id,
+                'mode' => $duel->mode ?? 'versus',
+            ],
+            'sourceType' => 'point_duel',
+            'sourceId' => $duel->id,
+            'dedupKey' => 'duel_invite:'.$duel->id,
+        ]);
+    }
+
+    private function pushDuelResponse(object $duel, string $action, ?string $responderMemberId = null): void
+    {
+        if (blank($duel->creator_member_id ?? null)) {
+            return;
+        }
+
+        $responderId = $responderMemberId ?? $duel->opponent_member_id ?? null;
+        $names = $this->memberDisplayNamesFor([$duel->creator_member_id, $responderId]);
+        $responderName = $responderId ? ($names[$responderId] ?? 'Modparten') : 'Modparten';
+        $isChallenge = ($duel->mode ?? 'versus') === 'challenge';
+
+        $title = match ($action) {
+            'accepted' => $isChallenge ? 'Din challenge er accepteret' : 'Din dyst er accepteret',
+            'declined' => $isChallenge ? 'Din challenge er afvist' : 'Din dyst er afvist',
+            default => 'Status paa din dyst',
+        };
+        $body = $action === 'accepted'
+            ? $responderName.' tog handsken op.'
+            : $responderName.' takkede nej.';
+
+        PushNotifier::send(PushNotifier::CAT_DUEL_RESPONSE, [$duel->creator_member_id], [
+            'title' => $title,
+            'body' => $body,
+            'data' => [
+                'duelId' => $duel->id,
+                'action' => $action,
+                'responderMemberId' => $responderId,
+            ],
+            'sourceType' => 'point_duel',
+            'sourceId' => $duel->id,
+            'dedupKey' => 'duel_response:'.$duel->id.':'.$action,
+        ]);
+    }
+
+    private function pushDuelActionRequired(object $duel, string $action, array $recipientIds): void
+    {
+        $recipients = collect($recipientIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        $title = match ($action) {
+            'confirm_result' => 'Bekraeft dystens resultat',
+            'judge_review' => 'Du skal afgoere en dyst',
+            default => 'Dyst afventer din handling',
+        };
+        $body = match ($action) {
+            'confirm_result' => 'Modparten har foreslaaet et resultat — bekraeft eller afvis.',
+            'judge_review' => 'Du er valgt som dommer. Godkend eller afvis det foreslaaede resultat.',
+            default => 'Aabn dysten for at se hvad der mangler.',
+        };
+
+        PushNotifier::send(PushNotifier::CAT_DUEL_ACTION_REQUIRED, $recipients, [
+            'title' => $title,
+            'body' => $body,
+            'data' => [
+                'duelId' => $duel->id,
+                'action' => $action,
+            ],
+            'sourceType' => 'point_duel',
+            'sourceId' => $duel->id,
+            'dedupKey' => 'duel_action:'.$duel->id.':'.$action.':'.($duel->updated_at ?? $duel->id),
+        ]);
+    }
+
+    private function pushEventInvite(string $eventId, string $title, ?string $eventDate, object $invitedBy, array $invitedMemberIds): void
+    {
+        $recipients = collect($invitedMemberIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->reject(fn (string $id): bool => $id === (string) $invitedBy->id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        $inviterName = $invitedBy->display_name ?? 'Et klassemedlem';
+        $when = $eventDate ? Carbon::parse($eventDate)->isoFormat('D. MMM') : null;
+
+        PushNotifier::send(PushNotifier::CAT_EVENT_INVITE, $recipients, [
+            'title' => 'Ny invitation: '.Str::limit($title, 60),
+            'body' => $inviterName.' har inviteret dig'.($when ? ' ('.$when.')' : '').'.',
+            'data' => [
+                'eventId' => $eventId,
+                'invitedByMemberId' => $invitedBy->id,
+            ],
+            'sourceType' => 'event',
+            'sourceId' => $eventId,
+            'dedupKey' => 'event_invite:'.$eventId,
+        ]);
+    }
+
+    private function pushEventChange(string $eventId, string $title, ?string $eventDate, object $editedBy, array $invitedMemberIds, array $changeNotes): void
+    {
+        $recipients = collect($invitedMemberIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->reject(fn (string $id): bool => $id === (string) $editedBy->id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($recipients) || empty($changeNotes)) {
+            return;
+        }
+
+        $when = $eventDate ? Carbon::parse($eventDate)->isoFormat('D. MMM') : null;
+        $body = implode(', ', $changeNotes);
+
+        PushNotifier::send(PushNotifier::CAT_EVENT_CHANGE, $recipients, [
+            'title' => 'Aendring i: '.Str::limit($title, 60),
+            'body' => $body.($when ? ' · '.$when : ''),
+            'data' => [
+                'eventId' => $eventId,
+                'changes' => $changeNotes,
+            ],
+            'sourceType' => 'event',
+            'sourceId' => $eventId,
+        ]);
+    }
+
+    private function pushConnectionRequest(string $connectionId, object $requester, string $receiverMemberId): void
+    {
+        if (blank($receiverMemberId) || (string) $receiverMemberId === (string) $requester->id) {
+            return;
+        }
+
+        $name = $requester->display_name ?? 'Et klassemedlem';
+
+        PushNotifier::send(PushNotifier::CAT_CONNECTION_REQUEST, [$receiverMemberId], [
+            'title' => 'Ny connection request',
+            'body' => $name.' vil gerne connecte med dig.',
+            'data' => [
+                'connectionId' => $connectionId,
+                'requesterMemberId' => $requester->id,
+            ],
+            'sourceType' => 'connection',
+            'sourceId' => $connectionId,
+            'dedupKey' => 'connection_request:'.$connectionId,
+        ]);
+    }
+
+    private function pushConnectionAccepted(string $connectionId, object $accepter, string $requesterMemberId): void
+    {
+        if (blank($requesterMemberId) || (string) $requesterMemberId === (string) $accepter->id) {
+            return;
+        }
+
+        $name = $accepter->display_name ?? 'Et klassemedlem';
+
+        PushNotifier::send(PushNotifier::CAT_CONNECTION_ACCEPTED, [$requesterMemberId], [
+            'title' => 'Connection accepteret',
+            'body' => $name.' accepterede din request.',
+            'data' => [
+                'connectionId' => $connectionId,
+                'accepterMemberId' => $accepter->id,
+            ],
+            'sourceType' => 'connection',
+            'sourceId' => $connectionId,
+            'dedupKey' => 'connection_accepted:'.$connectionId,
+        ]);
+    }
+
+    private function pushGalleryNew(object $gallery, object $createdBy): void
+    {
+        if ($gallery->visibility !== 'public') {
+            return;
+        }
+
+        $audience = $gallery->audience ?? null;
+        $recipients = [];
+
+        if ($audience === 'everyone') {
+            $recipients = DB::table('members')
+                ->where('class_id', $gallery->class_id)
+                ->where('status', 'active')
+                ->where('id', '!=', $createdBy->id)
+                ->pluck('id')
+                ->all();
+        } elseif ($audience === 'specific' && ! blank($gallery->member_ids ?? null)) {
+            $decoded = json_decode((string) $gallery->member_ids, true);
+            if (is_array($decoded)) {
+                $recipients = collect($decoded)
+                    ->filter()
+                    ->map(fn ($id): string => (string) $id)
+                    ->reject(fn (string $id): bool => $id === (string) $createdBy->id)
+                    ->unique()
+                    ->values()
+                    ->all();
+            }
+        }
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        $creatorName = $createdBy->display_name ?? 'Et klassemedlem';
+
+        PushNotifier::send(PushNotifier::CAT_GALLERY_NEW, $recipients, [
+            'title' => 'Nyt album: '.Str::limit((string) ($gallery->name ?? 'Album'), 60),
+            'body' => $creatorName.' har oprettet et nyt fælles album.',
+            'data' => [
+                'galleryId' => $gallery->id,
+            ],
+            'sourceType' => 'gallery',
+            'sourceId' => $gallery->id,
+            'dedupKey' => 'gallery_new:'.$gallery->id,
+        ]);
+    }
+
+    private function pushGalleryPhotos(object $gallery, object $uploader): void
+    {
+        if ($gallery->visibility !== 'public') {
+            return;
+        }
+
+        $audience = $gallery->audience ?? null;
+        $recipients = [];
+
+        if ($audience === 'everyone') {
+            $recipients = DB::table('members')
+                ->where('class_id', $gallery->class_id)
+                ->where('status', 'active')
+                ->where('id', '!=', $uploader->id)
+                ->pluck('id')
+                ->all();
+        } elseif ($audience === 'specific' && ! blank($gallery->member_ids ?? null)) {
+            $decoded = json_decode((string) $gallery->member_ids, true);
+            if (is_array($decoded)) {
+                $recipients = collect($decoded)
+                    ->filter()
+                    ->map(fn ($id): string => (string) $id)
+                    ->reject(fn (string $id): bool => $id === (string) $uploader->id)
+                    ->unique()
+                    ->values()
+                    ->all();
+            }
+        }
+
+        if (empty($recipients)) {
+            return;
+        }
+
+        $uploaderName = $uploader->display_name ?? 'Et klassemedlem';
+
+        // Collapse to one push per uploader/gallery within a 30-min window via dedup.
+        $now = Carbon::now('UTC');
+        $bucket = $now->copy()
+            ->minute((int) (floor($now->minute / 30) * 30))
+            ->second(0)
+            ->format('YmdHi');
+
+        PushNotifier::send(PushNotifier::CAT_GALLERY_PHOTOS, $recipients, [
+            'title' => 'Nye billeder i '.Str::limit((string) ($gallery->name ?? 'album'), 60),
+            'body' => $uploaderName.' har lagt nye billeder op.',
+            'data' => [
+                'galleryId' => $gallery->id,
+                'uploaderMemberId' => $uploader->id,
+            ],
+            'sourceType' => 'gallery',
+            'sourceId' => $gallery->id,
+            'dedupKey' => 'gallery_photos:'.$gallery->id.':'.$uploader->id.':'.$bucket,
+        ]);
+    }
+
+    private function pushDuelResult(object $duel): void
+    {
+        $participants = collect([$duel->creator_member_id ?? null, $duel->opponent_member_id ?? null])
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($participants)) {
+            return;
+        }
+
+        $winnerId = $duel->winner_member_id ?? null;
+        $names = $this->memberDisplayNamesFor($participants);
+        $isChallenge = ($duel->mode ?? 'versus') === 'challenge';
+
+        foreach ($participants as $memberId) {
+            $isWinner = $winnerId && (string) $winnerId === $memberId;
+            $opponentId = collect($participants)->first(fn (string $id): bool => $id !== $memberId);
+            $opponentName = $opponentId ? ($names[$opponentId] ?? 'Modparten') : 'Modparten';
+
+            $title = $isWinner
+                ? ($isChallenge ? 'Du klarede din challenge!' : 'Du vandt dysten!')
+                : 'Dysten er afsluttet';
+            $body = $isWinner
+                ? 'Caps er udbetalt — godt klaret.'
+                : 'Resultatet er bekraeftet. '.$opponentName.' tog sejren.';
+
+            PushNotifier::send(PushNotifier::CAT_DUEL_RESULT, [$memberId], [
+                'title' => $title,
+                'body' => $body,
+                'data' => [
+                    'duelId' => $duel->id,
+                    'winnerMemberId' => $winnerId,
+                ],
+                'sourceType' => 'point_duel',
+                'sourceId' => $duel->id,
+                'dedupKey' => 'duel_result:'.$duel->id.':'.$memberId,
+            ]);
+        }
+    }
+
     private function recordCapTransaction(
         string $memberId,
         string $classId,
@@ -2999,6 +3423,8 @@ class StudosController extends Controller
             ]);
         });
 
+        $this->pushEventInvite($eventId, $title, $eventDate, $member, $inviteMemberIds);
+
         return response()->json([
             'class' => $this->loadClassById($member->class_id, $member->id),
         ], 201);
@@ -3114,6 +3540,25 @@ class StudosController extends Controller
         $location = ContentModeration::cleanNullableText($data['location'] ?? null, 'location', 'Sted', $moderationContext);
         $description = ContentModeration::cleanNullableText($data['description'] ?? null, 'description', 'Beskrivelsen', $moderationContext);
 
+        $changeNotes = [];
+        $previousDate = (string) ($schoolEvent->event_date ?? '');
+        $previousStarts = (string) ($schoolEvent->starts_at ?? '');
+        $previousLocation = (string) ($schoolEvent->location ?? '');
+
+        if ($previousDate !== '' && $previousDate !== $eventDate) {
+            $changeNotes[] = 'ny dato';
+        }
+
+        if ($previousStarts !== ($startsAt ?? '')) {
+            $changeNotes[] = 'nyt tidspunkt';
+        }
+
+        if (trim($previousLocation) !== trim((string) ($location ?? ''))) {
+            $changeNotes[] = 'nyt sted';
+        }
+
+        $newlyInvitedMemberIds = [];
+
         DB::transaction(function () use (
             $event,
             $inviteMemberIds,
@@ -3126,6 +3571,8 @@ class StudosController extends Controller
             $coverImagePath,
             $member,
             $now,
+            &$newlyInvitedMemberIds,
+            &$changeNotes,
         ): void {
             DB::table('events')->where('id', $event)->update([
                 'title' => $title,
@@ -3168,6 +3615,11 @@ class StudosController extends Controller
                     ));
                 }
 
+                if (! empty($addedMemberIds)) {
+                    $changeNotes[] = 'ny invitation';
+                    $newlyInvitedMemberIds = $addedMemberIds;
+                }
+
                 if (Schema::hasTable('event_rsvps')) {
                     DB::table('event_rsvps')
                         ->where('event_id', $event)
@@ -3188,6 +3640,27 @@ class StudosController extends Controller
                 'updated_at' => $now,
             ]);
         });
+
+        if (! empty($newlyInvitedMemberIds)) {
+            $this->pushEventInvite($event, $title, $eventDate, $member, $newlyInvitedMemberIds);
+        }
+
+        $existingInvitedMemberIds = Schema::hasTable('event_invites')
+            ? DB::table('event_invites')
+                ->where('event_id', $event)
+                ->whereNotIn('member_id', $newlyInvitedMemberIds ?: ['__none__'])
+                ->pluck('member_id')
+                ->all()
+            : [];
+
+        $existingChangeNotes = array_values(array_filter(
+            $changeNotes,
+            fn (string $note): bool => $note !== 'ny invitation',
+        ));
+
+        if (! empty($existingChangeNotes) && ! empty($existingInvitedMemberIds)) {
+            $this->pushEventChange($event, $title, $eventDate, $member, $existingInvitedMemberIds, $existingChangeNotes);
+        }
 
         return response()->json([
             'class' => $this->loadClassById($member->class_id, $member->id),
@@ -3457,6 +3930,40 @@ class StudosController extends Controller
         return response()->json([
             'ok' => true,
             'disabled' => $disabled,
+        ]);
+    }
+
+    public function getNotificationPreferences(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        return response()->json([
+            'preferences' => PushNotifier::preferencesFor($member->id),
+            'categories' => PushNotifier::CATEGORIES,
+        ]);
+    }
+
+    public function updateNotificationPreferences(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'preferences' => ['required', 'array'],
+            'preferences.*' => ['required', 'boolean'],
+        ]);
+
+        foreach ($data['preferences'] as $category => $enabled) {
+            if (! is_string($category) || ! in_array($category, PushNotifier::CATEGORIES, true)) {
+                continue;
+            }
+
+            // chat_message follows existing per-conversation mute UX, but we still let
+            // users disable the entire category as a defensive opt-out (GDPR/Apple rules).
+            PushNotifier::setPreference($member->id, $category, (bool) $enabled);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'preferences' => PushNotifier::preferencesFor($member->id),
         ]);
     }
 
@@ -4667,6 +5174,10 @@ class StudosController extends Controller
 
         $gallery = DB::table('galleries')->where('id', $id)->first();
 
+        if ($gallery) {
+            $this->pushGalleryNew($gallery, $member);
+        }
+
         return response()->json(['gallery' => $this->galleryApiShape($gallery)], 201);
     }
 
@@ -4933,6 +5444,8 @@ class StudosController extends Controller
             ->increment('photo_count', 1, ['updated_at' => $now]);
 
         $photo = DB::table('gallery_photos')->where('id', $id)->first();
+
+        $this->pushGalleryPhotos($gallery, $member);
 
         return response()->json(['photo' => $this->galleryPhotoApiShape($photo)], 201);
     }

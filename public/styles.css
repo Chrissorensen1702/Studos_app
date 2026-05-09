@@ -1772,6 +1772,7 @@ code {
 }
 
 .landing-footer-contact strong,
+.landing-footer-contact span,
 .landing-footer-contact a {
   color: rgba(23, 32, 67, 0.76);
   font-size: 15px;

@@ -280,7 +280,9 @@
           <div class="landing-footer-brand-panel">
             <p class="landing-footer-mini-heading">Kontakt</p>
             <div class="landing-footer-contact">
-              <strong>PlateDigital</strong>
+              <strong>PlateDigital EMV</strong>
+              <span>CVR: 42456187</span>
+              <span>Kærmindevej 12, 7441 Bording</span>
               <a href="mailto:hej@studos.dk">hej@studos.dk</a>
               <a href="tel:+4520631299">+45 20 63 12 99</a>
             </div>

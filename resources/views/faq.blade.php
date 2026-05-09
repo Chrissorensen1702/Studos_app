@@ -58,7 +58,8 @@
         <summary>Hvor kan vi få hjælp?</summary>
         <p>
           Skriv til <a href="mailto:hej@studos.dk">hej@studos.dk</a>, eller ring
-          på <a href="tel:+4520631299">+45 20 63 12 99</a>.
+          på <a href="tel:+4520631299">+45 20 63 12 99</a>.<br>
+          PlateDigital EMV · CVR: 42456187 · Kærmindevej 12, 7441 Bording
         </p>
       </details>
     </div>

@@ -13,9 +13,9 @@
         gælder kun hjemmesiden — mobilappen bruger ikke cookies.
       </p>
       <div class="legal-meta">
-        <span><strong>Version:</strong> 1.0</span>
+        <span><strong>Version:</strong> 1.1</span>
         <span><strong>Senest opdateret:</strong> 8. maj 2026</span>
-        <span><strong>Udbyder:</strong> PlateDigital</span>
+        <span><strong>Udbyder:</strong> PlateDigital EMV · CVR 42456187</span>
       </div>
     </header>
 
@@ -53,7 +53,7 @@
           </thead>
           <tbody>
             <tr>
-              <td><code>studos_session</code></td>
+              <td><code>studos-session</code></td>
               <td>Holder dig logget ind på CMS og opretholder din session.</td>
               <td>Nødvendig</td>
               <td>Session / 2 timer</td>
@@ -66,7 +66,7 @@
             </tr>
             <tr>
               <td><code>remember_web_*</code></td>
-              <td>Sættes kun, hvis du aktivt vælger “Husk mig” ved login.</td>
+              <td>Sættes kun, hvis du aktivt vælger "Husk mig" ved login. Du giver dermed udtrykkeligt samtykke til, at cookien sættes.</td>
               <td>Nødvendig (valgfri aktivering)</td>
               <td>30 dage</td>
             </tr>
@@ -112,13 +112,15 @@
       </article>
 
       <article id="mobilappen" class="legal-section">
-        <h2>7. Cookies i mobilappen</h2>
+        <h2>7. Cookies og lokal lagring i mobilappen</h2>
         <p>
           <strong>Studos-mobilappen bruger ikke cookies.</strong> Den native app
           gemmer alene en login-token i enhedens sikre lagring (Keychain på iOS,
           Keystore på Android) samt anonyme præferencer (fx om du har set
-          notifikations-prompten). Disse oplysninger er beskrevet i vores
-          <a href="{{ route('legal.privacy') }}">privatlivspolitik</a>.
+          notifikations-prompten) og en eventuel Expo Push Token, hvis du har
+          sagt ja til notifikationer. Disse oplysninger er beskrevet i vores
+          <a href="{{ route('legal.privacy') }}">privatlivspolitik</a>. Appen
+          indeholder ingen tracking-SDK'er eller analyseværktøjer.
         </p>
       </article>
 
@@ -134,7 +136,11 @@
         <h2>9. Kontakt</h2>
         <p>
           Spørgsmål til cookiepolitikken sendes til
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a>.
+          <a href="mailto:hej@studos.dk">hej@studos.dk</a>.<br>
+          <strong>PlateDigital EMV</strong><br>
+          CVR: 42456187<br>
+          Kærmindevej 12, 7441 Bording<br>
+          Telefon: <a href="tel:+4520631299">+45 20 63 12 99</a>
         </p>
       </article>
     </div>

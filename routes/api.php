@@ -47,6 +47,8 @@ Route::post('/members/{member}/block', [StudosController::class, 'blockMember'])
 Route::get('/members/me/blocked', [StudosController::class, 'listBlockedMembers'])->middleware('throttle:60,1');
 Route::delete('/members/{member}/block', [StudosController::class, 'unblockMember'])->middleware('throttle:20,1');
 Route::post('/notifications/push-token/disable', [StudosController::class, 'disablePushToken'])->middleware('throttle:20,1');
+Route::get('/notifications/preferences', [StudosController::class, 'getNotificationPreferences'])->middleware('throttle:60,1');
+Route::put('/notifications/preferences', [StudosController::class, 'updateNotificationPreferences'])->middleware('throttle:30,1');
 Route::post('/classes/{class}/members/{member}/access', [StudosController::class, 'updateMemberAccess'])->middleware('throttle:30,1');
 Route::post('/events', [StudosController::class, 'storeEvent'])->middleware('throttle:12,1');
 Route::patch('/events/{event}', [StudosController::class, 'updateEvent'])->middleware('throttle:20,1');
