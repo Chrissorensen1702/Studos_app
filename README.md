@@ -4,9 +4,10 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-09 efter iOS/APNs setup, verificeret iOS
-test-push, verificeret chat-push mod Cloud API og seneste
-sikkerhedsstramninger.
+Status er opdateret 2026-05-10 efter Android-regression fix
+(refreshControl/scroll-view collapse), gendannet pull-to-refresh paa baade
+iOS og Android, og robust safe-area handling for sidebaren via
+`react-native-safe-area-context`.
 
 Se ogsaa:
 
@@ -70,7 +71,17 @@ Se ogsaa:
   samme feed og fungerer som live-preview ind til aktivitetsloggen.
 - Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
   (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
-  dimensionsbaseret inset-beregning uden externe biblioteker.
+  dimensionsbaseret inset-beregning. Sidebaren bruger nu `useSafeAreaInsets`
+  fra `react-native-safe-area-context` (App er wrapped i `SafeAreaProvider`
+  i `apps/mobile/index.js`), saa Indstillinger-knappen altid sidder klikbar
+  over Android nav-bar og iOS home indicator paa tvaers af enheder.
+- Android scroll-fix (2026-05-10): Pull-to-refresh blev tilfoejet i
+  `6f566a9` via en wrapper-komponent `<StudosRefreshControl>` rundt om
+  `<RefreshControl>`. Det fik Android's `SwipeRefreshLayout` til at
+  kollapse alle scroll views til 0x0 (alle skerme blev blanke).
+  `StudosRefreshControl` er nu konverteret til en factory-funktion der
+  returnerer `<RefreshControl>` direkte; pull-to-refresh fungerer paa
+  baade iOS og Android. iOS er urort.
 - Push-token registrering accepterer nu `android` og `ios`; iOS/APNs
   credentials er oprettet i EAS for `dk.studenterapp.mobile`.
 - Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
@@ -737,7 +748,39 @@ Password: studos123
 
 ## Seneste Verificering
 
-Senest koert 2026-05-09 efter notifikations-suiten (17 kategorier):
+Senest koert 2026-05-10 efter Android scroll-collapse fix og safe-area
+sidebar:
+
+```bash
+node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
+git diff --stat
+```
+
+Resultat:
+
+- `App.js parse ok`.
+- 14 call sites til `<StudosRefreshControl>` konverteret til
+  `studosRefreshControl({...})` factory-kald saa
+  `refreshControl`-prop'en faar et rent `<RefreshControl>`-element
+  (ikke en function-komponent wrapper). Loeser Android-bug hvor alle
+  scroll views kollapsede til 0x0.
+- `apps/mobile/index.js` wrapper App i
+  `<SafeAreaProvider initialMetrics={initialWindowMetrics}>` (bruger
+  `react-native-safe-area-context` 5.6.2 som allerede var installeret).
+- `AppSidebar` bruger nu `useSafeAreaInsets().bottom` (med min 10px
+  fallback) som `paddingBottom` paa scroll-content; Indstillinger er
+  klikbar paa baade iOS (home indicator), Android (3-knaps nav) og
+  Android (gesture nav).
+- Manuel test paa Android (Expo Go): alle skerme loader indhold
+  korrekt, pull-to-refresh fungerer, sidebar Indstillinger er klikbar.
+- iOS: urort, ingen visuelle aendringer.
+- Kendt begraensning: TopBar, FooterNav og ChatScreen bruger fortsat
+  module-level heuristik for insets (`IOS_TOP_INSET`, `IOS_BOTTOM_INSET`,
+  `ANDROID_NAV_BAR_HEIGHT`). Fungerer paa almindelige enheder, men er
+  ikke endegyldigt robust paa rotation/foldables/edge-to-edge. Migration
+  til `useSafeAreaInsets` overalt parkeret som senere refactor.
+
+Tidligere koert 2026-05-09 efter notifikations-suiten (17 kategorier):
 
 ```bash
 php -l app/Support/PushNotifier.php
