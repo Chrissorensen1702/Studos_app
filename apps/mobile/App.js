@@ -29,6 +29,7 @@ import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
 const PUSH_AUTO_REQUEST_STORAGE_KEY = 'studos.pushAutoRequest.v1';
@@ -626,9 +627,9 @@ const STUDOS_THEME = {
   ink: '#172143',
 };
 
-function StudosRefreshControl({ offset = 0, onRefresh, refreshing }) {
+const studosRefreshControl = ({ offset = 0, onRefresh, refreshing }) => {
   if (typeof onRefresh !== 'function') {
-    return null;
+    return undefined;
   }
 
   return (
@@ -641,7 +642,7 @@ function StudosRefreshControl({ offset = 0, onRefresh, refreshing }) {
       tintColor={STUDOS_THEME.red}
     />
   );
-}
+};
 
 const APP_TABS = [
   { id: 'calendar', label: 'Kalender', icon: 'calendar-outline', activeIcon: 'calendar', accentColor: STUDOS_THEME.blue },
@@ -5925,13 +5926,11 @@ function ChatScreen({
         contentContainerStyle={styles.chatConversationList}
         keyboardShouldPersistTaps="handled"
         onScroll={handleChatListScroll}
-        refreshControl={(
-          <StudosRefreshControl
-            offset={CHAT_REFRESH_CONTROL_OFFSET}
-            onRefresh={refreshChat}
-            refreshing={chatRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          offset: CHAT_REFRESH_CONTROL_OFFSET,
+          onRefresh: refreshChat,
+          refreshing: chatRefreshing,
+        })}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.chatConversationScroll}
@@ -8771,13 +8770,11 @@ function CalendarScreen({
         keyboardShouldPersistTaps="handled"
         onScroll={handleCalendarGridScroll}
         ref={calendarGridScrollRef}
-        refreshControl={(
-          <StudosRefreshControl
-            offset={CALENDAR_REFRESH_CONTROL_OFFSET}
-            onRefresh={refreshCalendar}
-            refreshing={calendarRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          offset: CALENDAR_REFRESH_CONTROL_OFFSET,
+          onRefresh: refreshCalendar,
+          refreshing: calendarRefreshing,
+        })}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.calendarGridScroll}
@@ -9695,12 +9692,10 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, onRefres
           ref={leaderboardScrollRef}
           nestedScrollEnabled
           onScroll={updateClassBattleRowsScrolled}
-          refreshControl={(
-            <StudosRefreshControl
-              onRefresh={refreshClassBattle}
-              refreshing={classBattleRefreshing}
-            />
-          )}
+          refreshControl={studosRefreshControl({
+            onRefresh: refreshClassBattle,
+            refreshing: classBattleRefreshing,
+          })}
           scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           style={styles.classBattleRowsScroll}
@@ -10788,12 +10783,10 @@ function WallsAlbumScreen({
               );
             }}
             numColumns={3}
-            refreshControl={(
-              <StudosRefreshControl
-                onRefresh={refreshAlbumPhotos}
-                refreshing={photosRefreshing}
-              />
-            )}
+            refreshControl={studosRefreshControl({
+              onRefresh: refreshAlbumPhotos,
+              refreshing: photosRefreshing,
+            })}
             renderItem={({ item: photo }) => (
               <Pressable
                 accessibilityHint="Hold inde for indstillinger"
@@ -11743,13 +11736,11 @@ function WallsScreen({ activeMember, schoolClass, sessionToken }) {
         onEndReached={handleLoadMoreGalleries}
         onEndReachedThreshold={0.45}
         onScroll={handleWallsScroll}
-        refreshControl={(
-          <StudosRefreshControl
-            offset={WALLS_REFRESH_CONTROL_OFFSET}
-            onRefresh={handleRefreshGalleries}
-            refreshing={refreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          offset: WALLS_REFRESH_CONTROL_OFFSET,
+          onRefresh: handleRefreshGalleries,
+          refreshing,
+        })}
         renderItem={({ item: gallery }) => (
           <WallsGalleryCard
             gallery={gallery}
@@ -12531,13 +12522,11 @@ function ActivitiesScreen({
         maxToRenderPerBatch={8}
         onScroll={handleActivityScroll}
         removeClippedSubviews={!IS_WEB}
-        refreshControl={(
-          <StudosRefreshControl
-            offset={ACTIVITIES_HEADER_HEIGHT}
-            onRefresh={refreshActivities}
-            refreshing={activityRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          offset: ACTIVITIES_HEADER_HEIGHT,
+          onRefresh: refreshActivities,
+          refreshing: activityRefreshing,
+        })}
         renderItem={renderActivityItem}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
@@ -14986,12 +14975,10 @@ function DuelScreen({
       <ScrollView
         contentContainerStyle={styles.duelMainContent}
         keyboardShouldPersistTaps="handled"
-        refreshControl={(
-          <StudosRefreshControl
-            onRefresh={refreshDuels}
-            refreshing={duelRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          onRefresh: refreshDuels,
+          refreshing: duelRefreshing,
+        })}
         showsVerticalScrollIndicator={false}
         style={styles.duelMainScroll}
       >
@@ -16015,12 +16002,10 @@ function EarnCapsScreen({
         <ScrollView
           contentContainerStyle={styles.earnCapsMethodStack}
           nestedScrollEnabled
-          refreshControl={(
-            <StudosRefreshControl
-              onRefresh={refreshEarnCaps}
-              refreshing={earnCapsRefreshing}
-            />
-          )}
+          refreshControl={studosRefreshControl({
+            onRefresh: refreshEarnCaps,
+            refreshing: earnCapsRefreshing,
+          })}
           showsVerticalScrollIndicator={false}
           style={styles.earnCapsMethodsScroll}
         >
@@ -16420,12 +16405,10 @@ function SettingsScreen({
     <ScrollView
       contentContainerStyle={styles.flowStack}
       keyboardShouldPersistTaps="handled"
-      refreshControl={(
-        <StudosRefreshControl
-          onRefresh={refreshSettings}
-          refreshing={blockedRefreshing}
-        />
-      )}
+      refreshControl={studosRefreshControl({
+        onRefresh: refreshSettings,
+        refreshing: blockedRefreshing,
+      })}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.tabHeader}>
@@ -17110,12 +17093,10 @@ function ConnectionsScreen({ activeMember, onRefreshClassData, schoolClass, sess
     <ScrollView
       contentContainerStyle={styles.flowStack}
       keyboardShouldPersistTaps="handled"
-      refreshControl={(
-        <StudosRefreshControl
-          onRefresh={refreshConnections}
-          refreshing={connectionsRefreshing}
-        />
-      )}
+      refreshControl={studosRefreshControl({
+        onRefresh: refreshConnections,
+        refreshing: connectionsRefreshing,
+      })}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.tabHeader}>
@@ -17597,12 +17578,10 @@ function EmergencyContactsScreen({
     <ScrollView
       contentContainerStyle={[styles.flowStack, styles.crewScreen, styles.emergencyContactsScreen]}
       keyboardShouldPersistTaps="handled"
-      refreshControl={(
-        <StudosRefreshControl
-          onRefresh={refreshEmergencyContacts}
-          refreshing={emergencyContactsRefreshing}
-        />
-      )}
+      refreshControl={studosRefreshControl({
+        onRefresh: refreshEmergencyContacts,
+        refreshing: emergencyContactsRefreshing,
+      })}
       showsVerticalScrollIndicator={false}
     >
       <View style={[styles.tabHeader, styles.emergencyContactsTabHeader]}>
@@ -18174,12 +18153,10 @@ function CrewScreen({
       <ScrollView
         contentContainerStyle={[styles.flowStack, styles.crewScreen]}
         keyboardShouldPersistTaps="handled"
-        refreshControl={(
-          <StudosRefreshControl
-            onRefresh={refreshCrew}
-            refreshing={crewRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          onRefresh: refreshCrew,
+          refreshing: crewRefreshing,
+        })}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.tabHeader}>
@@ -18709,6 +18686,8 @@ function GoodDeedClaimRewardModal({ reward, visible, onDismiss }) {
 }
 
 function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, topBarHeight, visible }) {
+  const safeAreaInsets = useSafeAreaInsets();
+  const sidebarBottomInset = Math.max(safeAreaInsets.bottom, 10);
   const [isRendered, setIsRendered] = useState(visible);
   const sidebarProgress = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const sidebarMembers = Array.isArray(activeMembers) ? activeMembers : [];
@@ -18787,7 +18766,7 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
       >
         <ScrollView
           bounces={false}
-          contentContainerStyle={styles.sidebarPanelScrollContent}
+          contentContainerStyle={[styles.sidebarPanelScrollContent, { paddingBottom: sidebarBottomInset }]}
           showsVerticalScrollIndicator={false}
           style={styles.sidebarPanelScroll}
         >
@@ -19702,12 +19681,10 @@ function AccountProfileScreen({
     <ScrollView
       contentContainerStyle={[styles.overviewBlank, styles.overviewSurface]}
       keyboardShouldPersistTaps="handled"
-      refreshControl={(
-        <StudosRefreshControl
-          onRefresh={refreshProfile}
-          refreshing={profileRefreshing}
-        />
-      )}
+      refreshControl={studosRefreshControl({
+        onRefresh: refreshProfile,
+        refreshing: profileRefreshing,
+      })}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.tabHeader}>
@@ -20626,13 +20603,11 @@ function OverviewScreen({
         contentContainerStyle={styles.overviewScrollContent}
         keyboardShouldPersistTaps="handled"
         onScroll={handleOverviewScroll}
-        refreshControl={(
-          <StudosRefreshControl
-            offset={OVERVIEW_HEADER_HEIGHT}
-            onRefresh={refreshOverview}
-            refreshing={overviewRefreshing}
-          />
-        )}
+        refreshControl={studosRefreshControl({
+          offset: OVERVIEW_HEADER_HEIGHT,
+          onRefresh: refreshOverview,
+          refreshing: overviewRefreshing,
+        })}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.overviewScroll}
