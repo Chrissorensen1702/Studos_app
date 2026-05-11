@@ -21,7 +21,7 @@ use Illuminate\Validation\Rule;
 
 class StudosController extends Controller
 {
-    private const PRIVACY_VERSION = '2026-04-26';
+    private const PRIVACY_VERSION = '2026-05-11';
 
     private const EVENT_COVER_TEMPLATE_IDS = [
         'sunset',
@@ -2664,7 +2664,7 @@ class StudosController extends Controller
         $challenge = Str::limit((string) ($duel->challenge ?? ''), 100);
 
         PushNotifier::send(PushNotifier::CAT_DUEL_INVITE, [$duel->opponent_member_id], [
-            'title' => $isChallenge ? 'Ny challenge til dig' : 'Du er udfordret til en dyst',
+            'title' => ($isChallenge ? 'Ny challenge til dig' : 'Du er udfordret til en dyst').' ⚔️',
             'body' => $creatorName.': '.$challenge,
             'data' => [
                 'duelId' => $duel->id,
@@ -2689,12 +2689,12 @@ class StudosController extends Controller
         $isChallenge = ($duel->mode ?? 'versus') === 'challenge';
 
         $title = match ($action) {
-            'accepted' => $isChallenge ? 'Din challenge er accepteret' : 'Din dyst er accepteret',
-            'declined' => $isChallenge ? 'Din challenge er afvist' : 'Din dyst er afvist',
-            default => 'Status paa din dyst',
+            'accepted' => ($isChallenge ? 'Din challenge er accepteret' : 'Din dyst er accepteret').' ✅',
+            'declined' => ($isChallenge ? 'Din challenge er afvist' : 'Din dyst er afvist').' ❌',
+            default => 'Status på din dyst',
         };
         $body = $action === 'accepted'
-            ? $responderName.' tog handsken op.'
+            ? $responderName.' tog udfordringen op!'
             : $responderName.' takkede nej.';
 
         PushNotifier::send(PushNotifier::CAT_DUEL_RESPONSE, [$duel->creator_member_id], [
@@ -2725,14 +2725,14 @@ class StudosController extends Controller
         }
 
         $title = match ($action) {
-            'confirm_result' => 'Bekraeft dystens resultat',
-            'judge_review' => 'Du skal afgoere en dyst',
-            default => 'Dyst afventer din handling',
+            'confirm_result' => 'Bekræft dystens resultat ⚖️',
+            'judge_review' => 'Du skal afgøre en dyst ⚖️',
+            default => 'Dyst afventer din handling ⚖️',
         };
         $body = match ($action) {
-            'confirm_result' => 'Modparten har foreslaaet et resultat — bekraeft eller afvis.',
-            'judge_review' => 'Du er valgt som dommer. Godkend eller afvis det foreslaaede resultat.',
-            default => 'Aabn dysten for at se hvad der mangler.',
+            'confirm_result' => 'Modparten har foreslået et resultat — bekræft eller afvis.',
+            'judge_review' => 'Du er valgt som dommer. Godkend eller afvis det foreslåede resultat.',
+            default => 'Åbn dysten for at se hvad der mangler.',
         };
 
         PushNotifier::send(PushNotifier::CAT_DUEL_ACTION_REQUIRED, $recipients, [
@@ -2766,7 +2766,7 @@ class StudosController extends Controller
         $when = $eventDate ? Carbon::parse($eventDate)->isoFormat('D. MMM') : null;
 
         PushNotifier::send(PushNotifier::CAT_EVENT_INVITE, $recipients, [
-            'title' => 'Ny invitation: '.Str::limit($title, 60),
+            'title' => 'Ny invitation: '.Str::limit($title, 60).' 🎉',
             'body' => $inviterName.' har inviteret dig'.($when ? ' ('.$when.')' : '').'.',
             'data' => [
                 'eventId' => $eventId,
@@ -2796,7 +2796,7 @@ class StudosController extends Controller
         $body = implode(', ', $changeNotes);
 
         PushNotifier::send(PushNotifier::CAT_EVENT_CHANGE, $recipients, [
-            'title' => 'Aendring i: '.Str::limit($title, 60),
+            'title' => 'Ændring i: '.Str::limit($title, 60).' ✏️',
             'body' => $body.($when ? ' · '.$when : ''),
             'data' => [
                 'eventId' => $eventId,
@@ -2816,7 +2816,7 @@ class StudosController extends Controller
         $name = $requester->display_name ?? 'Et klassemedlem';
 
         PushNotifier::send(PushNotifier::CAT_CONNECTION_REQUEST, [$receiverMemberId], [
-            'title' => 'Ny connection request',
+            'title' => 'Ny connection request 🤝',
             'body' => $name.' vil gerne connecte med dig.',
             'data' => [
                 'connectionId' => $connectionId,
@@ -2837,7 +2837,7 @@ class StudosController extends Controller
         $name = $accepter->display_name ?? 'Et klassemedlem';
 
         PushNotifier::send(PushNotifier::CAT_CONNECTION_ACCEPTED, [$requesterMemberId], [
-            'title' => 'Connection accepteret',
+            'title' => 'Connection accepteret ✅',
             'body' => $name.' accepterede din request.',
             'data' => [
                 'connectionId' => $connectionId,
@@ -2885,7 +2885,7 @@ class StudosController extends Controller
         $creatorName = $createdBy->display_name ?? 'Et klassemedlem';
 
         PushNotifier::send(PushNotifier::CAT_GALLERY_NEW, $recipients, [
-            'title' => 'Nyt album: '.Str::limit((string) ($gallery->name ?? 'Album'), 60),
+            'title' => 'Nyt album: '.Str::limit((string) ($gallery->name ?? 'Album'), 60).' 📸',
             'body' => $creatorName.' har oprettet et nyt fælles album.',
             'data' => [
                 'galleryId' => $gallery->id,
@@ -2939,7 +2939,7 @@ class StudosController extends Controller
             ->format('YmdHi');
 
         PushNotifier::send(PushNotifier::CAT_GALLERY_PHOTOS, $recipients, [
-            'title' => 'Nye billeder i '.Str::limit((string) ($gallery->name ?? 'album'), 60),
+            'title' => 'Nye billeder i '.Str::limit((string) ($gallery->name ?? 'album'), 60).' 🖼️',
             'body' => $uploaderName.' har lagt nye billeder op.',
             'data' => [
                 'galleryId' => $gallery->id,
@@ -2974,11 +2974,11 @@ class StudosController extends Controller
             $opponentName = $opponentId ? ($names[$opponentId] ?? 'Modparten') : 'Modparten';
 
             $title = $isWinner
-                ? ($isChallenge ? 'Du klarede din challenge!' : 'Du vandt dysten!')
-                : 'Dysten er afsluttet';
+                ? (($isChallenge ? 'Du klarede din challenge!' : 'Du vandt dysten!').' 🏆')
+                : 'Dysten er afsluttet ⏰';
             $body = $isWinner
-                ? 'Caps er udbetalt — godt klaret.'
-                : 'Resultatet er bekraeftet. '.$opponentName.' tog sejren.';
+                ? 'Caps er udbetalt — godt klaret!'
+                : 'Resultatet er bekræftet. '.$opponentName.' tog sejren.';
 
             PushNotifier::send(PushNotifier::CAT_DUEL_RESULT, [$memberId], [
                 'title' => $title,

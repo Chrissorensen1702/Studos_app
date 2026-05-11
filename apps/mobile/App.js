@@ -28,6 +28,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 import * as SecureStore from 'expo-secure-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -88,6 +89,20 @@ const WALLS_HEADER_CONTROLS_COLLAPSE_DISTANCE = 96;
 const WALLS_HEADER_CONTROLS_EXPANDED_HEIGHT = 93;
 const WALLS_GALLERIES_PAGE_SIZE = 24;
 const WALLS_REFRESH_CONTROL_OFFSET = 204;
+const WALLS_ALBUM_GRID_COLUMNS = 3;
+const WALLS_ALBUM_GRID_GAP = 6;
+const WALLS_ALBUM_GRID_SIDE_GUTTER = 2;
+const WALLS_ALBUM_UPLOAD_SELECTION_LIMIT = 10;
+const WALLS_PHOTO_VIEWER_SWIPE_DISTANCE = 44;
+const WALLS_PHOTO_VIEWER_SWIPE_RATIO = 1.15;
+const WALLS_ALBUM_PHOTO_FILTERS = [
+  { id: 'all', label: 'Alle' },
+  { id: 'mine', label: 'Mine billeder' },
+];
+const WALLS_ALBUM_PHOTO_SORTS = [
+  { id: 'newest', label: 'Nyeste' },
+  { id: 'oldest', label: 'Ældste' },
+];
 const OVERVIEW_HEADER_HEIGHT = APP_SCREEN_TOP_PADDING + 51 + 13;
 const ACTIVITIES_HEADER_HEIGHT = OVERVIEW_HEADER_HEIGHT + 42;
 const CALENDAR_REFRESH_CONTROL_OFFSET = OVERVIEW_HEADER_HEIGHT + 18;
@@ -622,6 +637,7 @@ const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'http';
 const REVERB_FORCE_TLS = REVERB_SCHEME === 'https' || REVERB_PORT === 443;
 const STUDOS_THEME = {
   blue: '#75DED0',
+  green: '#27AE7F',
   yellow: '#FFD46D',
   red: '#FF6F73',
   ink: '#172143',
@@ -10459,6 +10475,7 @@ function WallsAlbumScreen({
   uploadRequestId = 0,
   visible,
 }) {
+  const safeAreaInsets = useSafeAreaInsets();
   const wallsDragX = useRef(new Animated.Value(APP_WINDOW_WIDTH)).current;
   const wallsWidthRef = useRef(APP_WINDOW_WIDTH);
   const wallsTouchStartRef = useRef(null);
@@ -10472,12 +10489,26 @@ function WallsAlbumScreen({
   const [loadError, setLoadError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [viewerPhoto, setViewerPhoto] = useState(null);
+  const [albumPhotoFilter, setAlbumPhotoFilter] = useState('all');
+  const [albumPhotoSort, setAlbumPhotoSort] = useState('newest');
+  const [photoSelectionMode, setPhotoSelectionMode] = useState(false);
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState([]);
+  const [savingViewerPhotoId, setSavingViewerPhotoId] = useState('');
+  const [viewerSaveStatus, setViewerSaveStatus] = useState(null);
   const viewerOpacity = useRef(new Animated.Value(0)).current;
+  const viewerPhotoRef = useRef(null);
+  const viewerTouchStartRef = useRef(null);
+  const viewerSwipeHandledRef = useRef(false);
   const [actionPhoto, setActionPhoto] = useState(null);
   const [deleteConfirmPhoto, setDeleteConfirmPhoto] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState(null);
   const [reportConfirmPhoto, setReportConfirmPhoto] = useState(null);
   const [reporting, setReporting] = useState(false);
   const [reportError, setReportError] = useState('');
@@ -10498,9 +10529,28 @@ function WallsAlbumScreen({
   }, [activeMember]);
 
   const photoColWidth = useMemo(() => {
-    const inner = APP_WINDOW_WIDTH - APP_SCREEN_PADDING * 2;
-    return Math.floor((inner - 8) / 3);
+    const inner = APP_WINDOW_WIDTH - APP_SCREEN_PADDING * 2 - WALLS_ALBUM_GRID_SIDE_GUTTER * 2;
+    const totalGaps = WALLS_ALBUM_GRID_GAP * (WALLS_ALBUM_GRID_COLUMNS - 1);
+    return Math.floor((inner - totalGaps) / WALLS_ALBUM_GRID_COLUMNS);
   }, []);
+
+  const displayedPhotos = useMemo(() => {
+    const activeMemberId = String(activeMember?.id ?? '');
+    const filtered = albumPhotoFilter === 'mine' && activeMemberId
+      ? photos.filter((photo) => String(photo?.memberId ?? '') === activeMemberId)
+      : photos;
+
+    return [...filtered].sort((a, b) => {
+      const aTime = Date.parse(a?.createdAt ?? '');
+      const bTime = Date.parse(b?.createdAt ?? '');
+      const safeATime = Number.isFinite(aTime) ? aTime : 0;
+      const safeBTime = Number.isFinite(bTime) ? bTime : 0;
+
+      return albumPhotoSort === 'oldest'
+        ? safeATime - safeBTime
+        : safeBTime - safeATime;
+    });
+  }, [activeMember?.id, albumPhotoFilter, albumPhotoSort, photos]);
 
   const loadAlbumPhotos = useCallback(async ({ refreshing = false, reset = false } = {}) => {
     if (!visible || !gallery?.id || !sessionToken) return;
@@ -10530,9 +10580,24 @@ function WallsAlbumScreen({
     loadAlbumPhotos({ reset: true });
   }, [loadAlbumPhotos]);
 
+  useEffect(() => {
+    viewerPhotoRef.current = viewerPhoto;
+  }, [viewerPhoto]);
+
   const refreshAlbumPhotos = useCallback(() => {
     loadAlbumPhotos({ refreshing: true });
   }, [loadAlbumPhotos]);
+
+  useEffect(() => {
+    if (photos.length === 0) {
+      setSelectedPhotoIds([]);
+      setPhotoSelectionMode(false);
+      return;
+    }
+
+    const visiblePhotoIds = new Set(photos.map((photo) => String(photo?.id ?? '')).filter(Boolean));
+    setSelectedPhotoIds((current) => current.filter((id) => visiblePhotoIds.has(id)));
+  }, [photos]);
 
   useEffect(() => {
     if (visible) {
@@ -10564,7 +10629,9 @@ function WallsAlbumScreen({
   const handleClose = useCallback(() => {
     returnFromScreen(() => {
       setPhotos([]); setViewerPhoto(null); setActionPhoto(null);
-      setUploadError(''); setDeleteConfirmPhoto(null); setReportConfirmPhoto(null);
+      setPhotoSelectionMode(false); setSelectedPhotoIds([]);
+      setSavingViewerPhotoId(''); setViewerSaveStatus(null);
+      setUploadError(''); setUploadProgress(null); setDeleteConfirmPhoto(null); setBulkDeleteConfirmOpen(false); setBulkDeleteError(''); setBulkDeleteProgress(null); setReportConfirmPhoto(null);
       onClose?.();
     });
   }, [returnFromScreen, onClose]);
@@ -10572,6 +10639,11 @@ function WallsAlbumScreen({
   const buildTouchHandlers = useCallback(() => {
     const tf = (e) => e.nativeEvent.touches?.[0] ?? e.nativeEvent;
     const release = () => {
+      if (viewerPhoto) {
+        wallsTouchStartRef.current = null; wallsTouchLatestRef.current = null;
+        wallsSwipeActiveRef.current = false; return;
+      }
+
       const latest = wallsTouchLatestRef.current;
       const start = wallsTouchStartRef.current;
       if (!latest || !start || !wallsSwipeActiveRef.current) {
@@ -10588,12 +10660,14 @@ function WallsAlbumScreen({
     };
     return {
       onTouchStart: (e) => {
+        if (viewerPhoto) return;
         const t = tf(e);
         if (!Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
         wallsTouchStartRef.current = { x: t.pageX, y: t.pageY, time: Date.now() };
         wallsTouchLatestRef.current = null; wallsSwipeActiveRef.current = false;
       },
       onTouchMove: (e) => {
+        if (viewerPhoto) return;
         const start = wallsTouchStartRef.current; const t = tf(e);
         if (!start || !Number.isFinite(t?.pageX) || !Number.isFinite(t?.pageY)) return;
         const dx = t.pageX - start.x; const dy = t.pageY - start.y;
@@ -10607,9 +10681,10 @@ function WallsAlbumScreen({
       },
       onTouchEnd: release, onTouchCancel: release,
     };
-  }, [wallsDragX, resetDrag, returnFromScreen, onClose]);
+  }, [wallsDragX, resetDrag, returnFromScreen, onClose, viewerPhoto]);
 
   const openViewer = useCallback((photo) => {
+    setViewerSaveStatus(null);
     setViewerPhoto(photo);
     viewerOpacity.setValue(0);
     Animated.timing(viewerOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
@@ -10617,11 +10692,327 @@ function WallsAlbumScreen({
 
   const closeViewer = useCallback(() => {
     Animated.timing(viewerOpacity, { toValue: 0, duration: 160, useNativeDriver: true })
-      .start(({ finished }) => { if (finished) setViewerPhoto(null); });
+      .start(({ finished }) => {
+        if (finished) {
+          setViewerPhoto(null);
+          setViewerSaveStatus(null);
+        }
+      });
   }, [viewerOpacity]);
+
+  const showAdjacentViewerPhoto = useCallback((direction) => {
+    if (!viewerPhoto || displayedPhotos.length < 2) return;
+
+    const currentId = String(viewerPhoto?.id ?? '');
+    const currentIndex = displayedPhotos.findIndex((photo) => String(photo?.id ?? '') === currentId);
+    const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (safeCurrentIndex + direction + displayedPhotos.length) % displayedPhotos.length;
+    const nextPhoto = displayedPhotos[nextIndex];
+
+    if (nextPhoto) {
+      setViewerSaveStatus(null);
+      viewerOpacity.setValue(1);
+      setViewerPhoto(nextPhoto);
+    }
+  }, [displayedPhotos, viewerOpacity, viewerPhoto]);
+
+  const viewerTouchHandlers = useMemo(() => ({
+    onTouchStart: (e) => {
+      e.stopPropagation?.();
+      const touch = e.nativeEvent.touches?.[0] ?? e.nativeEvent;
+      if (!Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) return;
+
+      viewerSwipeHandledRef.current = false;
+      viewerTouchStartRef.current = { x: touch.pageX, y: touch.pageY };
+    },
+    onTouchMove: (e) => {
+      e.stopPropagation?.();
+    },
+    onTouchEnd: (e) => {
+      e.stopPropagation?.();
+      const start = viewerTouchStartRef.current;
+      const touch = e.nativeEvent.changedTouches?.[0] ?? e.nativeEvent;
+      viewerTouchStartRef.current = null;
+
+      if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) return;
+
+      const dx = touch.pageX - start.x;
+      const dy = touch.pageY - start.y;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      if (absDx < WALLS_PHOTO_VIEWER_SWIPE_DISTANCE || absDx <= absDy * WALLS_PHOTO_VIEWER_SWIPE_RATIO) {
+        return;
+      }
+
+      viewerSwipeHandledRef.current = true;
+      showAdjacentViewerPhoto(dx < 0 ? 1 : -1);
+    },
+    onTouchCancel: (e) => {
+      e.stopPropagation?.();
+      viewerTouchStartRef.current = null;
+      viewerSwipeHandledRef.current = false;
+    },
+  }), [showAdjacentViewerPhoto]);
+
+  const handleViewerBackdropPress = useCallback(() => {
+    if (viewerSwipeHandledRef.current) {
+      viewerSwipeHandledRef.current = false;
+      return;
+    }
+
+    closeViewer();
+  }, [closeViewer]);
+
+  const selectedPhotoIdSet = useMemo(() => new Set(selectedPhotoIds), [selectedPhotoIds]);
+  const selectedPhotos = useMemo(() => photos.filter((photo) => selectedPhotoIdSet.has(String(photo?.id ?? ''))), [photos, selectedPhotoIdSet]);
+  const selectedPhotoCount = selectedPhotos.length;
+  const albumHeaderTitle = photoSelectionMode
+    ? selectedPhotoCount > 0 ? `${selectedPhotoCount} valgt` : 'Vælg billeder'
+    : gallery?.name ?? '';
+  const hasSelectedPhotos = selectedPhotoCount > 0;
+  const hasAlbumPhotos = displayedPhotos.length > 0;
+
+  const togglePhotoSelectionMode = useCallback(() => {
+    setPhotoSelectionMode((current) => {
+      const next = !current;
+      if (!next) {
+        setSelectedPhotoIds([]);
+        setBulkDeleteConfirmOpen(false);
+        setBulkDeleteError('');
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllPhotos = useCallback(() => {
+    setSelectedPhotoIds(displayedPhotos.map((photo) => String(photo?.id ?? '')).filter(Boolean));
+  }, [displayedPhotos]);
+
+  const togglePhotoSelection = useCallback((photo) => {
+    const photoId = String(photo?.id ?? '');
+    if (!photoId) return;
+
+    setSelectedPhotoIds((current) =>
+      current.includes(photoId)
+        ? current.filter((id) => id !== photoId)
+        : [...current, photoId]
+    );
+  }, []);
+
+  const startPhotoSelectionFromLongPress = useCallback((photo) => {
+    const photoId = String(photo?.id ?? '');
+    if (!photoId) return;
+
+    setActionPhoto(null);
+    setBulkDeleteConfirmOpen(false);
+    setBulkDeleteError('');
+    setPhotoSelectionMode(true);
+    setSelectedPhotoIds((current) => (
+      current.includes(photoId) ? current : [...current, photoId]
+    ));
+  }, []);
+
+  const extensionForPhoto = useCallback((photo, fallback = 'jpg') => {
+    const uri = String(photo?.imageUri ?? '').split('?')[0];
+    const match = uri.match(/\.([a-z0-9]+)$/i);
+    const ext = match?.[1]?.toLowerCase();
+
+    return ['jpg', 'jpeg', 'png', 'webp', 'heic'].includes(ext) ? ext : fallback;
+  }, []);
+
+  const cachePhotoForMediaLibrary = useCallback(async (photo, index) => {
+    const uri = photo?.imageUri;
+    if (!uri) throw new Error('Billedet mangler en filadresse.');
+    if (uri.startsWith('file://')) return uri;
+
+    const cacheRoot = FileSystem.cacheDirectory ?? FileSystem.documentDirectory;
+    if (!cacheRoot) throw new Error('Kunne ikke finde midlertidig lagerplads.');
+
+    const ext = extensionForPhoto(photo);
+    const photoId = String(photo?.id ?? index + 1).replace(/[^a-z0-9_-]/gi, '');
+    const targetUri = `${cacheRoot}studos-album-${photoId}-${Date.now()}.${ext}`;
+    const downloaded = await FileSystem.downloadAsync(uri, targetUri);
+
+    return downloaded.uri;
+  }, [extensionForPhoto]);
+
+  const handleSaveViewerPhoto = useCallback(async () => {
+    if (!viewerPhoto?.imageUri) return;
+
+    const photoId = String(viewerPhoto?.id ?? viewerPhoto.imageUri);
+    const setStatusIfCurrent = (status) => {
+      const currentPhotoId = String(viewerPhotoRef.current?.id ?? viewerPhotoRef.current?.imageUri ?? '');
+      if (currentPhotoId === photoId) {
+        setViewerSaveStatus(status);
+      }
+    };
+
+    setViewerSaveStatus(null);
+    setUploadError('');
+
+    if (IS_WEB && typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = viewerPhoto.imageUri;
+      link.download = `studos-album.${extensionForPhoto(viewerPhoto)}`;
+      link.rel = 'noopener';
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setStatusIfCurrent({ tone: 'success', text: 'Billedet er gemt.' });
+      return;
+    }
+
+    setSavingViewerPhotoId(photoId);
+
+    try {
+      const permission = await MediaLibrary.requestPermissionsAsync(true);
+      if (!permission.granted) {
+        setStatusIfCurrent({ tone: 'error', text: 'Giv Studos adgang til at gemme billeder.' });
+        return;
+      }
+
+      const localUri = await cachePhotoForMediaLibrary(viewerPhoto, 0);
+      await MediaLibrary.saveToLibraryAsync(localUri);
+      setStatusIfCurrent({ tone: 'success', text: 'Billedet er gemt på telefonen.' });
+    } catch {
+      setStatusIfCurrent({ tone: 'error', text: 'Billedet kunne ikke gemmes.' });
+    } finally {
+      setSavingViewerPhotoId('');
+    }
+  }, [cachePhotoForMediaLibrary, extensionForPhoto, viewerPhoto]);
+
+  const handleSaveSelectedPhotos = useCallback(async () => {
+    if (!selectedPhotos.length) return;
+
+    setUploadError('');
+    if (IS_WEB && typeof document !== 'undefined') {
+      selectedPhotos.forEach((photo, index) => {
+        if (!photo?.imageUri) return;
+
+        const link = document.createElement('a');
+        link.href = photo.imageUri;
+        link.download = `studos-album-${index + 1}.jpg`;
+        link.rel = 'noopener';
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
+      return;
+    }
+
+    const permission = await MediaLibrary.requestPermissionsAsync(true);
+    if (!permission.granted) {
+      setUploadError('Giv Studos adgang til at gemme billeder på telefonen.');
+      return;
+    }
+
+    let savedCount = 0;
+    let failedCount = 0;
+
+    for (let index = 0; index < selectedPhotos.length; index += 1) {
+      const photo = selectedPhotos[index];
+
+      try {
+        const localUri = await cachePhotoForMediaLibrary(photo, index);
+        await MediaLibrary.saveToLibraryAsync(localUri);
+        savedCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    if (failedCount > 0) {
+      setUploadError(
+        savedCount > 0
+          ? `${savedCount} gemt. ${failedCount} ${failedCount === 1 ? 'billede' : 'billeder'} kunne ikke gemmes.`
+          : 'De valgte billeder kunne ikke gemmes på telefonen.'
+      );
+      return;
+    }
+
+    setPhotoSelectionMode(false);
+    setSelectedPhotoIds([]);
+  }, [cachePhotoForMediaLibrary, selectedPhotos]);
+
+  const openBulkDeleteConfirm = useCallback(() => {
+    if (!selectedPhotos.length) return;
+
+    setBulkDeleteError('');
+    setBulkDeleteConfirmOpen(true);
+  }, [selectedPhotos.length]);
+
+  const closeBulkDeleteConfirm = useCallback(() => {
+    if (bulkDeleting) return;
+
+    setBulkDeleteConfirmOpen(false);
+    setBulkDeleteError('');
+  }, [bulkDeleting]);
+
+  const handleBulkDeleteSelectedPhotos = useCallback(async () => {
+    const selectedSnapshot = selectedPhotos
+      .map((photo) => ({ ...photo, id: String(photo?.id ?? '') }))
+      .filter((photo) => photo.id);
+    if (!selectedSnapshot.length) return;
+
+    setBulkDeleting(true);
+    setBulkDeleteError('');
+    setBulkDeleteProgress({ current: 0, total: selectedSnapshot.length });
+
+    const deletedIds = [];
+    const failedIds = [];
+
+    try {
+      for (let index = 0; index < selectedSnapshot.length; index += 1) {
+        const photoId = selectedSnapshot[index].id;
+        setBulkDeleteProgress({ current: index + 1, total: selectedSnapshot.length });
+
+        try {
+          await apiFetch(`/gallery-photos/${encodeURIComponent(photoId)}`, {
+            authToken: sessionToken,
+            method: 'DELETE',
+          });
+          deletedIds.push(photoId);
+        } catch {
+          failedIds.push(photoId);
+        }
+      }
+
+      if (deletedIds.length > 0) {
+        const deletedIdSet = new Set(deletedIds);
+        const nextPhotos = photos.filter((photo) => !deletedIdSet.has(String(photo?.id ?? '')));
+        setPhotos(nextPhotos);
+        deletedIds.forEach((photoId) => onPhotoDeleted?.(gallery?.id, photoId, nextPhotos.slice(0, 4)));
+      }
+
+      if (failedIds.length > 0) {
+        setSelectedPhotoIds(failedIds);
+        setPhotoSelectionMode(true);
+        setBulkDeleteConfirmOpen(true);
+        setBulkDeleteError(
+          deletedIds.length > 0
+            ? `${deletedIds.length} slettet. ${failedIds.length} ${failedIds.length === 1 ? 'billede' : 'billeder'} kunne ikke slettes og er stadig valgt.`
+            : `Ingen billeder blev slettet. ${failedIds.length} ${failedIds.length === 1 ? 'billede' : 'billeder'} kunne ikke slettes.`
+        );
+        return;
+      }
+
+      setSelectedPhotoIds([]);
+      setPhotoSelectionMode(false);
+      setBulkDeleteConfirmOpen(false);
+    } catch (err) {
+      setBulkDeleteError(err?.message || 'Kunne ikke slette de valgte billeder. Prøv igen.');
+    } finally {
+      setBulkDeleting(false);
+      setBulkDeleteProgress(null);
+    }
+  }, [gallery?.id, onPhotoDeleted, photos, selectedPhotos, sessionToken]);
 
   const uploadPhoto = useCallback(async () => {
     setUploadError('');
+    setUploadProgress(null);
     if (!canAddPhoto || !gallery?.id) {
       setUploadError('Du har ikke adgang til at uploade billeder i dette album.');
       return;
@@ -10631,24 +11022,70 @@ function WallsAlbumScreen({
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { setUploadError('Giv adgang til dit fotobibliotek i indstillinger.'); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsEditing: false, quality: 0.82, base64: true,
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      orderedSelection: true,
+      selectionLimit: WALLS_ALBUM_UPLOAD_SELECTION_LIMIT,
+      quality: 0.82,
+      base64: true,
     });
     if (result.canceled) return;
-    const asset = result.assets?.[0];
-    if (!asset?.base64) { setUploadError('Billedet kunne ikke læses. Prøv et andet.'); return; }
-    const mimeType = asset.mimeType ?? 'image/jpeg';
+    const selectedAssets = Array.isArray(result.assets)
+      ? result.assets.slice(0, WALLS_ALBUM_UPLOAD_SELECTION_LIMIT)
+      : [];
+    if (selectedAssets.length === 0) return;
+
     setUploading(true);
+    setUploadProgress(selectedAssets.length > 1 ? { current: 0, total: selectedAssets.length } : null);
     try {
-      const data = await apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, {
-        authToken: sessionToken, method: 'POST',
-        body: JSON.stringify({ imageData: `data:${mimeType};base64,${asset.base64}` }),
-      });
-      setPhotos((prev) => [data.photo, ...prev]);
-      onPhotoUploaded?.(gallery.id, data.photo);
+      const uploadedPhotos = [];
+      let failedCount = 0;
+
+      for (let index = 0; index < selectedAssets.length; index += 1) {
+        const asset = selectedAssets[index];
+        setUploadProgress(selectedAssets.length > 1 ? { current: index + 1, total: selectedAssets.length } : null);
+
+        if (!asset?.base64) {
+          failedCount += 1;
+          continue;
+        }
+
+        try {
+          const mimeType = asset.mimeType ?? 'image/jpeg';
+          const data = await apiFetch(`/galleries/${encodeURIComponent(gallery.id)}/photos`, {
+            authToken: sessionToken,
+            method: 'POST',
+            body: JSON.stringify({ imageData: `data:${mimeType};base64,${asset.base64}` }),
+          });
+
+          if (data?.photo) {
+            uploadedPhotos.push(data.photo);
+          } else {
+            failedCount += 1;
+          }
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      if (uploadedPhotos.length > 0) {
+        setPhotos((prev) => [...uploadedPhotos, ...prev]);
+        uploadedPhotos.forEach((photo) => onPhotoUploaded?.(gallery.id, photo));
+      }
+
+      if (failedCount > 0) {
+        setUploadError(
+          uploadedPhotos.length > 0
+            ? `${failedCount} ${failedCount === 1 ? 'billede' : 'billeder'} kunne ikke uploades.`
+            : 'Billederne kunne ikke uploades. Prøv igen.'
+        );
+      }
     } catch (err) {
-      setUploadError(err?.message || 'Billedet kunne ikke uploades. Prøv igen.');
+      setUploadError(err?.message || 'Billederne kunne ikke uploades. Prøv igen.');
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   }, [canAddPhoto, gallery?.id, onPhotoUploaded, sessionToken, uploading]);
 
@@ -10707,6 +11144,7 @@ function WallsAlbumScreen({
   };
 
   const touchHandlers = buildTouchHandlers();
+  const albumScreenTopPadding = Math.max(APP_SCREEN_TOP_PADDING, safeAreaInsets.top + 12);
 
   return (
     <Modal
@@ -10723,115 +11161,321 @@ function WallsAlbumScreen({
       >
         <Animated.View
           {...touchHandlers}
-          style={[styles.calendarSubpageFullscreen, styles.calendarSubpageDraggable, dragStyle]}
+          style={[
+            styles.calendarSubpageFullscreen,
+            styles.wallsAlbumFullscreen,
+            { paddingTop: albumScreenTopPadding },
+            styles.calendarSubpageDraggable,
+            dragStyle,
+          ]}
         >
-          {/* Header */}
-          <View {...touchHandlers} style={styles.wallsAlbumHeader}>
-            <Pressable
-              accessibilityLabel="Tilbage til Galleri"
-              accessibilityRole="button"
-              hitSlop={10}
-              onPress={handleClose}
-              style={({ pressed }) => [styles.calendarCreateBackButton, pressed ? styles.footerItemPressed : null]}
-            >
-              <Ionicons name="chevron-back" size={20} color={STUDOS_THEME.ink} />
-              <Text style={styles.calendarCreateBackText}>Galleri</Text>
-            </Pressable>
-            <Text numberOfLines={1} style={styles.wallsAlbumTitle}>{gallery?.name ?? ''}</Text>
-          </View>
-
-          {uploadError ? <Text style={[styles.errorText, { marginBottom: 6 }]}>{uploadError}</Text> : null}
-
-          {/* Fotogrid */}
-          <FlatList
-            {...touchHandlers}
-            columnWrapperStyle={styles.wallsAlbumGridRow}
-            contentContainerStyle={[
-              styles.wallsAlbumScrollContent,
-              (loading || loadError || photos.length === 0) ? styles.wallsAlbumScrollContentEmpty : null,
-            ]}
-            data={loading || loadError ? [] : photos}
-            keyExtractor={(photo) => String(photo.id)}
-            ListEmptyComponent={() => {
-              if (loading) {
-                return (
-                  <View style={styles.wallsEmptyState}>
-                    <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
-                  </View>
-                );
-              }
-              if (loadError) {
-                return (
-                  <View style={styles.wallsEmptyState}>
-                    <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
-                    <Text style={styles.wallsEmptyTitle}>Kunne ikke hente billeder</Text>
-                    <Text style={styles.wallsEmptyBody}>{loadError}</Text>
-                  </View>
-                );
-              }
-
-              return (
-                <View style={styles.wallsEmptyState}>
-                  <Ionicons name="images-outline" size={56} color="#b0c4be" />
-                  <Text style={styles.wallsEmptyTitle}>Ingen billeder endnu</Text>
-                  <Text style={styles.wallsEmptyBody}>
-                    {canAddPhoto
-                      ? 'Tryk på + for at tilføje det første billede.'
-                      : 'Der er ikke tilføjet billeder til dette album endnu.'}
-                  </Text>
-                </View>
-              );
-            }}
-            numColumns={3}
-            refreshControl={studosRefreshControl({
-              onRefresh: refreshAlbumPhotos,
-              refreshing: photosRefreshing,
-            })}
-            renderItem={({ item: photo }) => (
+          <View {...touchHandlers} style={styles.wallsAlbumHeaderSection}>
+            <View style={styles.wallsAlbumHeader}>
               <Pressable
-                accessibilityHint="Hold inde for indstillinger"
-                accessibilityLabel="Se billede"
+                accessibilityLabel="Tilbage til Galleri"
                 accessibilityRole="button"
-                onLongPress={() => setActionPhoto(photo)}
-                onPress={() => openViewer(photo)}
-                style={[styles.wallsAlbumPhotoCell, { width: photoColWidth, height: photoColWidth }]}
+                hitSlop={10}
+                onPress={handleClose}
+                style={({ pressed }) => [styles.wallsAlbumBackButton, pressed ? styles.footerItemPressed : null]}
               >
-                <Image
-                  accessibilityIgnoresInvertColors
-                  resizeMode="cover"
-                  source={{ uri: photo.imageUri }}
-                  style={styles.wallsAlbumPhoto}
+                <Ionicons
+                  name="chevron-back"
+                  size={22}
+                  color="#FFFFFF"
+                  style={styles.wallsAlbumBackIcon}
                 />
               </Pressable>
-            )}
-            removeClippedSubviews={Platform.OS !== 'ios'}
-            scrollEventThrottle={16}
-            showsVerticalScrollIndicator={false}
-          />
+              <Text numberOfLines={1} style={styles.wallsAlbumTitle}>{albumHeaderTitle}</Text>
+              <View style={styles.wallsAlbumHeaderActions}>
+                <Pressable
+                  accessibilityLabel={photoSelectionMode ? 'Slå valg af billeder fra' : 'Vælg flere billeder'}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: photoSelectionMode }}
+                  hitSlop={10}
+                  onPress={togglePhotoSelectionMode}
+                  style={({ pressed }) => [
+                    styles.wallsAlbumSelectButton,
+                    photoSelectionMode ? styles.wallsAlbumSelectButtonActive : null,
+                    pressed ? styles.footerItemPressed : null,
+                  ]}
+                >
+                  <Ionicons
+                    name={photoSelectionMode ? 'checkmark-done' : 'checkmark-circle-outline'}
+                    size={21}
+                    color={photoSelectionMode ? STUDOS_THEME.ink : '#65748b'}
+                  />
+                  {selectedPhotoCount > 0 ? (
+                    <View pointerEvents="none" style={styles.wallsAlbumSelectionCountBadge}>
+                      <Text numberOfLines={1} style={styles.wallsAlbumSelectionCountText}>{selectedPhotoCount}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+                {canAddPhoto ? (
+                  <Pressable
+                    accessibilityLabel={uploading ? 'Uploader…' : 'Tilføj billede'}
+                    accessibilityRole="button"
+                    disabled={uploading}
+                    hitSlop={10}
+                    onPress={uploadPhoto}
+                    style={({ pressed }) => [
+                      styles.wallsAlbumHeaderAddButton,
+                      pressed && !uploading ? styles.primaryButtonPressed : null,
+                      uploading ? styles.primaryButtonDisabled : null,
+                    ]}
+                  >
+                    {uploading
+                      ? <ActivityIndicator color="#FFFFFF" size="small" />
+                      : <Ionicons name="add" size={24} color="#FFFFFF" />}
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
 
-          {/* Upload-knap */}
-          {canAddPhoto && (
-            <Pressable
-              accessibilityLabel={uploading ? 'Uploader…' : 'Tilføj billede'}
-              accessibilityRole="button"
-              disabled={uploading}
-              onPress={uploadPhoto}
-              style={({ pressed }) => [
-                styles.wallsAlbumUploadButton,
-                pressed && !uploading ? styles.primaryButtonPressed : null,
-                uploading ? styles.primaryButtonDisabled : null,
+            {uploadError ? <Text style={styles.errorText}>{uploadError}</Text> : null}
+            {uploadProgress ? (
+              <Text style={styles.wallsAlbumProgressText}>
+                {`Uploader ${Math.max(1, uploadProgress.current)}/${uploadProgress.total}`}
+              </Text>
+            ) : null}
+
+            <View style={styles.wallsAlbumPhotoControls}>
+              <View style={styles.wallsAlbumPhotoSegment}>
+                {WALLS_ALBUM_PHOTO_FILTERS.map((filter) => {
+                  const active = albumPhotoFilter === filter.id;
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={filter.label}
+                      accessibilityRole="button"
+                      key={filter.id}
+                      onPress={() => setAlbumPhotoFilter(filter.id)}
+                      style={({ pressed }) => [
+                        styles.wallsAlbumPhotoSegmentOption,
+                        active ? styles.wallsAlbumPhotoSegmentOptionActive : null,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Text style={[
+                        styles.wallsAlbumPhotoSegmentText,
+                        active ? styles.wallsAlbumPhotoSegmentTextActive : null,
+                      ]}>
+                        {filter.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View style={styles.wallsAlbumPhotoSegment}>
+                {WALLS_ALBUM_PHOTO_SORTS.map((sortOption) => {
+                  const active = albumPhotoSort === sortOption.id;
+
+                  return (
+                    <Pressable
+                      accessibilityLabel={sortOption.label}
+                      accessibilityRole="button"
+                      key={sortOption.id}
+                      onPress={() => setAlbumPhotoSort(sortOption.id)}
+                      style={({ pressed }) => [
+                        styles.wallsAlbumPhotoSegmentOption,
+                        active ? styles.wallsAlbumPhotoSegmentOptionActive : null,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Text style={[
+                        styles.wallsAlbumPhotoSegmentText,
+                        active ? styles.wallsAlbumPhotoSegmentTextActive : null,
+                      ]}>
+                        {sortOption.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.wallsAlbumMainContent}>
+            <FlatList
+              {...touchHandlers}
+              columnWrapperStyle={styles.wallsAlbumGridRow}
+              contentContainerStyle={[
+                styles.wallsAlbumScrollContent,
+                (loading || loadError || displayedPhotos.length === 0) ? styles.wallsAlbumScrollContentEmpty : null,
               ]}
-            >
-              {uploading
-                ? <ActivityIndicator color={STUDOS_THEME.blue} size="small" />
-                : <Ionicons name="add" size={28} color={STUDOS_THEME.blue} />}
-            </Pressable>
-          )}
+              data={loading || loadError ? [] : displayedPhotos}
+              keyExtractor={(photo) => String(photo.id)}
+              ListEmptyComponent={() => {
+                if (loading) {
+                  return (
+                    <View style={styles.wallsEmptyState}>
+                      <ActivityIndicator color={STUDOS_THEME.blue} size="large" />
+                    </View>
+                  );
+                }
+                if (loadError) {
+                  return (
+                    <View style={styles.wallsEmptyState}>
+                      <Ionicons name="cloud-offline-outline" size={52} color="#b0c4be" />
+                      <Text style={styles.wallsEmptyTitle}>Kunne ikke hente billeder</Text>
+                      <Text style={styles.wallsEmptyBody}>{loadError}</Text>
+                    </View>
+                  );
+                }
+
+                if (photos.length > 0) {
+                  return (
+                    <View style={styles.wallsEmptyState}>
+                      <Ionicons name="filter-outline" size={52} color="#b0c4be" />
+                      <Text style={styles.wallsEmptyTitle}>Ingen billeder her</Text>
+                      <Text style={styles.wallsEmptyBody}>
+                        Skift filter for at se flere billeder i albummet.
+                      </Text>
+                    </View>
+                  );
+                }
+
+                return (
+                  <View style={styles.wallsEmptyState}>
+                    <Ionicons name="images-outline" size={56} color="#b0c4be" />
+                    <Text style={styles.wallsEmptyTitle}>Ingen billeder endnu</Text>
+                    <Text style={styles.wallsEmptyBody}>
+                      {canAddPhoto
+                        ? 'Tryk på + for at tilføje det første billede.'
+                        : 'Der er ikke tilføjet billeder til dette album endnu.'}
+                    </Text>
+                  </View>
+                );
+              }}
+              numColumns={WALLS_ALBUM_GRID_COLUMNS}
+              refreshControl={studosRefreshControl({
+                onRefresh: refreshAlbumPhotos,
+                refreshing: photosRefreshing,
+              })}
+              renderItem={({ item: photo }) => {
+                const selected = selectedPhotoIdSet.has(String(photo?.id ?? ''));
+
+                return (
+                  <Pressable
+                    accessibilityHint={photoSelectionMode ? undefined : 'Hold inde for at vælge flere billeder'}
+                    accessibilityLabel={photoSelectionMode ? (selected ? 'Fravælg billede' : 'Vælg billede') : 'Se billede'}
+                    accessibilityRole={photoSelectionMode ? 'checkbox' : 'button'}
+                    accessibilityState={photoSelectionMode ? { checked: selected } : undefined}
+                    delayLongPress={250}
+                    onLongPress={photoSelectionMode ? undefined : () => startPhotoSelectionFromLongPress(photo)}
+                    onPress={() => {
+                      if (photoSelectionMode) {
+                        togglePhotoSelection(photo);
+                        return;
+                      }
+                      openViewer(photo);
+                    }}
+                    style={[
+                      styles.wallsAlbumPhotoCell,
+                      selected ? styles.wallsAlbumPhotoCellSelected : null,
+                      { width: photoColWidth, height: photoColWidth },
+                    ]}
+                  >
+                    <Image
+                      accessibilityIgnoresInvertColors
+                      resizeMode="cover"
+                      source={{ uri: photo.imageUri }}
+                      style={styles.wallsAlbumPhoto}
+                    />
+                    {photoSelectionMode ? (
+                      <View pointerEvents="none" style={styles.wallsAlbumPhotoSelectionOverlay}>
+                        <View
+                          style={[
+                            styles.wallsAlbumPhotoSelectionBadge,
+                            selected ? styles.wallsAlbumPhotoSelectionBadgeActive : null,
+                          ]}
+                        >
+                          {selected ? <Ionicons name="checkmark" size={15} color="#FFFFFF" /> : null}
+                        </View>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                );
+              }}
+              removeClippedSubviews={Platform.OS !== 'ios'}
+              scrollEventThrottle={16}
+              showsVerticalScrollIndicator={false}
+              style={styles.wallsAlbumPhotoList}
+            />
+          </View>
+
+          {photoSelectionMode ? (
+            <View style={styles.wallsAlbumBulkActionBar}>
+              <Pressable
+                accessibilityLabel="Vælg alle billeder"
+                accessibilityRole="button"
+                disabled={!hasAlbumPhotos}
+                onPress={selectAllPhotos}
+                style={({ pressed }) => [
+                  styles.wallsAlbumBulkActionButton,
+                  pressed && hasAlbumPhotos ? styles.footerItemPressed : null,
+                  !hasAlbumPhotos ? styles.wallsAlbumBulkActionButtonDisabled : null,
+                ]}
+              >
+                <Ionicons name="checkbox-outline" size={18} color={hasAlbumPhotos ? STUDOS_THEME.ink : '#9aa3b4'} />
+                <Text style={[styles.wallsAlbumBulkActionText, !hasAlbumPhotos ? styles.wallsAlbumBulkActionTextDisabled : null]}>
+                  Vælg alle
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Gem valgte billeder"
+                accessibilityRole="button"
+                disabled={!hasSelectedPhotos}
+                onPress={handleSaveSelectedPhotos}
+                style={({ pressed }) => [
+                  styles.wallsAlbumBulkActionButton,
+                  styles.wallsAlbumBulkActionButtonSave,
+                  pressed && hasSelectedPhotos ? styles.footerItemPressed : null,
+                  !hasSelectedPhotos ? styles.wallsAlbumBulkActionButtonDisabled : null,
+                ]}
+              >
+                <Ionicons name="download-outline" size={18} color={hasSelectedPhotos ? '#FFFFFF' : '#9aa3b4'} />
+                <Text style={[
+                  styles.wallsAlbumBulkActionText,
+                  styles.wallsAlbumBulkActionTextInverted,
+                  !hasSelectedPhotos ? styles.wallsAlbumBulkActionTextDisabled : null,
+                ]}>
+                  Gem
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Slet valgte billeder"
+                accessibilityRole="button"
+                disabled={!hasSelectedPhotos}
+                onPress={openBulkDeleteConfirm}
+                style={({ pressed }) => [
+                  styles.wallsAlbumBulkActionButton,
+                  styles.wallsAlbumBulkActionButtonDelete,
+                  pressed && hasSelectedPhotos ? styles.footerItemPressed : null,
+                  !hasSelectedPhotos ? styles.wallsAlbumBulkActionButtonDisabled : null,
+                ]}
+              >
+                <Ionicons name="trash-outline" size={18} color={hasSelectedPhotos ? '#FFFFFF' : '#9aa3b4'} />
+                <Text style={[
+                  styles.wallsAlbumBulkActionText,
+                  styles.wallsAlbumBulkActionTextInverted,
+                  !hasSelectedPhotos ? styles.wallsAlbumBulkActionTextDisabled : null,
+                ]}>
+                  Slet
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           {/* Fuldskærms-viewer */}
           {viewerPhoto && (
-            <Animated.View style={[styles.wallsPhotoViewerRoot, { opacity: viewerOpacity }]}>
-              <Pressable style={StyleSheet.absoluteFill} onPress={closeViewer} />
+            <Animated.View
+              {...viewerTouchHandlers}
+              style={[
+                styles.wallsPhotoViewerRoot,
+                { opacity: viewerOpacity, paddingTop: Math.max(safeAreaInsets.top, 20) + 12 },
+              ]}
+            >
+              <Pressable style={StyleSheet.absoluteFill} onPress={handleViewerBackdropPress} />
               <Image
                 accessibilityIgnoresInvertColors
                 resizeMode="contain"
@@ -10839,10 +11483,47 @@ function WallsAlbumScreen({
                 style={styles.wallsPhotoViewerImage}
               />
               <View style={styles.wallsPhotoViewerBar}>
-                <Text style={styles.wallsPhotoViewerMetaText}>
-                  {`Uploadet af ${uploaderName(viewerPhoto)}`}
-                </Text>
+                <View style={styles.wallsPhotoViewerMeta}>
+                  <Text numberOfLines={1} style={styles.wallsPhotoViewerMetaText}>
+                    {`Uploadet af ${uploaderName(viewerPhoto)}`}
+                  </Text>
+                  {formatDateTime(viewerPhoto?.createdAt) ? (
+                    <Text numberOfLines={1} style={styles.wallsPhotoViewerMetaDate}>
+                      {formatDateTime(viewerPhoto.createdAt)}
+                    </Text>
+                  ) : null}
+                  {viewerSaveStatus?.text ? (
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.wallsPhotoViewerMetaStatus,
+                        viewerSaveStatus.tone === 'error' ? styles.wallsPhotoViewerMetaStatusError : null,
+                      ]}
+                    >
+                      {viewerSaveStatus.text}
+                    </Text>
+                  ) : null}
+                </View>
                 <View style={styles.wallsPhotoViewerActions}>
+                  <Pressable
+                    accessibilityLabel="Gem billede"
+                    accessibilityRole="button"
+                    disabled={Boolean(savingViewerPhotoId)}
+                    hitSlop={10}
+                    onPress={handleSaveViewerPhoto}
+                    style={({ pressed }) => [
+                      styles.wallsPhotoViewerAction,
+                      styles.wallsPhotoViewerSaveAction,
+                      pressed && !savingViewerPhotoId ? styles.footerItemPressed : null,
+                      savingViewerPhotoId ? styles.wallsPhotoViewerActionDisabled : null,
+                    ]}
+                  >
+                    {savingViewerPhotoId === String(viewerPhoto?.id ?? viewerPhoto?.imageUri ?? '') ? (
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                      <Ionicons name="download-outline" size={20} color="#FFFFFF" />
+                    )}
+                  </Pressable>
                   {canDeletePhoto(viewerPhoto) && (
                     <Pressable
                       accessibilityLabel="Slet billede"
@@ -10945,6 +11626,53 @@ function WallsAlbumScreen({
                     ]}
                   >
                     <Text style={styles.primaryButtonText}>{deleting ? 'Sletter…' : 'Slet billede'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Slet valgte billeder */}
+          {bulkDeleteConfirmOpen && (
+            <View pointerEvents="box-none" style={styles.wallsMemberSheetRoot}>
+              <Pressable
+                disabled={bulkDeleting}
+                onPress={closeBulkDeleteConfirm}
+                style={styles.wallsMemberSheetBackdrop}
+              />
+              <View style={styles.wallsPhotoConfirmSheet}>
+                <Ionicons name="trash-outline" size={34} color={STUDOS_THEME.red} />
+                <Text style={[styles.chatModalTitle, styles.chatActionConfirmTitle]}>
+                  {`Slet ${selectedPhotoCount} ${selectedPhotoCount === 1 ? 'billede' : 'billeder'}?`}
+                </Text>
+                <Text style={[styles.chatCodeModalText, styles.chatActionConfirmText]}>
+                  De valgte billeder slettes permanent og kan ikke gendannes.
+                </Text>
+                {bulkDeleteProgress ? (
+                  <Text style={styles.wallsAlbumProgressText}>
+                    {`Sletter ${Math.max(1, bulkDeleteProgress.current)}/${bulkDeleteProgress.total}`}
+                  </Text>
+                ) : null}
+                {bulkDeleteError ? <Text style={styles.errorText}>{bulkDeleteError}</Text> : null}
+                <View style={styles.luckyAddModalActions}>
+                  <Pressable
+                    disabled={bulkDeleting}
+                    onPress={closeBulkDeleteConfirm}
+                    style={({ pressed }) => [styles.luckyAddModalGhostButton, pressed ? styles.footerItemPressed : null]}
+                  >
+                    <Text style={styles.luckyAddModalGhostButtonText}>Annuller</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={bulkDeleting || !hasSelectedPhotos}
+                    onPress={handleBulkDeleteSelectedPhotos}
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      styles.wallsDeleteButton,
+                      pressed && !bulkDeleting && hasSelectedPhotos ? styles.primaryButtonPressed : null,
+                      bulkDeleting || !hasSelectedPhotos ? styles.primaryButtonDisabled : null,
+                    ]}
+                  >
+                    <Text style={styles.primaryButtonText}>{bulkDeleting ? 'Sletter…' : 'Slet'}</Text>
                   </Pressable>
                 </View>
               </View>
@@ -27900,55 +28628,263 @@ const styles = StyleSheet.create({
     borderColor: STUDOS_THEME.blue,
     backgroundColor: STUDOS_THEME.blue,
   },
+  wallsAlbumFullscreen: {
+    backgroundColor: '#F1FBF8',
+  },
+  wallsAlbumHeaderSection: {
+    gap: 8,
+    paddingBottom: 12,
+  },
   wallsAlbumHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingBottom: 12,
+    justifyContent: 'flex-start',
+    gap: 8,
+    minHeight: 38,
+    position: 'relative',
+  },
+  wallsAlbumBackButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: STUDOS_THEME.red,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 7,
+    zIndex: 1,
+  },
+  wallsAlbumBackIcon: {
+    color: '#FFFFFF',
+  },
+  wallsAlbumHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginLeft: 'auto',
+    zIndex: 1,
+  },
+  wallsAlbumSelectButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: '#DDE8E5',
+    backgroundColor: '#FFFFFF',
+    position: 'relative',
+  },
+  wallsAlbumSelectButtonActive: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: STUDOS_THEME.yellow,
+    shadowColor: STUDOS_THEME.yellow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 7,
+  },
+  wallsAlbumSelectionCountBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    backgroundColor: STUDOS_THEME.red,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  wallsAlbumSelectionCountText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
+  },
+  wallsAlbumHeaderAddButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: STUDOS_THEME.green,
+    shadowColor: STUDOS_THEME.green,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 12,
+    elevation: 7,
+    zIndex: 1,
+  },
+  wallsAlbumPhotoControls: {
+    flexDirection: 'row',
     gap: 8,
   },
-  wallsAlbumTitle: {
+  wallsAlbumProgressText: {
+    color: '#4f6076',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  wallsAlbumPhotoSegment: {
     flex: 1,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 3,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#DDE8E5',
+    backgroundColor: '#FFFFFF',
+  },
+  wallsAlbumPhotoSegmentOption: {
+    flex: 1,
+    minHeight: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    paddingHorizontal: 4,
+  },
+  wallsAlbumPhotoSegmentOptionActive: {
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  wallsAlbumPhotoSegmentText: {
+    color: '#65748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  wallsAlbumPhotoSegmentTextActive: {
+    color: '#FFFFFF',
+  },
+  wallsAlbumTitle: {
     color: STUDOS_THEME.ink,
     fontSize: 22,
     fontWeight: '900',
-    letterSpacing: -0.3,
+    height: 38,
+    letterSpacing: 0,
+    left: 96,
+    lineHeight: 38,
+    position: 'absolute',
+    right: 96,
+    textAlign: 'center',
+    top: 0,
+  },
+  wallsAlbumMainContent: {
+    flex: 1,
+    minHeight: 0,
+  },
+  wallsAlbumPhotoList: {
+    flex: 1,
+  },
+  wallsAlbumBulkActionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#DDE8E5',
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  wallsAlbumBulkActionButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E7EFEC',
+    backgroundColor: '#F4F8F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 6,
+  },
+  wallsAlbumBulkActionButtonSave: {
+    borderColor: STUDOS_THEME.green,
+    backgroundColor: STUDOS_THEME.green,
+  },
+  wallsAlbumBulkActionButtonDelete: {
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  wallsAlbumBulkActionButtonDisabled: {
+    borderColor: '#E5EBEF',
+    backgroundColor: '#EEF3F1',
+    opacity: 0.58,
+  },
+  wallsAlbumBulkActionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  wallsAlbumBulkActionTextInverted: {
+    color: '#FFFFFF',
+  },
+  wallsAlbumBulkActionTextDisabled: {
+    color: '#9aa3b4',
   },
   wallsAlbumScrollContent: {
     flexGrow: 1,
+    paddingHorizontal: WALLS_ALBUM_GRID_SIDE_GUTTER,
     paddingBottom: 24,
   },
   wallsAlbumScrollContentEmpty: {
     justifyContent: 'center',
   },
   wallsAlbumGridRow: {
-    gap: 4,
-    marginBottom: 4,
+    gap: WALLS_ALBUM_GRID_GAP,
+    marginBottom: WALLS_ALBUM_GRID_GAP,
   },
   wallsAlbumPhotoCell: {
     borderRadius: 4,
     overflow: 'hidden',
     backgroundColor: '#EDF3F1',
   },
+  wallsAlbumPhotoCellSelected: {
+    borderWidth: 2,
+    borderColor: STUDOS_THEME.yellow,
+  },
   wallsAlbumPhoto: {
     width: '100%',
     height: '100%',
   },
-  wallsAlbumUploadButton: {
-    flexDirection: 'row',
+  wallsAlbumPhotoSelectionOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'flex-end',
+    padding: 6,
+    backgroundColor: 'rgba(23,33,67,0.12)',
+  },
+  wallsAlbumPhotoSelectionBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.42)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: STUDOS_THEME.blue,
-    borderStyle: 'dashed',
-    paddingVertical: 14,
-    backgroundColor: 'rgba(39,174,127,0.04)',
   },
-  wallsAlbumUploadButtonText: {
-    color: STUDOS_THEME.blue,
-    fontSize: 15,
-    fontWeight: '800',
+  wallsAlbumPhotoSelectionBadgeActive: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: STUDOS_THEME.red,
   },
   wallsPhotoViewerRoot: {
     ...StyleSheet.absoluteFillObject,
@@ -27970,11 +28906,30 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: 'rgba(10,14,20,0.72)',
   },
-  wallsPhotoViewerMetaText: {
+  wallsPhotoViewerMeta: {
     flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  wallsPhotoViewerMetaText: {
     color: 'rgba(255,255,255,0.7)',
     fontSize: 13,
     fontWeight: '600',
+  },
+  wallsPhotoViewerMetaDate: {
+    color: 'rgba(255,255,255,0.48)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  wallsPhotoViewerMetaStatus: {
+    color: STUDOS_THEME.green,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  wallsPhotoViewerMetaStatusError: {
+    color: STUDOS_THEME.red,
   },
   wallsPhotoViewerActions: {
     flexDirection: 'row',
@@ -27984,6 +28939,16 @@ const styles = StyleSheet.create({
   wallsPhotoViewerAction: {
     padding: 8,
     borderRadius: 20,
+    minWidth: 36,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wallsPhotoViewerActionDisabled: {
+    opacity: 0.62,
+  },
+  wallsPhotoViewerSaveAction: {
+    backgroundColor: STUDOS_THEME.green,
   },
   wallsPhotoActionSheet: {
     backgroundColor: '#FFFFFF',

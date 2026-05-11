@@ -13,8 +13,8 @@
         gælder kun hjemmesiden — mobilappen bruger ikke cookies.
       </p>
       <div class="legal-meta">
-        <span><strong>Version:</strong> 1.1</span>
-        <span><strong>Senest opdateret:</strong> 8. maj 2026</span>
+        <span><strong>Version:</strong> 1.2</span>
+        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
         <span><strong>Udbyder:</strong> PlateDigital EMV · CVR 42456187</span>
       </div>
     </header>
@@ -121,6 +121,12 @@
           sagt ja til notifikationer. Disse oplysninger er beskrevet i vores
           <a href="{{ route('legal.privacy') }}">privatlivspolitik</a>. Appen
           indeholder ingen tracking-SDK'er eller analyseværktøjer.
+        </p>
+        <p>
+          Når du vælger billeder til et album eller gemmer et albumbillede på din
+          telefon, bruger appen native iOS-/Android-tilladelser eller systemvælgere.
+          Det er ikke cookies eller tracking, og Studos får kun adgang til de
+          billeder, du aktivt vælger eller gemmer.
         </p>
       </article>
 

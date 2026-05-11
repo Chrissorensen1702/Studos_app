@@ -13,8 +13,8 @@
         eller på studos.dk. Læs dem grundigt — de gælder, så længe du har en konto.
       </p>
       <div class="legal-meta">
-        <span><strong>Version:</strong> 1.1</span>
-        <span><strong>Senest opdateret:</strong> 8. maj 2026</span>
+        <span><strong>Version:</strong> 1.2</span>
+        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
         <span><strong>Udbyder:</strong> PlateDigital EMV · CVR 42456187</span>
       </div>
     </header>
@@ -23,8 +23,10 @@
       <div class="legal-callout">
         <strong>Kort fortalt:</strong> Studos er gratis, reklamefrit og uden tracking.
         Du skal være mindst 15 år for at oprette en konto. Du må ikke chikanere,
-        true eller dele andres indhold uden samtykke. Vi handler hurtigt på
-        rapporter og du kan til enhver tid blokere, klage eller slette din konto.
+        true eller dele andres indhold uden samtykke. Del kun billeder, du har ret
+        til at dele, og respekter hvis nogen beder om at få et billede fjernet. Vi
+        handler hurtigt på rapporter og du kan til enhver tid blokere, klage eller
+        slette din konto.
       </div>
 
       <article id="udbyder" class="legal-section">
@@ -95,6 +97,8 @@
           <li>Forsøge at omgå sikkerhedsforanstaltninger, rate limits eller adgangskontrol.</li>
           <li>Scrape, kopiere eller videredistribuere data, du ikke selv har skabt.</li>
           <li>Indsende indhold om andre uden deres samtykke (særligt billeder og kontaktoplysninger).</li>
+          <li>Uploade eller dele billeder af andre uden samtykke eller andet klart lovligt grundlag.</li>
+          <li>Gemme, kopiere eller videredele andres billeder uden for Studos uden deres samtykke eller andet lovligt grundlag.</li>
           <li>Anvende automatiserede systemer (bots, scripts, crawlers) uden skriftlig tilladelse.</li>
           <li>Oprette dyster eller udfordringer, der involverer alkohol, stoffer, vold, færdsel, selvskade, ulovlige handlinger eller på anden vis kan skade dig selv eller andre.</li>
         </ul>
@@ -114,11 +118,30 @@
           vores <a href="{{ route('legal.privacy') }}">privatlivspolitik</a>.
           Du beholder selv ophavsretten til dit indhold.
         </p>
+        <p>
+          Når du uploader billeder til et album, bekræfter du, at du har ret til at
+          dele billedet med den valgte målgruppe, og at eventuelle genkendelige
+          personer på billedet ikke med rimelighed kan forvente, at billedet holdes
+          privat. Vær særligt varsom med billeder af børn og unge, billeder fra
+          fester, private situationer, sårbare situationer eller billeder, der kan
+          opfattes som ydmygende, seksuelle, krænkende eller udstillende.
+        </p>
+        <p>
+          Albummer er lukkede for den valgte målgruppe i Studos. Hvis du kan gemme
+          et billede på din telefon, må det kun bruges til privat og lovlig brug.
+          Du må ikke offentliggøre eller videresende billeder uden for Studos uden
+          samtykke eller andet lovligt grundlag. Album-ejere, uploadere og
+          berettigede klasseansvarlige kan slette billeder, og Studos kan fjerne
+          eller begrænse indhold efter rapport, indsigelse eller mistanke om
+          misbrug.
+        </p>
         <p>Indhold, der er forbudt på Studos, omfatter — men er ikke begrænset til:</p>
         <ul>
           <li>Hadefuldt, racistisk, sexistisk, homofobisk eller diskriminerende indhold.</li>
           <li>Mobning, trusler, chikane eller udhængning af enkeltpersoner.</li>
           <li>Seksuelt indhold, særligt indhold der involverer mindreårige.</li>
+          <li>Intime, private, følsomme eller ydmygende billeder uden klart samtykke.</li>
+          <li>Billeder eller videoer, der udstiller beruselse, nøgenhed, sygdom, skade, selvskade eller andre sårbare situationer.</li>
           <li>Vold, selvskade, opfordring til selvmord eller livsfarlige handlinger.</li>
           <li>Salg eller deling af ulovlige stoffer, våben eller andre regulerede produkter.</li>
           <li>Spam, phishing, svindel eller falske identiteter.</li>
@@ -151,13 +174,18 @@
         </p>
         <ul>
           <li><strong>Blokering:</strong> Du kan blokere andre brugere fra app-indstillingerne. Blokerede brugere kan ikke kontakte dig eller se din aktivitet.</li>
-          <li><strong>Rapportering (notice):</strong> Du kan rapportere chats, beskeder, begivenheder, gallerier og brugere direkte i appen. Indberetningen modtager en kvittering, jf. forordning (EU) 2022/2065 (DSA) art. 16.</li>
+          <li><strong>Rapportering (notice):</strong> Du kan rapportere chats, beskeder, begivenheder, albummer, enkeltbilleder, gallerier og brugere direkte i appen. Indberetningen modtager en kvittering, jf. forordning (EU) 2022/2065 (DSA) art. 16.</li>
           <li><strong>Liste over blokeringer:</strong> Du kan til enhver tid se og fjerne dine blokeringer i indstillingerne.</li>
         </ul>
         <p>
           Vi gennemgår alle rapporter og handler så hurtigt som muligt. Hvis vi
           fjerner indhold, suspenderer eller lukker din konto, modtager du en
           begrundelse (statement of reasons), jf. DSA art. 17.
+        </p>
+        <p>
+          Ved rapporter om billeder kan vi skjule, slette eller begrænse adgang til
+          billedet, mens sagen vurderes. Gentagne eller alvorlige overtrædelser kan
+          føre til midlertidig suspension eller permanent lukning af kontoen.
         </p>
         <p>
           <strong>Klage:</strong> Du kan klage over en modererings­beslutning ved
@@ -178,9 +206,11 @@
         <h2>9. Nul tolerance for stødende indhold</h2>
         <div class="legal-callout">
           Studos har <strong>nul tolerance</strong> for objektivt stødende indhold og
-          chikanerende adfærd. Brud på dette punkt fører til øjeblikkelig fjernelse
-          af indhold og kan resultere i permanent lukning af kontoen. Du modtager
-          en begrundelse og kan klage som beskrevet i pkt. 8.
+          chikanerende adfærd, herunder krænkende billeder, ulovligt seksuelt
+          indhold, billeder af mindreårige i seksuelle sammenhænge og ikke-samtykket
+          intimt indhold. Brud på dette punkt fører til øjeblikkelig fjernelse af
+          indhold og kan resultere i permanent lukning af kontoen. Du modtager en
+          begrundelse og kan klage som beskrevet i pkt. 8.
         </div>
       </article>
 
@@ -213,7 +243,7 @@
           <li><strong>Ingen reklamer.</strong> Studos viser ingen kommercielle reklamer overhovedet.</li>
           <li><strong>Ingen profilering.</strong> Vi profilerer ikke brugere på baggrund af adfærd, interesser eller personoplysninger, og vi anvender ingen adfærdsbaseret målretning, jf. DSA art. 28, stk. 2.</li>
           <li><strong>Ingen tracking-SDK'er.</strong> Vi anvender hverken Apple App Tracking Transparency, Google UMP, Facebook Pixel, Google Analytics eller lignende sporings-værktøjer.</li>
-          <li><strong>Lukket community.</strong> Indhold deles kun inden for klassen, gruppechats, direktechats eller med dine connections — aldrig offentligt indekseret.</li>
+          <li><strong>Lukket community.</strong> Indhold deles kun inden for klassen, albummer, gruppechats, direktechats eller med dine connections — aldrig offentligt indekseret.</li>
           <li><strong>Standard-private profiler.</strong> Profilers synlighed er som udgangspunkt begrænset til klassen.</li>
           <li><strong>Aktiv moderation</strong> og bruger-værktøjer til blokering og rapportering, jf. pkt. 8.</li>
         </ul>
@@ -288,6 +318,13 @@
           straks. Visse oplysninger kan opbevares i en kortere periode af
           lovgivningsmæssige eller sikkerhedsmæssige grunde — se vores
           <a href="{{ route('legal.privacy') }}">privatlivspolitik</a>.
+        </p>
+        <p>
+          Billeder, du har uploadet til fælles albummer, slettes ikke nødvendigvis
+          automatisk sammen med kontoen, hvis de indgår i klassens fælles historik.
+          Du kan slette egne billeder før kontosletning eller kontakte os, hvis du
+          ønsker konkrete billeder fjernet. Efter kontosletning pseudonymiseres din
+          uploader-identitet.
         </p>
         <p>
           <strong>Klasse-ejere:</strong> Hvis du er den eneste aktive ejer (owner)

@@ -1178,7 +1178,7 @@ class ChatController extends Controller
             : null;
 
         PushNotifier::send(PushNotifier::CAT_CHAT_MESSAGE, $recipientIds, [
-            'title' => $senderName,
+            'title' => $senderName.' 💬',
             'body' => $chatContext ? $chatContext.' · '.$preview : $preview,
             'data' => [
                 'conversationId' => $chat->id,
@@ -1211,8 +1211,8 @@ class ChatController extends Controller
         $groupName = blank($title) ? 'Gruppechat' : $title;
 
         PushNotifier::send(PushNotifier::CAT_GROUP_CHAT_INVITE, $recipients, [
-            'title' => 'Du er tilfoejet i en gruppechat',
-            'body' => $inviterName.' tilfoejede dig i "'.$groupName.'".',
+            'title' => 'Du er tilføjet i en gruppechat 👥',
+            'body' => $inviterName.' tilføjede dig i "'.$groupName.'".',
             'data' => [
                 'conversationId' => $conversationId,
                 'invitedByMemberId' => $invitedBy->id,

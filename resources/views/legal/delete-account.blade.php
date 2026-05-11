@@ -15,7 +15,7 @@
       </p>
       <div class="legal-meta">
         <span><strong>Effektiv:</strong> straks (i app) / op til 7 dage (via formular)</span>
-        <span><strong>Senest opdateret:</strong> 8. maj 2026</span>
+        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
       </div>
     </header>
 
@@ -43,6 +43,7 @@
           <li>Push-tokens og enhedsnavne.</li>
           <li>Personlig Studos-kode.</li>
           <li>Nødkontaktoplysninger.</li>
+          <li>Private mediefiler, der kun er knyttet til din profil, fx profilbillede.</li>
         </ul>
       </article>
 
@@ -53,11 +54,12 @@
           eller sikkerhedsmæssige grunde. De er ikke længere knyttet til din
           identitet via direkte identifikatorer, men kan i juridisk forstand
           betragtes som <em>pseudonymiseret</em> snarere end fuldt anonymiseret —
-          se vores <a href="{{ route('legal.privacy') }}">privatlivspolitik</a> pkt. 6.
+          se vores <a href="{{ route('legal.privacy') }}">privatlivspolitik</a> pkt. 7.
         </p>
         <ul>
           <li><strong>Aggregerede aktivitetsdata:</strong> Caps-saldo, dyste-historik og lignende afkobles fra din identitet, så klassens historik bevares.</li>
           <li><strong>Beskeder i fælles chats:</strong> Beskeder, du har sendt i fælles chats eller på opslagstavler, fjernes ikke automatisk, men dit afsendernavn vises som "Slettet bruger". Du kan slette enkelte beskeder før kontosletning.</li>
+          <li><strong>Billeder i fælles albummer:</strong> Billeder, du har uploadet til et fælles album, fjernes ikke altid automatisk, hvis de indgår i klassens fælles historik. Du kan slette egne billeder før kontosletning eller bede os vurdere konkrete billeder til fjernelse. Efter sletning pseudonymiseres uploader-oplysninger.</li>
           <li><strong>Moderationsdata:</strong> Eventuelle rapporter, du har indsendt eller været genstand for, opbevares i op til 24 måneder af hensyn til misbrugsforebyggelse og DSA-dokumentationspligt.</li>
           <li><strong>Server-logs:</strong> Op til 30 dage.</li>
           <li><strong>Support-korrespondance:</strong> Op til 24 måneder, medmindre længere opbevaring kræves af lov.</li>
@@ -111,6 +113,7 @@
           <li>Du kan ikke længere logge ind på kontoen.</li>
           <li>Du modtager ingen push-notifikationer fra Studos.</li>
           <li>Dit display-navn i historiske beskeder vises som "Slettet bruger".</li>
+          <li>Eventuelle billeder i fælles albummer kan fortsat være synlige for den oprindelige målgruppe, men uden direkte uploader-identitet.</li>
           <li>Hvis du senere ønsker at bruge Studos igen, skal du oprette en ny konto.</li>
         </ul>
       </article>

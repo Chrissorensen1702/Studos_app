@@ -14,6 +14,13 @@
           "photosPermission": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed."
         }
       ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Studos bruger adgang til billeder, så du kan gemme album-billeder på telefonen.",
+          "savePhotosPermission": "Studos gemmer valgte album-billeder i din kamerarulle."
+        }
+      ],
       "expo-secure-store"
     ],
     "ios": {
@@ -25,7 +32,8 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed."
+        "NSPhotoLibraryUsageDescription": "Studos bruger det billede, du vælger, som profilbillede eller coverbillede til en begivenhed.",
+        "NSPhotoLibraryAddUsageDescription": "Studos gemmer valgte album-billeder i din kamerarulle."
       }
     },
     "android": {

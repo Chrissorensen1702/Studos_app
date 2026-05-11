@@ -13,8 +13,8 @@
         dem, og hvilke rettigheder du har under databeskyttelsesforordningen (GDPR).
       </p>
       <div class="legal-meta">
-        <span><strong>Version:</strong> 1.1</span>
-        <span><strong>Senest opdateret:</strong> 8. maj 2026</span>
+        <span><strong>Version:</strong> 1.2</span>
+        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
         <span><strong>Dataansvarlig:</strong> PlateDigital EMV · CVR 42456187</span>
       </div>
     </header>
@@ -23,7 +23,8 @@
       <div class="legal-callout">
         <strong>Kort fortalt:</strong> Studos er reklamefri og uden tracking. Vi
         sælger aldrig dine data. Vi indsamler kun det, vi skal bruge for at drive
-        klassehubben — og du kan slette din konto når som helst.
+        klassehubben, herunder lukkede albummer i appen, og du kan slette din
+        konto når som helst.
       </div>
 
       <article id="dataansvarlig" class="legal-section">
@@ -61,7 +62,7 @@
             </tr>
             <tr>
               <td>Profilbillede / mediefiler</td>
-              <td>Profilbillede, billeder og videoer i gallerier og chats</td>
+              <td>Profilbillede, album- og galleribilleder, covers samt eventuelle billeder eller videoer i chats</td>
               <td>Du selv</td>
             </tr>
             <tr>
@@ -71,8 +72,13 @@
             </tr>
             <tr>
               <td>Brugerindhold</td>
-              <td>Chatbeskeder (1:1, grupper og klasse), opslag, kommentarer, begivenheder, RSVP, dyster, udfordringer, gallerier, albums</td>
+              <td>Chatbeskeder (1:1, grupper og klasse), opslag, kommentarer, begivenheder, RSVP, dyster, udfordringer, gallerier, albummer, albumnavne og albumindstillinger</td>
               <td>Du selv</td>
+            </tr>
+            <tr>
+              <td>Album- og billedmetadata</td>
+              <td>Uploader, uploadtidspunkt, synlighed, målgruppe, tilladelser, sortering, rapportstatus og slette-/moderationsstatus</td>
+              <td>Du selv / system</td>
             </tr>
             <tr>
               <td>Connections og blokeringer</td>
@@ -122,8 +128,9 @@
       <article id="formaal" class="legal-section">
         <h2>3. Formål og retsgrundlag</h2>
         <ul>
-          <li><strong>Levere tjenesten</strong> (kontooprettelse, login, chat, kalender, dyster) — retsgrundlag: opfyldelse af aftale, GDPR art. 6, stk. 1, litra b.</li>
+          <li><strong>Levere tjenesten</strong> (kontooprettelse, login, chat, kalender, dyster, albummer og billeddeling) — retsgrundlag: opfyldelse af aftale, GDPR art. 6, stk. 1, litra b.</li>
           <li><strong>Sikkerhed og misbrugsforebyggelse</strong> (login-koder, rate limiting, blokeringer, rapporter, moderation) — retsgrundlag: legitim interesse, GDPR art. 6, stk. 1, litra f.</li>
+          <li><strong>Vise og administrere albummer</strong> (upload, visning, gem på telefon, sletning, rapportering, uploader- og datooplysninger) — retsgrundlag: opfyldelse af aftale, GDPR art. 6, stk. 1, litra b, og legitim interesse i et sikkert klassefællesskab, litra f.</li>
           <li><strong>Push-notifikationer</strong> — retsgrundlag: samtykke, GDPR art. 6, stk. 1, litra a. Du kan til enhver tid trække samtykket tilbage i app-indstillingerne.</li>
           <li><strong>Forbedring af tjenesten</strong> (aggregerede og anonyme statistikker over brug) — retsgrundlag: legitim interesse, GDPR art. 6, stk. 1, litra f.</li>
           <li><strong>Lovbestemte krav</strong> (myndighedsanmodninger, regnskabs- og bogføringspligt) — retsgrundlag: retlig forpligtelse, GDPR art. 6, stk. 1, litra c.</li>
@@ -134,8 +141,34 @@
         </p>
       </article>
 
+      <article id="album-billeder" class="legal-section">
+        <h2>4. Albummer, billeder og personer på billeder</h2>
+        <p>
+          Albummer og gallerier i Studos er brugeroprettet indhold. Billeder kan
+          være personoplysninger, når personer kan genkendes. Den bruger, der
+          uploader et billede, skal derfor sikre sig, at billedet lovligt kan deles
+          i den valgte målgruppe, og at personer på billedet ikke med rimelighed
+          kan føle sig udstillet, krænket eller bragt i en privat eller følsom
+          situation.
+        </p>
+        <p>
+          Albummer er lukkede for den valgte Studos-målgruppe. "Offentlig" eller
+          delt synlighed i appen betyder synlig for den valgte klasse, crew eller
+          specifikke personer i Studos — ikke offentliggørelse på det åbne internet.
+          Brugere med adgang til et album kan dog se billederne og, hvor funktionen
+          er aktiveret, gemme dem på deres egen telefon. De må ikke videredele
+          billeder uden for Studos uden samtykke eller andet lovligt grundlag.
+        </p>
+        <p>
+          Vi viser uploader og uploadtidspunkt i billedviseren for at skabe
+          gennemsigtighed og ansvarlighed. Billeder kan slettes af berettigede
+          brugere eller fjernes af Studos efter rapport, indsigelse, misbrug,
+          ulovligt indhold eller andre saglige grunde.
+        </p>
+      </article>
+
       <article id="deling" class="legal-section">
-        <h2>4. Modtagere og databehandlere</h2>
+        <h2>5. Modtagere og databehandlere</h2>
         <p>
           Vi deler kun data med tredjeparter, når det er nødvendigt for at drive
           tjenesten. Tjenesteleverandører, der behandler personoplysninger på
@@ -155,17 +188,19 @@
         </p>
         <p>
           Andre brugere ser kun det indhold, du selv vælger at dele i din klasse,
-          gruppechats, direktechat eller med dine connections. Indhold
+          gruppechats, direktechat, albummer eller med dine connections. Indhold
           videregives aldrig til tredjeparter til markedsførings- eller
           analyseformål.
         </p>
       </article>
 
       <article id="opbevaring" class="legal-section">
-        <h2>5. Opbevaringsperioder</h2>
+        <h2>6. Opbevaringsperioder</h2>
         <ul>
           <li><strong>Aktiv konto:</strong> Så længe din konto er aktiv.</li>
-          <li><strong>Slettet konto:</strong> Personoplysninger pseudonymiseres straks (navn, e-mail, telefon, fødselsdag, profilbillede mv. fjernes; bruger-ID bevares som intern reference for at undgå brudte historikker — se pkt. 6).</li>
+          <li><strong>Slettet konto:</strong> Personoplysninger pseudonymiseres straks (navn, e-mail, telefon, fødselsdag, profilbillede mv. fjernes; bruger-ID bevares som intern reference for at undgå brudte historikker — se pkt. 7).</li>
+          <li><strong>Albummer og billeder:</strong> Opbevares så længe albummet er aktivt for den valgte målgruppe, eller indtil billedet/albummet slettes af en berettiget bruger, fjernes efter rapport/indsigelse, eller kontoen/klassen afvikles efter gældende sletteflow.</li>
+          <li><strong>Slettede albumfiler:</strong> Fjernes eller gøres utilgængelige hurtigst muligt. Tekniske sikkerhedskopier og logspor kan eksistere kortvarigt, og materiale knyttet til moderation kan opbevares efter nedenstående moderationsregel.</li>
           <li><strong>Login-tokens:</strong> Op til 90 dage efter sidste brug.</li>
           <li><strong>Login-koder (engangskoder):</strong> 15 minutter.</li>
           <li><strong>Push-tokens:</strong> Slettes når du slår notifikationer fra eller sletter kontoen.</li>
@@ -177,7 +212,7 @@
       </article>
 
       <article id="anonymisering" class="legal-section">
-        <h2>6. Anonymisering, pseudonymisering og historik</h2>
+        <h2>7. Anonymisering, pseudonymisering og historik</h2>
         <p>
           Når du sletter din konto, fjerner vi de oplysninger, der direkte kan
           identificere dig (navn, e-mail, telefon, adgangskode, profilbillede mv.).
@@ -185,21 +220,28 @@
         </p>
         <p>
           Visse interne identifikatorer (fx dit bruger-ID) bevares som stabil
-          reference, så klassens fælles historik (chats, dyster, gallerier) ikke
+          reference, så klassens fælles historik (chats, dyster, albummer, gallerier) ikke
           går i stykker. Det betyder, at sletningen i juridisk forstand er en
           <em>pseudonymisering</em> snarere end en fuld anonymisering — dine data
           er fortsat omfattet af GDPR, og du beholder dine rettigheder, jf.
           GDPR betragtning 26.
         </p>
         <p>
-          Ønsker du yderligere udvanding (fx fjernelse af enkelte beskeder, du
-          selv har sendt), kan du kontakte
+          Billeder, du har uploadet til fælles albummer, fjernes ikke altid
+          automatisk ved kontosletning, hvis de indgår i klassens fælles historik.
+          Din uploader-identitet pseudonymiseres, og du kan slette egne billeder
+          før kontosletning eller kontakte os, hvis du ønsker bestemte billeder
+          fjernet.
+        </p>
+        <p>
+          Ønsker du yderligere udvanding (fx fjernelse af enkelte beskeder eller
+          billeder, du selv har sendt), kan du kontakte
           <a href="mailto:hej@studos.dk">hej@studos.dk</a>.
         </p>
       </article>
 
       <article id="sikkerhed" class="legal-section">
-        <h2>7. Sikkerhed</h2>
+        <h2>8. Sikkerhed</h2>
         <ul>
           <li>Adgangskoder gemmes som saltede hashes (bcrypt).</li>
           <li>Al trafik krypteres i transit med TLS.</li>
@@ -210,7 +252,7 @@
       </article>
 
       <article id="rettigheder" class="legal-section">
-        <h2>8. Dine rettigheder</h2>
+        <h2>9. Dine rettigheder</h2>
         <p>Du har under GDPR følgende rettigheder:</p>
         <ul>
           <li><strong>Indsigt</strong> (art. 15) — få en kopi af de oplysninger, vi har om dig.</li>
@@ -225,12 +267,17 @@
           Anmodninger sendes til <a href="mailto:hej@studos.dk">hej@studos.dk</a>. Vi
           besvarer henvendelser inden for 30 dage og kan kræve identifikation for at
           beskytte din konto. Du kan klage direkte til Datatilsynet uden først at
-          kontakte os — se pkt. 14.
+          kontakte os — se pkt. 15.
+        </p>
+        <p>
+          Hvis et billede af dig er delt i et album, kan du også bede om
+          begrænsning, sletning eller en konkret vurdering, selv om du ikke selv
+          har uploadet billedet.
         </p>
       </article>
 
       <article id="boern" class="legal-section">
-        <h2>9. Aldersgrænse og mindreårige</h2>
+        <h2>10. Aldersgrænse og mindreårige</h2>
         <p>
           Studos er rettet mod elever på ungdomsuddannelser. Som forretningsregel
           skal du være mindst <strong>15 år</strong> for at oprette en konto.
@@ -248,10 +295,16 @@
           profilering, ingen adfærdsbaseret målretning og lukkede klassebaserede
           fællesskaber. Se brugervilkårenes pkt. 11.
         </p>
+        <p>
+          Billeder af børn og unge kræver særlig omtanke. Vi fjerner eller
+          begrænser billeder hurtigt, hvis de fremstår krænkende, private,
+          seksuelle, ydmygende, ulovlige eller på anden måde uegnede for et
+          ungdomsfællesskab.
+        </p>
       </article>
 
       <article id="cookies-tracking" class="legal-section">
-        <h2>10. Cookies og tracking</h2>
+        <h2>11. Cookies og tracking</h2>
         <p>
           <strong>Mobilappen</strong> bruger ikke cookies og indeholder ingen
           tracking-SDK'er som Apple App Tracking Transparency, Google UMP,
@@ -262,10 +315,15 @@
           cookies (session, CSRF-beskyttelse). Læs mere i vores
           <a href="{{ route('legal.cookies') }}">cookiepolitik</a>.
         </p>
+        <p>
+          Når du vælger eller gemmer billeder i mobilappen, bruges iOS' og
+          Androids native fototilladelser eller systemvælgere. Studos scanner ikke
+          dit billedbibliotek og uploader kun de billeder, du aktivt vælger.
+        </p>
       </article>
 
       <article id="push" class="legal-section">
-        <h2>11. Push-notifikationer</h2>
+        <h2>12. Push-notifikationer</h2>
         <p>
           Push-notifikationer er valgfrie og kræver dit aktive samtykke i mobilen.
           Når du aktiverer notifikationer, gemmer vi din Expo Push Token sammen
@@ -278,13 +336,14 @@
       </article>
 
       <article id="tredjeparter" class="legal-section">
-        <h2>12. Tredjepartstjenester</h2>
+        <h2>13. Tredjepartstjenester</h2>
         <table class="legal-table">
           <thead>
             <tr><th>Tjeneste</th><th>Formål</th><th>Rolle</th><th>Placering</th></tr>
           </thead>
           <tbody>
             <tr><td>Laravel Cloud</td><td>Hosting + database + lagring</td><td>Databehandler</td><td>EU</td></tr>
+            <tr><td>iOS/Android fototilladelser</td><td>Vælge og gemme albumfotos på brugerens egen enhed</td><td>Enheds-/platformsfunktion</td><td>På din enhed</td></tr>
             <tr><td>Expo Push Service (Expo Inc.)</td><td>Push-notifikationer</td><td>Databehandler</td><td>USA (SCC)</td></tr>
             <tr><td>Apple App Store</td><td>App-distribution</td><td>Selvstændig dataansvarlig</td><td>EU/USA</td></tr>
             <tr><td>Google Play</td><td>App-distribution</td><td>Selvstændig dataansvarlig</td><td>EU/USA</td></tr>
@@ -294,7 +353,7 @@
       </article>
 
       <article id="overfoersel" class="legal-section">
-        <h2>13. Overførsel til lande uden for EU/EØS</h2>
+        <h2>14. Overførsel til lande uden for EU/EØS</h2>
         <p>
           Visse leverandører er placeret i USA (fx Expo Inc.). Overførsler sker
           på baggrund af EU-Kommissionens standardkontraktbestemmelser
@@ -305,7 +364,7 @@
       </article>
 
       <article id="klage" class="legal-section">
-        <h2>14. Klage til Datatilsynet</h2>
+        <h2>15. Klage til Datatilsynet</h2>
         <p>
           Du har til enhver tid ret til at klage til Datatilsynet over vores
           behandling af dine personoplysninger — også uden først at kontakte os:<br>
@@ -315,7 +374,7 @@
       </article>
 
       <article id="aendringer" class="legal-section">
-        <h2>15. Ændringer i politikken</h2>
+        <h2>16. Ændringer i politikken</h2>
         <p>
           Vi kan opdatere denne politik. Væsentlige ændringer varsles i appen mindst
           14 dage før ikrafttræden. Den til enhver tid gældende version er tilgængelig
@@ -324,7 +383,7 @@
       </article>
 
       <article id="kontakt" class="legal-section">
-        <h2>16. Kontakt</h2>
+        <h2>17. Kontakt</h2>
         <p>
           <strong>PlateDigital EMV</strong><br>
           CVR: 42456187<br>

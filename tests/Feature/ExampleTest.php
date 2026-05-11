@@ -2209,7 +2209,7 @@ class ExampleTest extends TestCase
             'email' => 'maja.app@example.test',
             'role' => 'student',
             'status' => 'pending',
-            'privacy_version' => '2026-04-26',
+            'privacy_version' => '2026-05-11',
         ]);
 
         $photoUrl = $response->json('session.member.profilePhotoUrl');

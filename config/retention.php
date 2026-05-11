@@ -59,6 +59,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Gallery albums and photos (galleries, gallery_photos)
+    |--------------------------------------------------------------------------
+    | Politik: "Opbevares så længe albummet er aktivt for den valgte målgruppe,
+    | eller indtil billedet/albummet slettes af en berettiget bruger, fjernes
+    | efter rapport/indsigelse, eller kontoen/klassen afvikles efter gældende
+    | sletteflow".
+    |
+    | Dette er en hændelsesbaseret regel og ikke en datobaseret cron-regel:
+    | sletning håndhæves i de almindelige album-, foto-, konto- og
+    | moderationsflows.
+    */
+
+    /*
+    |--------------------------------------------------------------------------
     | Login codes (engangskoder)
     |--------------------------------------------------------------------------
     | Politik: "15 minutter".

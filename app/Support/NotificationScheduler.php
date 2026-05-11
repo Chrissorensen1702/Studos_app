@@ -59,7 +59,7 @@ class NotificationScheduler
             $challenge = Str::limit((string) ($duel->challenge ?? ''), 80);
 
             $sent += PushNotifier::send(PushNotifier::CAT_DUEL_EXPIRING, $recipients, [
-                'title' => 'Dyst udløber snart',
+                'title' => 'Dyst udløber snart ⏳',
                 'body' => '"'.$challenge.'" udløber om ca. '.$hoursLeft.' '.($hoursLeft === 1 ? 'time' : 'timer').'.',
                 'data' => [
                     'duelId' => $duel->id,
@@ -94,7 +94,7 @@ class NotificationScheduler
             $now->copy()->addHours(22),
             $now->copy()->addHours(26),
             '24h',
-            'Begivenhed i morgen',
+            'Begivenhed i morgen 📅',
         );
 
         // 2-hour reminder
@@ -103,7 +103,7 @@ class NotificationScheduler
             $now->copy()->addMinutes(90),
             $now->copy()->addMinutes(150),
             '2h',
-            'Begivenhed om kort tid',
+            'Begivenhed om kort tid ⏰',
         );
 
         return $sent;
@@ -159,7 +159,7 @@ class NotificationScheduler
             }
 
             $whenLabel = ! blank($event->starts_at ?? null)
-                ? Carbon::parse($event->starts_at)->isoFormat('D. MMM, H:mm')
+                ? Carbon::parse($event->starts_at)->isoFormat('D. MMM, [kl.] H:mm')
                 : (! blank($event->event_date ?? null) ? Carbon::parse($event->event_date)->isoFormat('D. MMM') : null);
 
             $sent += PushNotifier::send(PushNotifier::CAT_EVENT_REMINDER, $invitedIds, [
@@ -222,8 +222,8 @@ class NotificationScheduler
                 : null;
 
             $sent += PushNotifier::send(PushNotifier::CAT_RSVP_REMINDER, $missingMemberIds, [
-                'title' => 'Du mangler at svare',
-                'body' => Str::limit((string) ($event->title ?? 'Begivenhed'), 80).' venter paa dit svar'.($whenLabel ? ' (afholdes '.$whenLabel.')' : '').'.',
+                'title' => 'Du mangler at svare ❓',
+                'body' => Str::limit((string) ($event->title ?? 'Begivenhed'), 80).' venter på dit svar'.($whenLabel ? ' (afholdes '.$whenLabel.')' : '').'.',
                 'data' => [
                     'eventId' => $event->id,
                 ],
@@ -267,7 +267,7 @@ class NotificationScheduler
         }
 
         return PushNotifier::send(PushNotifier::CAT_GOOD_DEED_REMINDER, $unclaimedMemberIds, [
-            'title' => 'Ugens gode gerning venter',
+            'title' => 'Ugens gode gerning venter 🌟',
             'body' => 'Du har endnu ikke claimet ugens gode gerning — drys lidt godhed og tjen Caps.',
             'data' => [
                 'weekKey' => $weekKey,
@@ -313,7 +313,7 @@ class NotificationScheduler
         }
 
         return PushNotifier::send(PushNotifier::CAT_STREAK_REMINDER, $atRiskMembers, [
-            'title' => 'Din streak er paa spil',
+            'title' => 'Din streak er på spil 🔥',
             'body' => 'Du har ikke checket ind i dag — bevar din streak inden midnat.',
             'data' => [
                 'dayKey' => $today,
