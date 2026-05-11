@@ -5450,6 +5450,25 @@ class StudosController extends Controller
         return response()->json(['photo' => $this->galleryPhotoApiShape($photo)], 201);
     }
 
+    public function downloadGalleryPhoto(Request $request, string $photo)
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        $existing = DB::table('gallery_photos')
+            ->where('id', $photo)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($existing, 404, 'Billedet findes ikke.');
+
+        $this->resolveGalleryForMember((string) $existing->gallery_id, $member);
+        $downloadUrl = UploadedImage::publicUrl($existing->image_url, $request);
+
+        abort_unless(filled($downloadUrl), 404, 'Billedfilen findes ikke.');
+
+        return redirect()->away($downloadUrl);
+    }
+
     public function destroyGalleryPhoto(Request $request, string $photo): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);

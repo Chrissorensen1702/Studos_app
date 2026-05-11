@@ -65,6 +65,7 @@ Route::delete('/galleries/{gallery}', [StudosController::class, 'destroyGallery'
 Route::post('/galleries/{gallery}/report', [StudosController::class, 'reportGallery'])->middleware('throttle:10,1');
 Route::get('/galleries/{gallery}/photos', [StudosController::class, 'getGalleryPhotos'])->middleware('throttle:60,1');
 Route::post('/galleries/{gallery}/photos', [StudosController::class, 'storeGalleryPhoto'])->middleware('throttle:20,1');
+Route::get('/gallery-photos/{photo}/download', [StudosController::class, 'downloadGalleryPhoto'])->middleware('throttle:60,1');
 Route::delete('/gallery-photos/{photo}', [StudosController::class, 'destroyGalleryPhoto'])->middleware('throttle:20,1');
 Route::post('/gallery-photos/{photo}/report', [StudosController::class, 'reportGalleryPhoto'])->middleware('throttle:10,1');
 

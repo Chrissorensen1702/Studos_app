@@ -49,7 +49,7 @@ mellem:
 - Kalender
 - Chat
 - Overblik
-- Duel
+- Dyst
 - Galleri
 
 `Chat` er ikke laengere en placeholder. Den har foerste rigtige version med
@@ -99,6 +99,22 @@ knap nederst paa kalendersiden og beregnes paa lokal dato/tid.
 `Overblik` har dynamisk countdown til studenterugen, `Mit Studos`, lokal
 hueklip-persistens, Caps-container, `Min kommende kalender`, `Seneste aktivitet`
 og `Klassedyster`.
+
+`Galleri` er klassens album-univers. Oversigten viser albums med dynamiske
+covers, kategori-tabs, soegning og sortering. Album-siden har header med
+tilbageknap, centreret albumnavn, groent tilfoej-ikon og toggle til valg-mode.
+Billeder vises i 3 kolonner, og brugeren kan long-presse et billede for at
+starte valg-mode direkte. Naar valg-mode er aktivt, vises en bundlinje med
+`Gem`, `Slet` og `Vaelg alle`, hvor handlinger kraever mindst ét valgt billede.
+Upload kan vaelge flere billeder i native picker og viser progress som
+`Uploader 3/10`. Fullscreen viewer understotter swipe mellem billeder,
+gem/slet/rapport-actions samt metadata for uploader og uploadtidspunkt.
+
+Rigtig "Gem paa telefon" bruger `expo-media-library`, saa eksisterende
+development/preview builds skal genbygges, naar modulet eller native
+fototilladelser er aendret. `app.json` indeholder baade
+`NSPhotoLibraryUsageDescription`, `NSPhotoLibraryAddUsageDescription` og Expo
+MediaLibrary permission-tekster.
 
 ## App-shell og navigation
 
@@ -191,6 +207,10 @@ npm run mobile:start
 Native. Hvis en eksisterende Android/iOS development build ikke indeholder det
 native modul, falder chatten tilbage til polling. Rigtig Reverb realtime
 kraever et genbygget development build med NetInfo.
+
+`expo-media-library` er tilfoejet til native gem-til-telefon i albummer. Hvis
+simulator/device viser `Cannot find native module 'ExpoMediaLibrary'`, koerer
+den et gammelt native build og skal genbygges.
 
 Android keyboard-layout er sat til `resize` i `app.json`. Chatinputfeltet er
 tilpasset keyboard paa baade iOS og Android, men skal stadig regressions-testes
@@ -314,28 +334,33 @@ Status pr. 2026-04-28:
 - `Chat realtime is unavailable in this build. [TypeError: constructor is not callable]`
   er rettet i `createChatEcho`: `pusher-js/react-native` eksporterer
   `Pusher`, og den sendes nu direkte til Laravel Echo via `Pusher` optionen.
+- Albummer har native media-save via `expo-media-library`, flerbillede-upload,
+  upload-progress, multi-select, swipe viewer og metadata i viewer.
 - Android og iOS JS export blev koert groent efter rettelserne.
 
 ## Fortsaet Herfra
 
-1. Byg nye preview/internal builds til iOS og Android og smoke-test
-   system-popup, push-toggle, kategori-opt-out og chat-push paa fysiske
-   enheder.
-2. Smoke-test de nye pushkategorier: Dyst, events, reminders, connections,
-   galleri, ugens gode gerning og weekly streak.
-3. Bekraeft at Laravel Scheduler koerer i Cloud, saa reminder-kommandoerne
+1. Byg nye preview/internal builds til iOS og Android, fordi
+   `expo-media-library` og native fototilladelser kraever nyt native build.
+2. Smoke-test albummer paa fysiske enheder: flerbillede-upload, progress,
+   long-press valg-mode, multi-select, gem paa telefon, slet flere, swipe
+   viewer, rapportering og synlighedsregler.
+3. Smoke-test push: system-popup, push-toggle, kategori-opt-out, chat-push og
+   de nye pushkategorier for Dyst, events, reminders, connections, galleri,
+   ugens gode gerning og weekly streak.
+4. Bekraeft at Laravel Scheduler koerer i Cloud, saa reminder-kommandoerne
    bliver afviklet.
-4. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
+5. Test chat paa to enheder med Cloud API/Reverb eller Metro paa `8081` og
    Reverb paa `8080`: send, read-status, realtime/polling, swipe tilbage,
    long-press, blokering, rapportering og keyboard paa iOS/Android.
-5. Lav admin/moderationsside, saa `member_reports`,
+6. Lav admin/moderationsside, saa `member_reports`,
    `moderation_violations`, blocks og chat-events kan gennemgaas og handles
    paa foer drift.
-6. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
+7. Gennemtest kalenderflowet paa rigtige enheder: cover-upload, dato/tid,
    invitationer, RSVP og tomme states.
-7. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
+8. Fjern/afklar demo-hardcoding og placeholders foer release, fx hardcodede
    tekster, testpersoner og ufaerdige sidebar-sider.
-8. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
+9. Klargoer drift: produktions-API/Reverb, HTTPS, uploads-permissions,
    privacy/terms/support links, demo-login til review og korrekt content
    rating for brugerchat/UGC.
 

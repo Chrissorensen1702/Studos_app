@@ -4,10 +4,9 @@ Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
 Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
-Status er opdateret 2026-05-10 efter Android-regression fix
-(refreshControl/scroll-view collapse), gendannet pull-to-refresh paa baade
-iOS og Android, og robust safe-area handling for sidebaren via
-`react-native-safe-area-context`.
+Status er opdateret 2026-05-11 efter album-siderne, native gem-til-telefon,
+multi-select, billedviewer med swipe, upload-progress, bedre slet-status og
+opdaterede web-politikker for album/billeddeling.
 
 Se ogsaa:
 
@@ -61,9 +60,14 @@ Se ogsaa:
 - Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
   til én klasse. Dette haandhaeves i backend-validering og database-indekset
   `members.email`.
-- Walls/galleri er implementeret: klassealbums med synlighedsregler,
-  fotoupload, billedvisning, rapportering, kategori-tabs, soegning, sortering
-  og dynamisk cover-fallback. Backend bruger `galleries` og `gallery_photos`.
+- Walls/galleri er implementeret som klassealbums med synlighedsregler,
+  album-sider, 3-kolonne fotogrid, flerbillede-upload, upload-progress,
+  multi-select, vaelg-alle, gem/slet-handlinger, billedviewer med swipe,
+  uploader/dato-metadata, rapportering, kategori-tabs, soegning, sortering og
+  dynamisk cover-fallback. Backend bruger `galleries` og `gallery_photos`.
+- Native "gem paa telefon" bruger `expo-media-library`; iOS/Android builds skal
+  derfor indeholde ExpoMediaLibrary-modulet og de tilhoerende foto-permission
+  tekster fra `apps/mobile/app.json`.
 - Aktivitetsloggen er implementeret som et globalt klassefeed med
   adgangsfiltrering: brugeren ser kun events, albums og uploads, som brugeren
   faktisk har adgang til.
@@ -86,6 +90,10 @@ Se ogsaa:
   credentials er oprettet i EAS for `dk.studenterapp.mobile`.
 - Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
   nu throttlet 30/min.
+- Web-politikker er opdateret 2026-05-11: privatlivspolitik, brugervilkaar,
+  cookiepolitik og slet-konto-side daekker nu albummer, billeder af
+  genkendelige personer, native fototilladelser, gem-til-telefon,
+  viderdeling, rapportering, kontosletning og opbevaring.
 
 ## Struktur
 
@@ -437,7 +445,7 @@ Footer-navigation:
 - `Chat`
 - `Overblik`
 - `Dyst`
-- `Walls`
+- `Galleri`
 
 Sidebar:
 
@@ -598,10 +606,26 @@ Walls:
   automatisk de nyeste billeder som cover: 1 foto i fuld bredde, 2-3 fotos som
   lodrette felter og 4+ fotos som 2x2-collage.
 - Album-skærmen viser alle fotos i et grid og har upload-knap.
+- Album-skærmen er delt i header og main-content, saa toppen ikke ligger under
+  notch/Dynamic Island.
+- Tilfoej-knappen ligger i headeren som groent cirkelikon.
+- Album-skærmen har toggle til valg-mode. Naar valg-mode er aktivt, vises en
+  bundlinje med `Gem`, `Slet` og `Vaelg alle`; handlingerne kraever mindst ét
+  valgt billede.
+- Billeder vises i 3 kolonner pr. raekke med mindre previews.
+- Upload kan vaelge flere billeder i samme native picker, viser progress som
+  fx `Uploader 3/10`, og opdaterer albummet efter upload.
+- Slet flere giver bedre status, saa delvise fejl ikke skjules.
+- Long-press paa et billede starter valg-mode direkte og vaelger billedet.
 - Long-press paa et album viser `Om albummet`; brugere med adgang ser ogsaa
   `Upload billede`, som aabner albummet og starter billedvaelgeren automatisk.
-- Fotoupload bruger expo-image-picker og sender til `POST /api/galleries/{gallery}/photos`.
-- Enkeltfotovisning aabner i en fullscreen viewer med download/slet/rapport-actions.
+- Fotoupload bruger `expo-image-picker` og sender til
+  `POST /api/galleries/{gallery}/photos`.
+- Enkeltfotovisning aabner i en fullscreen viewer med swipe mellem billeder,
+  gem/slet/rapport-actions og metadata for uploader og uploadtidspunkt.
+- Rigtig "Gem paa telefon" bruger `expo-media-library`, saa billedet gemmes i
+  kamerarullen/fotobiblioteket i native iOS/Android builds.
+- Viewer-billedet er rykket ned, saa hoeje billeder ikke gaar op under notch.
 - Rapportering og sletning er tilgaengelig for uploader og klasse-admin.
 - Backend soft-deleter gallerier og fotos og gemmer `deleted_by_member_id`.
 
@@ -623,6 +647,8 @@ iOS:
 - Produktbuild fjerner lokal netvaerkspermission automatisk.
 - Development variant kan bruge lokal netvaerkspermission til dev-server.
 - Photo Library permission forklarer profilbillede og eventcover.
+- Photo Library Add permission og `expo-media-library` forklarer, at Studos kan
+  gemme valgte album-billeder i brugerens kamerarulle.
 - iOS push bruger `expo-notifications`, `aps-environment` entitlement og Expo
   Push Service. APNs push key er oprettet i EAS credentials for
   `dk.studenterapp.mobile`.
@@ -666,8 +692,13 @@ Ryddet op:
 Det der ser godt ud:
 
 - Appen har ikke lokal dev-server/netvaerkspermission i produktions-iOS config.
-- Photo permission er konkret og knyttet til brugerens egen handling.
+- Photo permissions er konkrete og knyttet til brugerens egen handling:
+  vaelge profil/event/album-billeder og gemme valgte album-billeder paa
+  telefonen.
 - Chat/events har filtering, rapportering, blokering og throttling.
+- Albummer har lukkede maalgrupper, rapportering af album/enkeltbilleder,
+  sletning for berettigede brugere, multi-select-handlinger og metadata i
+  billedviewer.
 - Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
   private challenge-detaljer i feedet.
 - Push er native-only og klar til baade iOS og Android. iOS test-push og
@@ -675,10 +706,13 @@ Det der ser godt ud:
 - Android mikrofonpermission er nu fjernet/blokeret.
 - Backend koerer paa HTTPS i Cloud.
 - Caps har ingen pengevaerdi, kan ikke koebes, saelges, veksles eller bruges til
-  praemier. Dette skal skrives tydeligt i vilkaar/politik foer publish, saa Dyst
-  ikke kan misforstaas som gambling eller real-money contest.
+  praemier. Dette er skrevet ind i vilkaar/politik, saa Dyst ikke skal
+  misforstaas som gambling eller real-money contest.
 - Dyst/Caps er socialt og internt til Studos, men review notes boer forklare
   kort, hvordan Caps, Dyst, Challenge og escrow virker.
+- Privacy/terms/cookies/delete-account er live som offentlige Laravel-sider og
+  opdateret til album/billeddeling. De boer stadig juridisk gennemlaeses foer
+  endelig App Store / Google Play-submit.
 
 Release-blokkere foer Apple/Google:
 
@@ -689,8 +723,9 @@ Release-blokkere foer Apple/Google:
   `EXPO_PUBLIC_REVERB_HOST`, `EXPO_PUBLIC_REVERB_PORT=443`,
   `EXPO_PUBLIC_REVERB_SCHEME=https`). Release-builds maa ikke falde tilbage til
   lokale `http://localhost`, `.local`, `10.*` eller `192.168.*` endpoints.
-- Privatlivspolitik, vilkaar/EULA og supportside skal vaere live og linket fra
-  appen/store listings.
+- Privatlivspolitik, vilkaar/EULA, cookiepolitik og slet-konto-side skal
+  linkes korrekt fra appen/store listings og matche App Store Privacy / Google
+  Play Data Safety.
 - App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
   profilbilleder/uploads, aktivitetslog, chatindhold, events, push-token og
   supportdata.
@@ -699,8 +734,9 @@ Release-blokkere foer Apple/Google:
 - Foer App Store-release boer gruppechat-medlemslisten have konkrete
   medlemshandlinger til `Rapporter medlem` og `Bloker medlem`, saa UGC-kravet
   om brugerblokering og rapportering ogsaa er tydeligt inde i gruppechat.
-- UGC-vilkaar skal klart forbyde chikane, diskrimination, trusler, seksuelt
-  indhold, ulovligt indhold og misbrug af billeder/chat.
+- UGC-vilkaar forbyder nu chikane, diskrimination, trusler, seksuelt indhold,
+  ulovligt indhold og misbrug af billeder/chat; reviewer-notes boer forklare,
+  hvor rapportering/blokering findes i appen.
 - Review-notes skal have demo-login, forklaring af invitekode og hvor reviewer
   finder rapporter/blokering.
 - Placeholder/laaste features skal ikke markedsfoeres som faerdige features.
@@ -724,7 +760,8 @@ Release-blokkere foer Apple/Google:
 - Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
 - Admin/moderationsside.
-- Offentlige privacy/terms/EULA/support-sider til store review.
+- Juridisk gennemgang af privacy/terms/cookies/delete-account foer store
+  review.
 - Endelig moderation-haandtering for rapporter i web/admin.
 - Data-export flow.
 
@@ -747,6 +784,28 @@ Password: studos123
 ```
 
 ## Seneste Verificering
+
+Senest koert 2026-05-11 efter album-mediehandlinger og policy-opdatering:
+
+```bash
+php artisan view:cache
+git diff --check
+php artisan test --filter=test_app_can_resolve_invite_code_and_create_profile
+php artisan test --filter=RetentionServiceTest
+php artisan test
+```
+
+Resultat:
+
+- Blade templates cacher OK.
+- `git diff --check`: OK.
+- `php artisan test`: **68 tests passer, 706 assertions**.
+- Privatlivsversion for nye accepter opdateret til `2026-05-11`.
+- `resources/views/legal/privacy.blade.php`,
+  `resources/views/legal/terms.blade.php`,
+  `resources/views/legal/cookies.blade.php` og
+  `resources/views/legal/delete-account.blade.php` er opdateret til albummer,
+  billeder, fototilladelser, gem-til-telefon, rapportering og kontosletning.
 
 Senest koert 2026-05-10 efter Android scroll-collapse fix og safe-area
 sidebar:
@@ -901,12 +960,13 @@ Resultat:
 
 ## Naeste Gode Skridt
 
-1. QA Aktiviteter paa to brugere/enheder: events med/uden invitation,
+1. QA Albummer/Walls paa to brugere/enheder: opret galleri, filter/sortering/
+   soegning, dynamisk cover-fallback ved 0/1/2/3/4 billeder, flerbillede-upload,
+   upload-progress, long-press valg-mode, multi-select, gem paa telefon, slet,
+   rapporter, swipe-viewer og synlighedsregler.
+2. QA Aktiviteter paa to brugere/enheder: events med/uden invitation,
    faelles/private albums, billeduploads, medlem-tilfoejelse, foedselsdag,
    `Mod hinanden`, Challenge og blokering/synlighedsfiltrering.
-2. QA Walls paa to brugere/enheder: opret galleri, filter/sortering/soegning,
-   dynamisk cover-fallback ved 0/1/2/3/4 billeder, upload via long-press,
-   fullscreen, slet, rapporter og synlighedsregler.
 3. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
    Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
    realtime/polling og Caps-refundering.
@@ -914,7 +974,8 @@ Resultat:
    blocking/reporting og login.
 5. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
    backups og production env.
-6. Faa privacy policy, terms/EULA, supportside og Caps/Dyst-forklaring klar.
+6. Faa privacy policy, terms/EULA, cookiepolitik, slet-konto-side og Caps/Dyst-
+   forklaring juridisk gennemlaest.
 7. Faa account deletion/support-flow helt review-klar.
 8. Lav admin/moderationsside til rapporter, blocks og violations samt
    gruppechat-medlemshandlinger til rapporter/bloker.

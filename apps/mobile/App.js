@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   AppState,
   Dimensions,
@@ -10821,6 +10822,22 @@ function WallsAlbumScreen({
     return ['jpg', 'jpeg', 'png', 'webp', 'heic'].includes(ext) ? ext : fallback;
   }, []);
 
+  const downloadPhotoToCache = useCallback(async (uri, targetUri, options = {}) => {
+    const downloaded = await FileSystem.downloadAsync(uri, targetUri, options);
+    const status = Number(downloaded?.status ?? 200);
+
+    if (status < 200 || status >= 300) {
+      throw new Error(`Billedet kunne ikke downloades (${status}).`);
+    }
+
+    const info = await FileSystem.getInfoAsync(downloaded.uri);
+    if (!info.exists || (typeof info.size === 'number' && info.size <= 0)) {
+      throw new Error('Den downloadede billedfil er tom.');
+    }
+
+    return downloaded.uri;
+  }, []);
+
   const cachePhotoForMediaLibrary = useCallback(async (photo, index) => {
     const uri = photo?.imageUri;
     if (!uri) throw new Error('Billedet mangler en filadresse.');
@@ -10830,12 +10847,47 @@ function WallsAlbumScreen({
     if (!cacheRoot) throw new Error('Kunne ikke finde midlertidig lagerplads.');
 
     const ext = extensionForPhoto(photo);
-    const photoId = String(photo?.id ?? index + 1).replace(/[^a-z0-9_-]/gi, '');
-    const targetUri = `${cacheRoot}studos-album-${photoId}-${Date.now()}.${ext}`;
-    const downloaded = await FileSystem.downloadAsync(uri, targetUri);
+    const rawPhotoId = String(photo?.id ?? '').trim();
+    const photoId = (rawPhotoId || String(index + 1)).replace(/[^a-z0-9_-]/gi, '') || String(index + 1);
+    const targetUri = (source) => `${cacheRoot}studos-album-${photoId}-${source}-${Date.now()}.${ext}`;
+    let lastError = null;
 
-    return downloaded.uri;
-  }, [extensionForPhoto]);
+    if (rawPhotoId && sessionToken) {
+      for (const baseUrl of API_BASE_URLS_WITH_PREFERENCE()) {
+        try {
+          return await downloadPhotoToCache(
+            `${baseUrl}/gallery-photos/${encodeURIComponent(rawPhotoId)}/download`,
+            targetUri('api'),
+            {
+              headers: {
+                Accept: 'image/*',
+                Authorization: `Bearer ${sessionToken}`,
+              },
+            }
+          );
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+
+    try {
+      return await downloadPhotoToCache(uri, targetUri('direct'));
+    } catch (error) {
+      throw lastError ?? error;
+    }
+  }, [downloadPhotoToCache, extensionForPhoto, sessionToken]);
+
+  const saveLocalPhotoToDevice = useCallback(async (localUri) => {
+    try {
+      await MediaLibrary.createAssetAsync(localUri);
+      return;
+    } catch (assetError) {
+      console.warn('Gallery photo createAssetAsync failed, trying saveToLibraryAsync', assetError);
+    }
+
+    await MediaLibrary.saveToLibraryAsync(localUri);
+  }, []);
 
   const handleSaveViewerPhoto = useCallback(async () => {
     if (!viewerPhoto?.imageUri) return;
@@ -10874,14 +10926,17 @@ function WallsAlbumScreen({
       }
 
       const localUri = await cachePhotoForMediaLibrary(viewerPhoto, 0);
-      await MediaLibrary.saveToLibraryAsync(localUri);
+      await saveLocalPhotoToDevice(localUri);
       setStatusIfCurrent({ tone: 'success', text: 'Billedet er gemt på telefonen.' });
-    } catch {
+      Alert.alert('Billede gemt', 'Billedet er gemt i Fotos på din telefon.');
+    } catch (error) {
+      console.warn('Gallery photo save failed', error);
       setStatusIfCurrent({ tone: 'error', text: 'Billedet kunne ikke gemmes.' });
+      Alert.alert('Kunne ikke gemme', 'Billedet kunne ikke gemmes på telefonen. Prøv igen om lidt.');
     } finally {
       setSavingViewerPhotoId('');
     }
-  }, [cachePhotoForMediaLibrary, extensionForPhoto, viewerPhoto]);
+  }, [cachePhotoForMediaLibrary, extensionForPhoto, saveLocalPhotoToDevice, viewerPhoto]);
 
   const handleSaveSelectedPhotos = useCallback(async () => {
     if (!selectedPhotos.length) return;
@@ -10906,6 +10961,7 @@ function WallsAlbumScreen({
     const permission = await MediaLibrary.requestPermissionsAsync(true);
     if (!permission.granted) {
       setUploadError('Giv Studos adgang til at gemme billeder på telefonen.');
+      Alert.alert('Mangler adgang', 'Giv Studos adgang til at gemme billeder på telefonen.');
       return;
     }
 
@@ -10917,25 +10973,27 @@ function WallsAlbumScreen({
 
       try {
         const localUri = await cachePhotoForMediaLibrary(photo, index);
-        await MediaLibrary.saveToLibraryAsync(localUri);
+        await saveLocalPhotoToDevice(localUri);
         savedCount += 1;
-      } catch {
+      } catch (error) {
+        console.warn('Gallery selected photo save failed', error);
         failedCount += 1;
       }
     }
 
     if (failedCount > 0) {
-      setUploadError(
-        savedCount > 0
-          ? `${savedCount} gemt. ${failedCount} ${failedCount === 1 ? 'billede' : 'billeder'} kunne ikke gemmes.`
-          : 'De valgte billeder kunne ikke gemmes på telefonen.'
-      );
+      const message = savedCount > 0
+        ? `${savedCount} gemt. ${failedCount} ${failedCount === 1 ? 'billede' : 'billeder'} kunne ikke gemmes.`
+        : 'De valgte billeder kunne ikke gemmes på telefonen.';
+      setUploadError(message);
+      Alert.alert('Gem billeder', message);
       return;
     }
 
     setPhotoSelectionMode(false);
     setSelectedPhotoIds([]);
-  }, [cachePhotoForMediaLibrary, selectedPhotos]);
+    Alert.alert('Billeder gemt', `${savedCount} ${savedCount === 1 ? 'billede er' : 'billeder er'} gemt i Fotos på din telefon.`);
+  }, [cachePhotoForMediaLibrary, saveLocalPhotoToDevice, selectedPhotos]);
 
   const openBulkDeleteConfirm = useCallback(() => {
     if (!selectedPhotos.length) return;
@@ -11469,19 +11527,20 @@ function WallsAlbumScreen({
           {/* Fuldskærms-viewer */}
           {viewerPhoto && (
             <Animated.View
-              {...viewerTouchHandlers}
               style={[
                 styles.wallsPhotoViewerRoot,
                 { opacity: viewerOpacity, paddingTop: Math.max(safeAreaInsets.top, 20) + 12 },
               ]}
             >
               <Pressable style={StyleSheet.absoluteFill} onPress={handleViewerBackdropPress} />
-              <Image
-                accessibilityIgnoresInvertColors
-                resizeMode="contain"
-                source={{ uri: viewerPhoto.imageUri }}
-                style={styles.wallsPhotoViewerImage}
-              />
+              <View {...viewerTouchHandlers} style={styles.wallsPhotoViewerImageFrame}>
+                <Image
+                  accessibilityIgnoresInvertColors
+                  resizeMode="contain"
+                  source={{ uri: viewerPhoto.imageUri }}
+                  style={styles.wallsPhotoViewerImage}
+                />
+              </View>
               <View style={styles.wallsPhotoViewerBar}>
                 <View style={styles.wallsPhotoViewerMeta}>
                   <Text numberOfLines={1} style={styles.wallsPhotoViewerMetaText}>
@@ -28891,6 +28950,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#0a0e14',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  wallsPhotoViewerImageFrame: {
+    width: '100%',
+    flex: 1,
   },
   wallsPhotoViewerImage: {
     width: '100%',

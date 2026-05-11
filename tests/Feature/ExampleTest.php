@@ -1164,6 +1164,88 @@ class ExampleTest extends TestCase
             ->assertJsonPath('galleries.0.visibility', 'public');
     }
 
+    public function test_gallery_photo_download_requires_visible_gallery_access(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('uploads/gallery-photos/download-photo.jpg', 'fake-image');
+
+        $this->createActiveDemoMember('gallery-download-member', 'Dina Download', 'dina.download@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $memberToken = $this->issueTestMemberToken('gallery-download-member');
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::table('galleries')->insert([
+            [
+                'id' => 'download-public-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Download album',
+                'visibility' => 'public',
+                'audience' => 'class',
+                'permission' => 'view',
+                'member_ids' => null,
+                'photo_count' => 1,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'demo-owner',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 'download-private-gallery',
+                'class_id' => 'demo-class',
+                'name' => 'Privat download album',
+                'visibility' => 'private',
+                'audience' => null,
+                'permission' => null,
+                'member_ids' => null,
+                'photo_count' => 1,
+                'cover_image_url' => null,
+                'created_by_member_id' => 'demo-owner',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        DB::table('gallery_photos')->insert([
+            [
+                'id' => 'download-public-photo',
+                'gallery_id' => 'download-public-gallery',
+                'member_id' => 'demo-owner',
+                'image_url' => 'uploads/gallery-photos/download-photo.jpg',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+            ],
+            [
+                'id' => 'download-private-photo',
+                'gallery_id' => 'download-private-gallery',
+                'member_id' => 'demo-owner',
+                'image_url' => 'uploads/gallery-photos/download-photo.jpg',
+                'deleted_at' => null,
+                'deleted_by_member_id' => null,
+                'created_at' => $now,
+            ],
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$memberToken)
+            ->get('/api/gallery-photos/download-public-photo/download')
+            ->assertRedirect();
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$memberToken)
+            ->getJson('/api/gallery-photos/download-private-photo/download')
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->get('/api/gallery-photos/download-private-photo/download')
+            ->assertRedirect();
+    }
+
     public function test_overview_stats_count_profile_activity_and_accessible_photos(): void
     {
         $this->createActiveDemoMember('stats-member', 'Signe Statistik', 'signe.statistik@example.test');
@@ -1573,7 +1655,7 @@ class ExampleTest extends TestCase
         Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
             && $request[0]['to'] === $majaPushToken
             && $request[0]['channelId'] === 'studos-default'
-            && $request[0]['title'] === (string) $ownerDisplayName
+            && $request[0]['title'] === (string) $ownerDisplayName.' 💬'
             && $request[0]['body'] === 'Hej Maja 👋'
             && ! array_key_exists('richContent', $request[0])
             && $request[0]['data']['type'] === 'chat_message'
