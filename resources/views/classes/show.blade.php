@@ -31,14 +31,9 @@
       </div>
       <div class="class-hero-actions">
         <div class="invite-box">
-          <span>Invitekode</span>
+          <span>Klassekode</span>
           <strong>{{ $schoolClass->invite_code }}</strong>
           <button class="button subtle" type="button" data-copy="{{ $schoolClass->invite_code }}">Kopier</button>
-        </div>
-        <div class="invite-box">
-          <span>KlasseID</span>
-          <strong>{{ $schoolClass->public_id }}</strong>
-          <button class="button primary" type="button" data-copy="{{ $schoolClass->public_id }}">Kopier</button>
         </div>
       </div>
     </div>

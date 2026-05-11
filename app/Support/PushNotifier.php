@@ -27,6 +27,7 @@ class PushNotifier
     public const CAT_RSVP_REMINDER = 'rsvp_reminder';
     public const CAT_GALLERY_NEW = 'gallery_new';
     public const CAT_GALLERY_PHOTOS = 'gallery_photos';
+    public const CAT_CLASS_ANNOUNCEMENT = 'class_announcement';
     public const CAT_CONNECTION_REQUEST = 'connection_request';
     public const CAT_CONNECTION_ACCEPTED = 'connection_accepted';
     public const CAT_GOOD_DEED_REMINDER = 'good_deed_reminder';
@@ -46,6 +47,7 @@ class PushNotifier
         self::CAT_RSVP_REMINDER,
         self::CAT_GALLERY_NEW,
         self::CAT_GALLERY_PHOTOS,
+        self::CAT_CLASS_ANNOUNCEMENT,
         self::CAT_CONNECTION_REQUEST,
         self::CAT_CONNECTION_ACCEPTED,
         self::CAT_GOOD_DEED_REMINDER,
@@ -194,6 +196,7 @@ class PushNotifier
             self::CAT_EVENT_REMINDER,
             self::CAT_RSVP_REMINDER => 'calendar',
             self::CAT_GALLERY_NEW, self::CAT_GALLERY_PHOTOS => 'walls',
+            self::CAT_CLASS_ANNOUNCEMENT => 'overview',
             self::CAT_CONNECTION_REQUEST, self::CAT_CONNECTION_ACCEPTED => 'connections',
             self::CAT_GOOD_DEED_REMINDER => 'earnCaps',
             self::CAT_STREAK_REMINDER => 'overview',

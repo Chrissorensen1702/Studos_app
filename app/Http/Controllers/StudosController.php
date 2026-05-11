@@ -22,6 +22,7 @@ use Illuminate\Validation\Rule;
 class StudosController extends Controller
 {
     private const PRIVACY_VERSION = '2026-05-11';
+    private const MEMBER_STRIKE_LIMIT = 3;
 
     private const EVENT_COVER_TEMPLATE_IDS = [
         'sunset',
@@ -34,8 +35,8 @@ class StudosController extends Controller
     private const ROLES = [
         [
             'id' => 'owner',
-            'label' => 'Ejer',
-            'description' => 'Kan alt i klassen og kan udpege andre ansvarlige.',
+            'label' => 'Klasseejer',
+            'description' => 'Kan alt i klassen og kan udpege moderatorer.',
             'permissions' => ['manage_class', 'manage_members', 'manage_events', 'moderate_content'],
         ],
         [
@@ -1018,10 +1019,16 @@ class StudosController extends Controller
             ->where('invite_code', Str::upper(trim($code)))
             ->first();
 
-        abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
+        abort_unless($schoolClass, 404, 'Klassekoden kunne ikke findes.');
 
         $currentMember = $this->authenticatedMemberFromRequest($request, false, false);
         $currentMemberId = $currentMember?->class_id === $schoolClass->id ? $currentMember->id : null;
+
+        abort_if(
+            ($schoolClass->joinPolicy ?? 'approval') === 'closed' && ! $currentMemberId,
+            403,
+            'Klassens adgang er lukket',
+        );
 
         return response()->json([
             'class' => $this->hydrateClasses(
@@ -1310,9 +1317,9 @@ class StudosController extends Controller
                 ->first();
             $selectedSchool = DB::table('schools')->where('id', $schoolId)->first();
 
-            abort_unless($schoolClass, 404, 'Invitekoden kunne ikke findes.');
+            abort_unless($schoolClass, 404, 'Klassekoden kunne ikke findes.');
             abort_unless($selectedSchool, 422, 'Vaelg en skole fra listen.');
-            abort_if(($schoolClass->join_policy ?? 'approval') === 'closed', 403, 'Klassen er lukket for nye medlemmer.');
+            abort_if(($schoolClass->join_policy ?? 'approval') === 'closed', 403, 'Klassens adgang er lukket');
 
             $classSchoolId = $schoolClass->school_id ?: $this->ensureSchool(trim($schoolClass->school_name));
 
@@ -1378,7 +1385,7 @@ class StudosController extends Controller
                     'deletion_requested_at' => null,
                     'deleted_at' => null,
                     'role' => $isPendingPlaceholder ? $existingMember->role : 'student',
-                    'status' => $isPendingPlaceholder ? 'active' : $status,
+                    'status' => $isPendingPlaceholder ? ($existingMember->status ?? $status) : $status,
                 ];
 
                 if (Schema::hasColumn('members', 'emergency_contact_name')) {
@@ -1583,6 +1590,7 @@ class StudosController extends Controller
                 'tokenType' => 'Bearer',
                 'expiresAt' => $this->apiDateTime($member->authTokenExpiresAt ?? null),
                 'member' => $serializedMember,
+                'strikeWarnings' => $this->pendingStrikeWarningsForMemberId($member->id),
             ],
             'class' => $this->loadClassById($member->class_id, $member->id),
         ]);
@@ -2401,7 +2409,7 @@ class StudosController extends Controller
             $member->role === 'owner'
             && ! $this->hasOtherActiveOwner($member->class_id, $member->id)
         ) {
-            abort(409, 'Klassen skal have mindst en aktiv owner.');
+            abort(409, 'Klassen skal have mindst en aktiv klasseejer.');
         }
 
         $currentProfilePhoto = DB::table('members')
@@ -2443,6 +2451,20 @@ class StudosController extends Controller
                 ->update([
                     'member_id' => null,
                 ]);
+
+            if (Schema::hasTable('member_strikes')) {
+                DB::table('member_strikes')
+                    ->where('member_id', $member->id)
+                    ->update([
+                        'member_id' => null,
+                    ]);
+
+                DB::table('member_strikes')
+                    ->where('issued_by_member_id', $member->id)
+                    ->update([
+                        'issued_by_member_id' => null,
+                    ]);
+            }
 
             DB::table('chat_moderation_events')
                 ->where('actor_member_id', $member->id)
@@ -4026,7 +4048,7 @@ class StudosController extends Controller
         $actor = $this->authenticatedMemberFromRequest($request);
 
         abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
-        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun ejere kan aendre adgang.');
+        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun klasseejere kan aendre adgang.');
 
         $data = $request->validate([
             'role' => ['nullable', 'string', Rule::in($this->roleIds())],
@@ -4043,6 +4065,7 @@ class StudosController extends Controller
             $current = DB::table('members')
                 ->where('class_id', $class)
                 ->where('id', $member)
+                ->lockForUpdate()
                 ->first();
 
             abort_unless($current, 404);
@@ -4050,13 +4073,24 @@ class StudosController extends Controller
             $currentMember = $this->serializeMember($current);
             $nextRole = $data['role'] ?? $currentMember['role'];
             $nextStatus = $data['status'] ?? $currentMember['status'];
+
+            abort_if($nextRole === 'owner' && $nextStatus !== 'active', 422, 'Klasseejer skal være aktiv.');
+
             $demotesLastOwner = $currentMember['role'] === 'owner'
                 && $currentMember['status'] === 'active'
                 && ($nextRole !== 'owner' || $nextStatus !== 'active')
                 && ! $this->hasOtherActiveOwner($class, $member);
 
             if ($demotesLastOwner) {
-                abort(422, 'Klassen skal have mindst en aktiv ejer.');
+                abort(422, 'Klassen skal have mindst en aktiv klasseejer.');
+            }
+
+            if ($nextRole === 'owner') {
+                DB::table('members')
+                    ->where('class_id', $class)
+                    ->where('id', '!=', $member)
+                    ->where('role', 'owner')
+                    ->update(['role' => 'moderator']);
             }
 
             DB::table('members')->where('id', $member)->update([
@@ -4075,6 +4109,735 @@ class StudosController extends Controller
             'member' => $updatedMember,
             'class' => $this->loadClassById($class),
         ]);
+    }
+
+    public function updateClassSettings(Request $request, string $class): JsonResponse
+    {
+        $actor = $this->authenticatedMemberFromRequest($request);
+
+        abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
+        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun klasseejere kan ændre klasseindstillinger.');
+        abort_unless(DB::table('classes')->where('id', $class)->exists(), 404, 'Klassen findes ikke.');
+
+        $data = $request->validate([
+            'className' => ['sometimes', 'required', 'string', 'max:100'],
+            'joinPolicy' => ['sometimes', 'required', Rule::in(['open', 'approval', 'closed'])],
+            'graduationDate' => ['sometimes', 'nullable', 'date'],
+        ]);
+
+        abort_if(
+            ! array_key_exists('className', $data)
+                && ! array_key_exists('joinPolicy', $data)
+                && ! array_key_exists('graduationDate', $data),
+            422,
+            'Klasseindstilling mangler.'
+        );
+
+        $updates = [
+            'updated_at' => now()->format('Y-m-d H:i:s'),
+        ];
+
+        if (array_key_exists('className', $data)) {
+            $className = trim(ContentModeration::cleanText($data['className'], 'className', 'Klassenavnet', [
+                'source' => 'class_name_update',
+                'member_id' => $actor->id,
+                'class_id' => $class,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+            ]));
+
+            abort_if($className === '', 422, 'Indtast et klassenavn.');
+
+            $updates['class_name'] = $className;
+        }
+
+        if (array_key_exists('joinPolicy', $data)) {
+            $updates['join_policy'] = $data['joinPolicy'];
+        }
+
+        if (array_key_exists('graduationDate', $data)) {
+            $updates['graduation_date'] = blank($data['graduationDate'] ?? null) ? null : $data['graduationDate'];
+        }
+
+        DB::table('classes')->where('id', $class)->update($updates);
+
+        return response()->json([
+            'class' => $this->loadClassById($class, $actor->id),
+        ]);
+    }
+
+    public function sendClassAnnouncement(Request $request, string $class): JsonResponse
+    {
+        $actor = $this->authenticatedMemberFromRequest($request);
+
+        abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
+        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun klasseejere kan sende klassebeskeder.');
+        abort_unless(DB::table('classes')->where('id', $class)->exists(), 404, 'Klassen findes ikke.');
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:70'],
+            'body' => ['required', 'string', 'max:180'],
+        ]);
+
+        $moderationContext = [
+            'source' => 'class_announcement',
+            'member_id' => $actor->id,
+            'class_id' => $class,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ];
+        $title = trim((string) preg_replace('/\s+/', ' ', ContentModeration::cleanText(
+            $data['title'],
+            'title',
+            'Titlen',
+            $moderationContext,
+        )));
+        $body = trim((string) preg_replace('/\s+/', ' ', ContentModeration::cleanText(
+            $data['body'],
+            'body',
+            'Beskeden',
+            $moderationContext,
+        )));
+
+        abort_if($title === '', 422, 'Indtast en titel.');
+        abort_if($body === '', 422, 'Indtast en besked.');
+
+        $dailyLimit = 3;
+        $rateKey = 'class_announcement_push:'.$class.':'.$actor->id.':'.now()->toDateString();
+        $usedToday = (int) Cache::get($rateKey, 0);
+
+        abort_if($usedToday >= $dailyLimit, 429, 'Du kan maks sende 3 klassebeskeder om dagen.');
+
+        $recipientIds = DB::table('members')
+            ->where('class_id', $class)
+            ->where('status', 'active')
+            ->where('id', '!=', $actor->id)
+            ->pluck('id')
+            ->map(fn ($id): string => (string) $id)
+            ->values()
+            ->all();
+
+        abort_if(empty($recipientIds), 422, 'Der er ingen aktive medlemmer at sende til.');
+
+        $usedToday++;
+        Cache::put($rateKey, $usedToday, now()->endOfDay());
+
+        $announcementId = (string) Str::uuid();
+        $sent = PushNotifier::send(PushNotifier::CAT_CLASS_ANNOUNCEMENT, $recipientIds, [
+            'title' => $title,
+            'body' => $body,
+            'screen' => 'overview',
+            'data' => [
+                'announcementId' => $announcementId,
+                'classId' => $class,
+                'senderMemberId' => $actor->id,
+            ],
+            'sourceType' => 'class_announcement',
+            'sourceId' => $announcementId,
+        ]);
+
+        return response()->json([
+            'ok' => true,
+            'announcementId' => $announcementId,
+            'recipientCount' => count($recipientIds),
+            'sent' => $sent,
+            'remainingToday' => max(0, $dailyLimit - $usedToday),
+            'message' => $sent > 0
+                ? 'Klassebeskeden er sendt.'
+                : 'Beskeden er gemt, men ingen aktive push-enheder modtog den.',
+        ]);
+    }
+
+    public function inviteClassMember(Request $request, string $class): JsonResponse
+    {
+        $actor = $this->authenticatedMemberFromRequest($request);
+
+        abort_if($actor->class_id !== $class, 403, 'Du har ikke adgang til denne klasse.');
+        abort_unless($this->normalizeRole($actor->role) === 'owner', 403, 'Kun klasseejere kan invitere medlemmer.');
+
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:190'],
+            'role' => ['required', 'string', Rule::in(array_values(array_diff($this->roleIds(), ['owner'])))],
+        ]);
+
+        $email = Str::lower(trim($data['email']));
+        $existingEmail = DB::table('members')
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->exists();
+
+        abort_if($existingEmail, 422, 'Denne email er allerede knyttet til en profil.');
+
+        $member = null;
+
+        DB::transaction(function () use ($class, $data, $email, &$member): void {
+            $schoolClass = DB::table('classes')
+                ->where('id', $class)
+                ->lockForUpdate()
+                ->first();
+
+            abort_unless($schoolClass, 404, 'Klassen findes ikke.');
+
+            $memberId = (string) Str::uuid();
+            $now = now()->format('Y-m-d H:i:s');
+            $displayName = $this->uniqueInvitedMemberDisplayName($class, $email);
+            $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
+
+            DB::table('members')->insert([
+                'id' => $memberId,
+                'personal_code' => $this->generatePersonalCode($nameParts[0] ?? 'Elev'),
+                'class_id' => $class,
+                'school_id' => $schoolClass->school_id ?? null,
+                'display_name' => $displayName,
+                'first_name' => $nameParts[0] ?? null,
+                'last_name' => $nameParts[1] ?? null,
+                'email' => $email,
+                'role' => $data['role'],
+                'status' => 'pending',
+                'joined_at' => $now,
+            ]);
+
+            $member = $this->serializeMember(DB::table('members')->where('id', $memberId)->first());
+        });
+
+        return response()->json([
+            'member' => $member,
+            'class' => $this->loadClassById($class),
+        ], 201);
+    }
+
+    public function adminReports(Request $request): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->abortUnlessClassModerator($member);
+
+        $reports = $this->adminReportQuery($member)
+            ->orderByRaw("CASE reports.status WHEN 'pending' THEN 0 ELSE 1 END")
+            ->orderByDesc('reports.created_at')
+            ->limit(100)
+            ->get();
+
+        $strikeCounts = $this->memberStrikeCounts(
+            $member->class_id,
+            $reports->pluck('reportedMemberId')->filter()->unique()->values(),
+        );
+
+        $serialized = $reports
+            ->map(fn (object $report): array => $this->serializeAdminReport($report, $strikeCounts))
+            ->values()
+            ->all();
+
+        return response()->json([
+            'reports' => $serialized,
+            'summary' => [
+                'pending' => collect($serialized)->where('status', 'pending')->count(),
+                'handled' => collect($serialized)->where('status', '!=', 'pending')->count(),
+                'strikeLimit' => self::MEMBER_STRIKE_LIMIT,
+            ],
+        ]);
+    }
+
+    public function strikeAdminReport(Request $request, string $report): JsonResponse
+    {
+        abort_unless(Schema::hasTable('member_strikes'), 500, 'Strike-systemet er ikke klar endnu.');
+
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->abortUnlessClassModerator($member);
+
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:190'],
+            'details' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $this->adminReportRecordForMember($report, $member);
+
+        DB::transaction(function () use ($report, $member, $data): void {
+            $currentReport = DB::table('member_reports')
+                ->where('id', $report)
+                ->lockForUpdate()
+                ->first();
+
+            abort_unless($currentReport, 404, 'Rapporteringen findes ikke.');
+            abort_unless($this->adminReportBelongsToClass($currentReport, $member->class_id), 404, 'Rapporteringen findes ikke.');
+            abort_if($currentReport->status !== 'pending', 409, 'Rapporteringen er allerede behandlet.');
+            abort_unless(! blank($currentReport->reported_member_id), 422, 'Rapporteringen mangler en anmeldt person.');
+            abort_if((string) $currentReport->reported_member_id === (string) $member->id, 422, 'Du kan ikke give dig selv en strike.');
+
+            $reportedMember = DB::table('members')
+                ->where('id', $currentReport->reported_member_id)
+                ->where('class_id', $member->class_id)
+                ->lockForUpdate()
+                ->first();
+
+            abort_unless($reportedMember, 404, 'Den anmeldte person findes ikke i klassen.');
+            abort_if($reportedMember->status === 'removed', 422, 'Personen er allerede udelukket fra klassen.');
+
+            $existingStrikeCount = DB::table('member_strikes')
+                ->where('class_id', $member->class_id)
+                ->where('member_id', $reportedMember->id)
+                ->where('status', 'active')
+                ->count();
+
+            $strikeNumber = $existingStrikeCount + 1;
+            $willExclude = $strikeNumber >= self::MEMBER_STRIKE_LIMIT;
+
+            if (
+                $willExclude
+                && $this->normalizeRole($reportedMember->role ?? null) === 'owner'
+                && ! $this->hasOtherActiveOwner($member->class_id, $reportedMember->id)
+            ) {
+                abort(422, 'Klassen skal have mindst en aktiv ejer før denne person kan udelukkes.');
+            }
+
+            $now = now()->format('Y-m-d H:i:s');
+            $strikeId = (string) Str::uuid();
+            $reason = trim($data['reason'] ?? '') ?: ($currentReport->reason ?? 'Rapportering behandlet');
+            $details = trim($data['details'] ?? '') ?: ($currentReport->details ?? null);
+
+            DB::table('member_strikes')->insert([
+                'id' => $strikeId,
+                'class_id' => $member->class_id,
+                'member_id' => $reportedMember->id,
+                'issued_by_member_id' => $member->id,
+                'report_id' => $currentReport->id,
+                'reason' => $reason,
+                'details' => $details,
+                'strike_number' => $strikeNumber,
+                'status' => 'active',
+                'expires_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            if ($willExclude) {
+                DB::table('members')->where('id', $reportedMember->id)->update([
+                    'status' => 'removed',
+                ]);
+            }
+
+            $updates = [
+                'status' => 'struck',
+                'reviewed_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            if (Schema::hasColumn('member_reports', 'reviewed_by_member_id')) {
+                $updates['reviewed_by_member_id'] = $member->id;
+            }
+
+            if (Schema::hasColumn('member_reports', 'resolution')) {
+                $updates['resolution'] = 'strike';
+            }
+
+            if (Schema::hasColumn('member_reports', 'resolution_note')) {
+                $updates['resolution_note'] = $details;
+            }
+
+            if (Schema::hasColumn('member_reports', 'strike_id')) {
+                $updates['strike_id'] = $strikeId;
+            }
+
+            DB::table('member_reports')->where('id', $currentReport->id)->update($updates);
+        });
+
+        return response()->json([
+            'ok' => true,
+            'report' => $this->freshSerializedAdminReport($report, $member),
+        ]);
+    }
+
+    public function dismissAdminReport(Request $request, string $report): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $this->abortUnlessClassModerator($member);
+
+        $data = $request->validate([
+            'note' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $this->adminReportRecordForMember($report, $member);
+
+        DB::transaction(function () use ($report, $member, $data): void {
+            $currentReport = DB::table('member_reports')
+                ->where('id', $report)
+                ->lockForUpdate()
+                ->first();
+
+            abort_unless($currentReport, 404, 'Rapporteringen findes ikke.');
+            abort_unless($this->adminReportBelongsToClass($currentReport, $member->class_id), 404, 'Rapporteringen findes ikke.');
+            abort_if($currentReport->status !== 'pending', 409, 'Rapporteringen er allerede behandlet.');
+
+            $now = now()->format('Y-m-d H:i:s');
+            $updates = [
+                'status' => 'dismissed',
+                'reviewed_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            if (Schema::hasColumn('member_reports', 'reviewed_by_member_id')) {
+                $updates['reviewed_by_member_id'] = $member->id;
+            }
+
+            if (Schema::hasColumn('member_reports', 'resolution')) {
+                $updates['resolution'] = 'dismissed';
+            }
+
+            if (Schema::hasColumn('member_reports', 'resolution_note')) {
+                $updates['resolution_note'] = trim($data['note'] ?? '') ?: null;
+            }
+
+            DB::table('member_reports')->where('id', $currentReport->id)->update($updates);
+        });
+
+        return response()->json([
+            'ok' => true,
+            'report' => $this->freshSerializedAdminReport($report, $member),
+        ]);
+    }
+
+    public function acknowledgeStrikeWarning(Request $request, string $strike): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+
+        abort_unless(
+            Schema::hasTable('member_strikes') && Schema::hasColumn('member_strikes', 'acknowledged_at'),
+            404,
+            'Strike-advarslen findes ikke.'
+        );
+
+        $updated = DB::table('member_strikes')
+            ->where('id', $strike)
+            ->where('member_id', $member->id)
+            ->where('status', 'active')
+            ->whereNull('acknowledged_at')
+            ->update([
+                'acknowledged_at' => now()->format('Y-m-d H:i:s'),
+                'updated_at' => now()->format('Y-m-d H:i:s'),
+            ]);
+
+        abort_unless($updated > 0, 404, 'Strike-advarslen findes ikke.');
+
+        return response()->json([
+            'ok' => true,
+            'strikeWarnings' => $this->pendingStrikeWarningsForMemberId($member->id),
+        ]);
+    }
+
+    private function abortUnlessClassModerator(object $member): void
+    {
+        abort_unless(
+            in_array($this->normalizeRole($member->role ?? null), ['owner', 'moderator'], true),
+            403,
+            'Kun klasseejere og moderatorer kan administrere rapporteringer.'
+        );
+    }
+
+    private function adminReportQuery(object $member)
+    {
+        return DB::table('member_reports as reports')
+            ->leftJoin('members as reporter', 'reporter.id', '=', 'reports.reporter_member_id')
+            ->leftJoin('members as reported', 'reported.id', '=', 'reports.reported_member_id')
+            ->leftJoin('members as reviewer', 'reviewer.id', '=', 'reports.reviewed_by_member_id')
+            ->select([
+                'reports.id',
+                'reports.target_type as targetType',
+                'reports.target_id as targetId',
+                'reports.reason',
+                'reports.details',
+                'reports.status as reportStatus',
+                'reports.reviewed_at as reviewedAt',
+                'reports.resolution',
+                'reports.resolution_note as resolutionNote',
+                'reports.strike_id as strikeId',
+                'reports.created_at as reportCreatedAt',
+                'reports.updated_at as reportUpdatedAt',
+                'reporter.id as reporterId',
+                'reporter.class_id as reporterClassId',
+                'reporter.display_name as reporterDisplayName',
+                'reporter.first_name as reporterFirstName',
+                'reporter.last_name as reporterLastName',
+                'reporter.profile_photo_url as reporterProfilePhotoUrl',
+                'reporter.role as reporterRole',
+                'reporter.status as reporterStatus',
+                'reported.id as reportedMemberId',
+                'reported.class_id as reportedClassId',
+                'reported.display_name as reportedDisplayName',
+                'reported.first_name as reportedFirstName',
+                'reported.last_name as reportedLastName',
+                'reported.profile_photo_url as reportedProfilePhotoUrl',
+                'reported.role as reportedRole',
+                'reported.status as reportedStatus',
+                'reviewer.id as reviewedById',
+                'reviewer.display_name as reviewedByDisplayName',
+                'reviewer.first_name as reviewedByFirstName',
+                'reviewer.last_name as reviewedByLastName',
+                'reviewer.profile_photo_url as reviewedByProfilePhotoUrl',
+                'reviewer.role as reviewedByRole',
+                'reviewer.status as reviewedByStatus',
+            ])
+            ->where(function ($query) use ($member): void {
+                $query
+                    ->where('reporter.class_id', $member->class_id)
+                    ->orWhere('reported.class_id', $member->class_id);
+            });
+    }
+
+    private function adminReportRecordForMember(string $reportId, object $member): object
+    {
+        $report = DB::table('member_reports')->where('id', $reportId)->first();
+
+        abort_unless($report, 404, 'Rapporteringen findes ikke.');
+        abort_unless($this->adminReportBelongsToClass($report, $member->class_id), 404, 'Rapporteringen findes ikke.');
+
+        return $report;
+    }
+
+    private function adminReportBelongsToClass(object $report, string $classId): bool
+    {
+        $memberIds = collect([
+            $report->reporter_member_id ?? null,
+            $report->reported_member_id ?? null,
+        ])
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->unique()
+            ->values();
+
+        if ($memberIds->isEmpty()) {
+            return false;
+        }
+
+        return DB::table('members')
+            ->whereIn('id', $memberIds)
+            ->where('class_id', $classId)
+            ->exists();
+    }
+
+    private function freshSerializedAdminReport(string $reportId, object $member): array
+    {
+        $report = $this->adminReportQuery($member)
+            ->where('reports.id', $reportId)
+            ->first();
+
+        abort_unless($report, 404, 'Rapporteringen findes ikke.');
+
+        $strikeCounts = $this->memberStrikeCounts($member->class_id, [$report->reportedMemberId ?? null]);
+
+        return $this->serializeAdminReport($report, $strikeCounts);
+    }
+
+    private function memberStrikeCounts(string $classId, $memberIds): array
+    {
+        if (! Schema::hasTable('member_strikes')) {
+            return [];
+        }
+
+        $ids = collect($memberIds)
+            ->filter()
+            ->map(fn ($id): string => (string) $id)
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        return DB::table('member_strikes')
+            ->where('class_id', $classId)
+            ->whereIn('member_id', $ids)
+            ->where('status', 'active')
+            ->select('member_id', DB::raw('count(*) as strike_count'))
+            ->groupBy('member_id')
+            ->pluck('strike_count', 'member_id')
+            ->map(fn ($count): int => (int) $count)
+            ->all();
+    }
+
+    private function serializeAdminReport(object $report, array $strikeCounts): array
+    {
+        $reportedMemberId = $report->reportedMemberId ?? null;
+        $strikeCount = $reportedMemberId ? (int) ($strikeCounts[$reportedMemberId] ?? 0) : 0;
+        $reportedStatus = $this->normalizeStatus($report->reportedStatus ?? null);
+
+        return [
+            'id' => $report->id,
+            'targetType' => $report->targetType ?? 'unknown',
+            'targetLabel' => $this->adminReportTargetLabel($report->targetType ?? null),
+            'targetId' => $report->targetId ?? null,
+            'targetPreview' => $this->adminReportTargetPreview($report),
+            'reason' => $report->reason ?? 'Rapportering',
+            'details' => $report->details ?? null,
+            'status' => $report->reportStatus ?? 'pending',
+            'createdAt' => $this->apiDateTime($report->reportCreatedAt ?? null),
+            'updatedAt' => $this->apiDateTime($report->reportUpdatedAt ?? null),
+            'reviewedAt' => $this->apiDateTime($report->reviewedAt ?? null),
+            'resolution' => $report->resolution ?? null,
+            'resolutionNote' => $report->resolutionNote ?? null,
+            'strikeId' => $report->strikeId ?? null,
+            'strikeCount' => $strikeCount,
+            'strikeLimit' => self::MEMBER_STRIKE_LIMIT,
+            'isExcluded' => $reportedStatus === 'removed' || $strikeCount >= self::MEMBER_STRIKE_LIMIT,
+            'canStrike' => ($report->reportStatus ?? 'pending') === 'pending'
+                && ! blank($reportedMemberId)
+                && $reportedStatus !== 'removed',
+            'reporter' => $this->adminReportMemberShape($report, 'reporter'),
+            'reportedMember' => $this->adminReportMemberShape($report, 'reported'),
+            'reviewedBy' => $this->adminReportMemberShape($report, 'reviewedBy'),
+        ];
+    }
+
+    private function adminReportMemberShape(object $report, string $prefix): ?array
+    {
+        $idKey = $prefix === 'reported' ? 'reportedMemberId' : $prefix.'Id';
+        $id = $report->{$idKey} ?? null;
+
+        if (blank($id)) {
+            return null;
+        }
+
+        return [
+            'id' => $id,
+            'displayName' => $report->{$prefix.'DisplayName'} ?? 'Slettet bruger',
+            'firstName' => $report->{$prefix.'FirstName'} ?? null,
+            'lastName' => $report->{$prefix.'LastName'} ?? null,
+            'profilePhotoUrl' => UploadedImage::publicUrl($report->{$prefix.'ProfilePhotoUrl'} ?? null),
+            'role' => $this->normalizeRole($report->{$prefix.'Role'} ?? null),
+            'status' => $this->normalizeStatus($report->{$prefix.'Status'} ?? null),
+        ];
+    }
+
+    private function adminReportTargetLabel(?string $targetType): string
+    {
+        return match ($targetType) {
+            'calendar_event' => 'Kalender',
+            'gallery' => 'Album',
+            'gallery_photo' => 'Billede',
+            'chat_conversation' => 'Chat',
+            'chat_message' => 'Chatbesked',
+            default => 'Rapport',
+        };
+    }
+
+    private function adminReportTargetPreview(object $report): ?array
+    {
+        if (($report->targetType ?? null) !== 'chat_message' || blank($report->targetId ?? null)) {
+            return null;
+        }
+
+        if (! Schema::hasTable('chat_messages') || ! Schema::hasTable('chat_conversations')) {
+            return null;
+        }
+
+        $classId = $report->reportedClassId ?? $report->reporterClassId ?? null;
+        $messageQuery = DB::table('chat_messages as messages')
+            ->join('chat_conversations as conversations', 'conversations.id', '=', 'messages.conversation_id')
+            ->leftJoin('members as sender', 'sender.id', '=', 'messages.sender_member_id')
+            ->where('messages.id', $report->targetId);
+
+        if (! blank($classId)) {
+            $messageQuery->where('conversations.class_id', $classId);
+        }
+
+        $message = $messageQuery->first([
+            'messages.id',
+            'messages.body',
+            'messages.type',
+            'messages.created_at as createdAt',
+            'messages.deleted_at as deletedAt',
+            'conversations.id as conversationId',
+            'conversations.type as conversationType',
+            'conversations.title as conversationTitle',
+            'sender.id as senderId',
+            'sender.display_name as senderDisplayName',
+            'sender.first_name as senderFirstName',
+            'sender.last_name as senderLastName',
+            'sender.profile_photo_url as senderProfilePhotoUrl',
+            'sender.role as senderRole',
+            'sender.status as senderStatus',
+        ]);
+
+        if (! $message) {
+            return [
+                'type' => 'chat_message',
+                'isMissing' => true,
+                'body' => 'Beskeden findes ikke længere.',
+            ];
+        }
+
+        $isDeleted = ! blank($message->deletedAt);
+
+        return [
+            'type' => 'chat_message',
+            'id' => $message->id,
+            'body' => $isDeleted ? 'Beskeden er slettet.' : $message->body,
+            'isDeleted' => $isDeleted,
+            'createdAt' => $this->apiDateTime($message->createdAt ?? null),
+            'conversationId' => $message->conversationId,
+            'conversationType' => $message->conversationType,
+            'conversationTitle' => $message->conversationTitle ?: (
+                $message->conversationType === 'direct' ? 'Direkte chat' : 'Gruppechat'
+            ),
+            'sender' => blank($message->senderId) ? null : [
+                'id' => $message->senderId,
+                'displayName' => $message->senderDisplayName,
+                'firstName' => $message->senderFirstName,
+                'lastName' => $message->senderLastName,
+                'profilePhotoUrl' => UploadedImage::publicUrl($message->senderProfilePhotoUrl ?? null),
+                'role' => $this->normalizeRole($message->senderRole ?? null),
+                'status' => $this->normalizeStatus($message->senderStatus ?? null),
+            ],
+        ];
+    }
+
+    private function pendingStrikeWarningsForMemberId(?string $memberId): array
+    {
+        if (
+            blank($memberId)
+            || ! Schema::hasTable('member_strikes')
+            || ! Schema::hasColumn('member_strikes', 'acknowledged_at')
+        ) {
+            return [];
+        }
+
+        return DB::table('member_strikes as strikes')
+            ->leftJoin('members as issuer', 'issuer.id', '=', 'strikes.issued_by_member_id')
+            ->where('strikes.member_id', $memberId)
+            ->where('strikes.status', 'active')
+            ->whereNull('strikes.acknowledged_at')
+            ->orderBy('strikes.created_at')
+            ->limit(5)
+            ->get([
+                'strikes.id',
+                'strikes.reason',
+                'strikes.details',
+                'strikes.strike_number as strikeNumber',
+                'strikes.created_at as createdAt',
+                'issuer.id as issuerId',
+                'issuer.display_name as issuerDisplayName',
+                'issuer.first_name as issuerFirstName',
+                'issuer.last_name as issuerLastName',
+                'issuer.profile_photo_url as issuerProfilePhotoUrl',
+                'issuer.role as issuerRole',
+                'issuer.status as issuerStatus',
+            ])
+            ->map(fn (object $strike): array => [
+                'id' => $strike->id,
+                'reason' => $strike->reason,
+                'details' => $strike->details ?? null,
+                'strikeNumber' => (int) ($strike->strikeNumber ?? 1),
+                'strikeLimit' => self::MEMBER_STRIKE_LIMIT,
+                'createdAt' => $this->apiDateTime($strike->createdAt ?? null),
+                'issuedBy' => blank($strike->issuerId) ? null : [
+                    'id' => $strike->issuerId,
+                    'displayName' => $strike->issuerDisplayName,
+                    'firstName' => $strike->issuerFirstName,
+                    'lastName' => $strike->issuerLastName,
+                    'profilePhotoUrl' => UploadedImage::publicUrl($strike->issuerProfilePhotoUrl ?? null),
+                    'role' => $this->normalizeRole($strike->issuerRole ?? null),
+                    'status' => $this->normalizeStatus($strike->issuerStatus ?? null),
+                ],
+            ])
+            ->values()
+            ->all();
     }
 
     private function schoolOptions(): array
@@ -4568,6 +5331,7 @@ class StudosController extends Controller
         $session = [
             'tokenType' => 'Bearer',
             'member' => $member,
+            'strikeWarnings' => $this->pendingStrikeWarningsForMemberId($member['id'] ?? null),
         ];
 
         if ($token) {
@@ -4863,6 +5627,28 @@ class StudosController extends Controller
             ->where('role', 'owner')
             ->where('status', 'active')
             ->exists();
+    }
+
+    private function uniqueInvitedMemberDisplayName(string $classId, string $email): string
+    {
+        $emailName = Str::before($email, '@');
+        $baseName = Str::headline(str_replace(['.', '_', '-'], ' ', $emailName));
+        $baseName = trim($baseName) ?: 'Inviteret medlem';
+        $baseName = Str::limit($baseName, 170, '');
+        $candidate = $baseName;
+        $suffix = 2;
+
+        while (
+            DB::table('members')
+                ->where('class_id', $classId)
+                ->whereRaw('LOWER(display_name) = ?', [Str::lower($candidate)])
+                ->exists()
+        ) {
+            $candidate = Str::limit($baseName, 164, '').' '.$suffix;
+            $suffix++;
+        }
+
+        return $candidate;
     }
 
     private function roleIds(): array

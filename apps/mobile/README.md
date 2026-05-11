@@ -1,15 +1,15 @@
 # Mobile
 
-Native app til eleverne. Foerste flow er invitekode, profiloprettelse med
+Native app til eleverne. Foerste flow er klassekode, profiloprettelse med
 skolevalg, samtykke, adgangskode og overblik med klasseinfo, nedtaelling og
 elevdata. Hvis brugeren allerede har en profil, kan vedkommende logge ind direkte
-med email og adgangskode uden at skulle kende invitekoden.
+med email og adgangskode uden at skulle kende klassekoden.
 
 Profiloprettelse indeholder skole fra API-dropdown, fornavn/mellemnavne,
 efternavn, email, foedselsdag, valgfri telefon, valgfri nødkontakt (navn +
 nummer) og valgfrit profilbillede via
 `expo-image-picker`. Backend afviser join, hvis den valgte skole ikke matcher
-klassen bag invitekoden. Email fungerer som login-navn, og adgangskoden gemmes
+klassen bag klassekoden. Email fungerer som login-navn, og adgangskoden gemmes
 hashet i Laravel.
 
 `Min profil` findes i sidebaren. Den kan vise profiloplysninger, håndtere
@@ -237,8 +237,7 @@ Aktuel status pr. 2026-05-09:
 - Backend-notifikationer er udvidet til 17 kategorier: chat, gruppechat-invite,
   dyster, event-invitationer/aendringer/reminders, RSVP-reminders, galleri,
   connections, ugens gode gerning og weekly streak.
-- Mobilappen har per-kategori opt-out under Indstillinger -> "Hvad vil du have
-  notifikation om?".
+- Mobilappen har per-kategori opt-out under Indstillinger -> "Notifikationstyper".
 
 Push er dermed klar som platform for iOS og Android. Test-push og chat-push er
 verificeret paa fysisk iPhone; de nye 17 kategorier skal nu smoke-testes i
@@ -263,8 +262,8 @@ npm run mobile:build:ios
 ```
 
 Fysisk iPhone/TestFlight eller en intern iOS build skal bruges til reel test.
-Naar appen har hentet en `ExpoPushToken`, kan `Send testnotifikation` i
-Indstillinger bruges til at teste vejen gennem Laravel og Expo Push Service.
+Naar appen har hentet en `ExpoPushToken`, kan backendens test-endpoint bruges
+til at teste vejen gennem Laravel og Expo Push Service.
 
 ### Android Push / Firebase
 

@@ -124,7 +124,7 @@ ikke bliver glemt.
 
 ## QA: Konto og Klasse
 
-- [ ] Ny bruger kan oprette profil fra invitekode.
+- [ ] Ny bruger kan oprette profil fra klassekode.
 - [ ] Eksisterende bruger kan logge ind med email/password.
 - [ ] Forkert login viser korrekt fejl.
 - [ ] Session holder efter app-genstart.

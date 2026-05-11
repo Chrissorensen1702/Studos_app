@@ -5,8 +5,9 @@ Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
 er projektets aktuelle "start her igen"-note.
 
 Status er opdateret 2026-05-11 efter album-siderne, native gem-til-telefon,
-multi-select, billedviewer med swipe, upload-progress, bedre slet-status og
-opdaterede web-politikker for album/billeddeling.
+multi-select, billedviewer med swipe, upload-progress, bedre slet-status,
+klasseprofil, klasseejer/moderator-adgang, rapporteringer med strikes,
+klasse-notifikationer og opdaterede web-politikker for album/billeddeling.
 
 Se ogsaa:
 
@@ -49,13 +50,13 @@ Se ogsaa:
 - Push er live i native flowet: iOS/APNs og Android/FCM credentials er sat via
   EAS/Expo, token-registrering virker for `ios` og `android`, test-push er
   verificeret paa fysisk iPhone, og chat-push er verificeret mod Cloud API.
-- Push-notifikationer er nu udvidet til 17 kategorier (chat, gruppechat-invite,
+- Push-notifikationer er nu udvidet til 18 kategorier (chat, gruppechat-invite,
   dyst-invite/response/action/result/expiring, event-invite/change/reminder,
-  RSVP-reminder, gallery-new/photos, connection-request/accepted, good-deed-
-  reminder, streak-reminder). Alle koerer via `App\Support\PushNotifier` med
-  per-kategori opt-out og dedup; reminders koerer som artisan-jobs i
-  `app/Support/NotificationScheduler.php`. Detaljer i afsnittet
-  "Notifikationer" laengere nede.
+  RSVP-reminder, gallery-new/photos, klassebeskeder,
+  connection-request/accepted, good-deed-reminder, streak-reminder). Alle
+  koerer via `App\Support\PushNotifier` med per-kategori opt-out og dedup;
+  reminders koerer som artisan-jobs i `app/Support/NotificationScheduler.php`.
+  Detaljer i afsnittet "Notifikationer" laengere nede.
 - PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
 - Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
   til én klasse. Dette haandhaeves i backend-validering og database-indekset
@@ -94,6 +95,15 @@ Se ogsaa:
   cookiepolitik og slet-konto-side daekker nu albummer, billeder af
   genkendelige personer, native fototilladelser, gem-til-telefon,
   viderdeling, rapportering, kontosletning og opbevaring.
+- Klasse-admin i appen er nu delt efter rolle: `owner` ser Klasseprofil og
+  Rapporteringer, `moderator` ser kun Rapporteringer, og `student` ser ingen
+  Admin-sektion i sidebaren.
+- Klasseprofil i appen har klasseindstillinger, join-policy, dimissionsdato,
+  medlemsadministration, godkendelse af pending medlemmer, rolleoverdragelse og
+  klasse-notifikation til aktive medlemmer.
+- Rapporteringer i appen viser indkomne rapporter, opdelt i afventer/behandlet/
+  udelukket, med kompakte kort, modalvisning, chatbesked-preview, strikes og
+  advarsels-popup til brugeren naeste gang appen aabnes.
 
 ## Struktur
 
@@ -186,9 +196,9 @@ npm --workspace @studenter-app/mobile exec expo export -- --platform ios --outpu
 
 Kernen er:
 
-- Klasser, skoler, medlemmer, roller og invitekode/KlasseID.
+- Klasser, skoler, medlemmer, roller og klassekode.
 - Medlemslogin med email/adgangskode og bearer-token.
-- Eksisterende profil kan nu logges ind uden invitekode (hvis emailen kun findes i
+- Eksisterende profil kan nu logges ind uden klassekode (hvis emailen kun findes i
   én klasse).
 - Profilbilleder, eventcovers og gruppechat-billeder via Laravel `Storage`.
 - Events med dato/tid, cover, invitationer, RSVP, rediger/slet og rapportering.
@@ -207,19 +217,34 @@ Kernen er:
   album-previewdata til dynamiske cover-collager.
 - Aktiviteter: samlet klassefeed med adgangsfiltrering for events, albums,
   uploads, foedselsdage, nye klassemedlemmer og Dyst/Challenge-resultater.
+- Klasse-admin endpoints til klasseprofil, medlemsroller, join-policy,
+  godkendelse af pending medlemmer, klasse-notifikationer, rapporteringer,
+  strikes og strike-advarsler.
 
-Roller pr. 2026-04-29:
+Roller pr. 2026-05-11:
 
 - `owner`: kan styre klasseindstillinger, invite/join-policy, medlemmer,
-  roller, CMS, events og moderation.
-- `moderator`: kan styre CMS, events og moderation, men kan ikke aendre
-  klasseindstillinger, medlemmer eller roller.
-- `student`: kan bruge appen, chatten og events, men har ikke web-admin/CMS
-  adgang.
+  roller, klasse-notifikationer, events og moderation.
+- `moderator`: kan behandle rapporteringer og moderation i appen, men kan ikke
+  aendre klasseprofil, klasseindstillinger, medlemmer eller roller.
+- `student`: kan bruge appen, chatten, events, galleri og Dyst, men har ikke
+  adgang til admin-funktioner.
 
-Web-admin aabner kun direkte for `owner` og `moderator`. En bruger, der er
-aktiv `student` i en klasse, bliver ikke sendt ind i admin og kan ikke oprette
-en ekstra klasse fra samme web-login.
+I mobilappens sidebar betyder det:
+
+- `owner`: ser `Klasseprofil` og `Rapporteringer`.
+- `moderator`: ser kun `Rapporteringer`.
+- `student`: ser ingen `Admin`-sektion.
+
+Web-admin aabner fortsat kun direkte for `owner` og `moderator`. En bruger, der
+er aktiv `student` i en klasse, bliver ikke sendt ind i admin og kan ikke
+oprette en ekstra klasse fra samme web-login.
+
+Platform-admin/global moderation er stadig naeste store manglende brik foer
+store-submit: webdelen skal have et platform-CMS med global adgang til klasser,
+brugere, brugerdata relevant for moderation, rapporteringer, blocks, strikes,
+moderation violations og fallback-regler, hvis klasseejer/moderator ikke
+handler rettidigt.
 
 Vigtige API-endpoints:
 
@@ -271,6 +296,14 @@ POST /api/notifications/push-token/disable
 POST /api/notifications/test
 GET  /api/notifications/preferences
 PUT  /api/notifications/preferences
+PATCH /api/classes/{class}/settings
+POST /api/classes/{class}/announcements
+POST /api/classes/{class}/members/invite
+POST /api/classes/{class}/members/{member}/access
+GET  /api/admin/reports
+POST /api/admin/reports/{report}/dismiss
+POST /api/admin/reports/{report}/strike
+POST /api/members/me/strikes/{strike}/acknowledge
 POST /api/connections/request
 POST /api/connections/{connection}/respond
 GET  /api/galleries
@@ -311,7 +344,7 @@ schedulet i `routes/console.php`.
 Komplet kategorioversigt med praecise titler og bodyer findes i
 `docs/Studos_Notifikationer.md`.
 
-### Kategorier (17 stk.)
+### Kategorier (18 stk.)
 
 | Kategori | Udloeses ved |
 | --- | --- |
@@ -328,6 +361,7 @@ Komplet kategorioversigt med praecise titler og bodyer findes i
 | `rsvp_reminder` | Cron: 2-4 dage foer event hvis bruger ikke har svaret RSVP. |
 | `gallery_new` | Nyt offentligt galleri oprettet (audience: everyone/specific). |
 | `gallery_photos` | Nye billeder i offentligt galleri (30-min anti-spam dedup). |
+| `class_announcement` | Klasseejer sender en vigtig klasse-notifikation fra Klasseprofil. |
 | `connection_request` | Connection-request modtaget. |
 | `connection_accepted` | Tidligere request er accepteret (inkl. mutual-pending shortcut). |
 | `good_deed_reminder` | Cron: fredag kl. 17:00 hvis ugens gode gerning ikke er claimet. |
@@ -370,7 +404,7 @@ Brugere kan slaa hver kategori til/fra under
 
 ### Compliance-noter
 
-- **GDPR / dansk lov:** Per-kategori opt-out i UI, alle 17 kategorier er
+- **GDPR / dansk lov:** Per-kategori opt-out i UI, alle 18 kategorier er
   transaktionelle (ingen marketing). Markedsfoeringsloven §10 gaelder ikke.
 - **Apple App Store:** APNs-permission haandteres allerede i Expo-flowet;
   hver kategori har transaktionel kontekst (ikke marketing).
@@ -449,11 +483,12 @@ Footer-navigation:
 
 Sidebar:
 
-- `Din klasse`: Optjen Caps, Leaderboard,
-  Tilfaeldig vaelger.
-- `Andre klasser`: Andre klasser, Klassedyster.
-- `Kommende`: Wallet og Blaa bog er laast.
-- Nederst: Noedkontakter og Indstillinger.
+- `Din klasse`: Optjen Caps, Leaderboard, Arcade Hub og Aktiviteter.
+- `Admin`: vises kun efter rolle. Klasseejer ser `Klasseprofil` og
+  `Rapporteringer`; moderator ser kun `Rapporteringer`; elev ser ikke
+  Admin-sektionen.
+- Toppen viser profil og `Mit crew`; Noedkontakter og Indstillinger ligger
+  som faste genveje i menuen.
 
 `Min profil` findes i sidebaren. Profilen viser elevoplysninger, QR/Studos-kode,
 profilfoto, samt handlinger til at ændre avatar, logge ud og slette konto.
@@ -513,6 +548,32 @@ Chat:
   beskeder, saa stock-avatar/initialer ikke er eneste identifikation.
 - Rapportering, direkte blokering og moderation logs er startet.
 - Realtime bruger Laravel Reverb, med polling fallback.
+
+Klasseprofil:
+
+- Siden findes under Admin for `owner`.
+- Har klasse-tab med foldbare containere for klasse-notifikation, klassenavn,
+  join-policy og dimissionsdato.
+- Klasse-notifikation sender en kort notifikation til aktive medlemmer via
+  `class_announcement`.
+- Join-policy kan saettes til aaben, kraever godkendelse eller lukket.
+- Hvis join-policy kraever godkendelse, vises pending anmodninger med badge i
+  sidebaren og kan godkendes/afvises i modal.
+- Medlemmer-tabben har inline scroll, rolle-dropdown og fjern/godkend-handlinger.
+- Kun én klasseejer kan vaere aktiv ad gangen; overdragelse af klasseejer
+  kraever bekraeftelse og demoter den tidligere klasseejer til moderator.
+
+Rapporteringer:
+
+- Siden findes under Admin for `owner` og `moderator`.
+- Sidebar badge viser antal afventende rapporteringer.
+- Rapporteringer er opdelt i tabs: afventer, behandlet og udelukket.
+- Listekort er kompakte previews; detaljerne aabnes i modal.
+- Chatbesked-rapporter viser selve anmeldte besked baade i kort og modal.
+- Klasseadmin kan afvise rapporten eller give strike.
+- Ved 3 aktive strikes udelukkes brugeren fra klassen.
+- Strike-advarsler vises for brugeren naeste gang appen aabnes og kan
+  kvitteres.
 
 Klassedyst:
 
@@ -699,6 +760,14 @@ Det der ser godt ud:
 - Albummer har lukkede maalgrupper, rapportering af album/enkeltbilleder,
   sletning for berettigede brugere, multi-select-handlinger og metadata i
   billedviewer.
+- Klassemoderation er nu flyttet ind i appen: klasseejer kan administrere
+  klasseprofil/medlemmer og se rapporteringer; moderator kan se og behandle
+  rapporteringer; elever ser ingen admin-funktioner.
+- Rapporteringer har statusflow, chatbesked-preview, handling via dismiss/
+  strike, 3-strike udelukkelse og strike-advarsel til brugeren ved naeste
+  app-aabning.
+- Klasseejer kan sende korte klasse-notifikationer til aktive medlemmer via
+  Klasseprofil. Kategorien kan slaas fra i notifikationsindstillinger.
 - Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
   private challenge-detaljer i feedet.
 - Push er native-only og klar til baade iOS og Android. iOS test-push og
@@ -729,15 +798,18 @@ Release-blokkere foer Apple/Google:
 - App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
   profilbilleder/uploads, aktivitetslog, chatindhold, events, push-token og
   supportdata.
-- Der skal vaere en reel admin/moderationsside til rapporter, blocks og
-  moderation violations.
-- Foer App Store-release boer gruppechat-medlemslisten have konkrete
-  medlemshandlinger til `Rapporter medlem` og `Bloker medlem`, saa UGC-kravet
-  om brugerblokering og rapportering ogsaa er tydeligt inde i gruppechat.
+- Platform-CMS/global moderation mangler stadig: webdelen skal give platform-
+  admins overblik over alle klasser, brugere, brugerdata relevant for
+  moderation, rapporter, blocks, strikes og moderation violations.
+- Der skal vaere fallback-regler paa platformniveau, saa rapporteringer kan
+  eskaleres eller overtages, hvis klasseejer/moderator ikke handler rettidigt.
+- Foer App Store-release boer gruppechat-medlemslisten have ekstra tydelige
+  medlemshandlinger til `Rapporter medlem` og `Bloker medlem`, selvom chat og
+  beskeder allerede kan rapporteres/blokeres via de eksisterende flows.
 - UGC-vilkaar forbyder nu chikane, diskrimination, trusler, seksuelt indhold,
   ulovligt indhold og misbrug af billeder/chat; reviewer-notes boer forklare,
   hvor rapportering/blokering findes i appen.
-- Review-notes skal have demo-login, forklaring af invitekode og hvor reviewer
+- Review-notes skal have demo-login, forklaring af klassekode og hvor reviewer
   finder rapporter/blokering.
 - Placeholder/laaste features skal ikke markedsfoeres som faerdige features.
 - Privacy manifest/required reason APIs skal kontrolleres i Xcode archive foer
@@ -750,19 +822,20 @@ Release-blokkere foer Apple/Google:
 - Wallet.
 - Blaa bog.
 - Backend-persistens for hueklip.
-- Klasse-announcement/system-push (owner/moderator broadcast og drifts-pushes
-  er bevidst parkeret — opt-out inkluderet i preferences-tabellen senere).
+- Platform-CMS/global moderation til alle klasser, brugere, rapporteringer,
+  blocks, strikes og moderation violations.
+- Platform-fallback for rapporteringer, hvis klasseejer/moderator ikke handler
+  rettidigt.
+- Drifts-/platform-notifikationer fra platform-admin er parkeret til
+  platform-CMS findes.
 - Caps-optjent push (digest-version er parkeret indtil aktivitetsmoenster
   er stoerre).
-- Admin/moderation-pushes (rapport-resultat, fjernet indhold, advarsel) –
-  vente paa admin/moderationsside er klar.
+- Admin/moderation-pushes for rapport-resultat og fjernet indhold er parkeret,
+  mens strike-advarsel i appen er implementeret.
 - Glemt adgangskode/email reset.
-- Join approval-flow i web/admin.
 - QR-invite/QR-scan flow.
-- Admin/moderationsside.
 - Juridisk gennemgang af privacy/terms/cookies/delete-account foer store
   review.
-- Endelig moderation-haandtering for rapporter i web/admin.
 - Data-export flow.
 
 ## Testdata
@@ -770,7 +843,7 @@ Release-blokkere foer Apple/Google:
 Mobile test-login:
 
 ```text
-Invitekode: STU-DEMO26
+Klassekode: STU-DEMO26
 Email: chris@skole.dk
 Password: studos123
 ```
@@ -977,9 +1050,11 @@ Resultat:
 6. Faa privacy policy, terms/EULA, cookiepolitik, slet-konto-side og Caps/Dyst-
    forklaring juridisk gennemlaest.
 7. Faa account deletion/support-flow helt review-klar.
-8. Lav admin/moderationsside til rapporter, blocks og violations samt
-   gruppechat-medlemshandlinger til rapporter/bloker.
-9. Goer hueklip rigtige i backend.
-10. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
+8. Lav platform-CMS/global moderation i webdelen: global klasse-/brugeroversigt,
+   rapporter, blocks, strikes, moderation violations, suspendering/frysning og
+   fallback-regler naar klasseadmin ikke handler rettidigt.
+9. Goer gruppechat-medlemshandlinger ekstra tydelige for rapporter/bloker.
+10. Goer hueklip rigtige i backend.
+11. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
    review notes.
-11. Lav production iOS/TestFlight build og Android production AAB.
+12. Lav production iOS/TestFlight build og Android production AAB.

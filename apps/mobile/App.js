@@ -94,8 +94,9 @@ const WALLS_ALBUM_GRID_COLUMNS = 3;
 const WALLS_ALBUM_GRID_GAP = 6;
 const WALLS_ALBUM_GRID_SIDE_GUTTER = 2;
 const WALLS_ALBUM_UPLOAD_SELECTION_LIMIT = 10;
-const WALLS_PHOTO_VIEWER_SWIPE_DISTANCE = 44;
-const WALLS_PHOTO_VIEWER_SWIPE_RATIO = 1.15;
+const WALLS_PHOTO_VIEWER_SWIPE_DISTANCE = 26;
+const WALLS_PHOTO_VIEWER_SWIPE_RATIO = 1.05;
+const WALLS_PHOTO_VIEWER_SWIPE_VELOCITY = 0.18;
 const WALLS_ALBUM_PHOTO_FILTERS = [
   { id: 'all', label: 'Alle' },
   { id: 'mine', label: 'Mine billeder' },
@@ -683,7 +684,52 @@ const APP_DRAWER_SECTIONS = [
       { id: 'activities', label: 'Aktiviteter', icon: 'pulse-outline', activeIcon: 'pulse', accentColor: STUDOS_THEME.blue },
     ],
   },
+  {
+    title: 'Admin',
+    variant: 'admin',
+    items: [
+      {
+        id: 'adminFriends',
+        label: 'Klasseprofil',
+        description: 'Inviter og administrer medlemmer',
+        icon: 'person-add-outline',
+        activeIcon: 'person-add',
+        accentColor: STUDOS_THEME.blue,
+      },
+      {
+        id: 'adminReports',
+        label: 'Rapporteringer',
+        description: 'Anmeldte hændelser i klassen',
+        icon: 'flag-outline',
+        activeIcon: 'flag',
+        accentColor: STUDOS_THEME.red,
+      },
+    ],
+  },
 ];
+const ADMIN_REPORT_STATUS_LABELS = {
+  pending: 'Afventer',
+  struck: 'Strike sendt',
+  dismissed: 'Afvist',
+  resolved: 'Håndteret',
+};
+const ADMIN_REPORT_TARGET_ICONS = {
+  calendar_event: 'calendar-outline',
+  gallery: 'images-outline',
+  gallery_photo: 'image-outline',
+  chat_conversation: 'chatbubbles-outline',
+  chat_message: 'chatbubble-ellipses-outline',
+};
+const ADMIN_REPORT_FILTERS = [
+  { id: 'pending', label: 'Afventer', countKey: 'pending' },
+  { id: 'handled', label: 'Behandlet', countKey: 'handled' },
+  { id: 'excluded', label: 'Udelukket', countKey: 'excluded' },
+];
+const ADMIN_REPORT_FILTER_EMPTY_TEXT = {
+  pending: 'Der er ingen rapporteringer, som afventer handling.',
+  handled: 'Der er ingen behandlede rapporteringer endnu.',
+  excluded: 'Der er ingen rapporteringer med udelukkede medlemmer.',
+};
 
 const GLOBAL_CLASS_BATTLE_PREVIEW_CLASSES = [
   { id: 'preview-3a', className: '3.A', schoolName: 'Århus Gymnasium', score: 18420, movement: '+2' },
@@ -820,11 +866,34 @@ const isValidProfileBirthday = (value) => {
 };
 
 const PROFILE_ROLE_LABELS = {
-  owner: 'Ejer',
+  owner: 'Klasseejer',
   moderator: 'Moderator',
   student: 'Elev',
 };
-
+const canAccessClassProfile = (member) => String(member?.role ?? '') === 'owner';
+const canAccessAdminReports = (member) => ['owner', 'moderator'].includes(String(member?.role ?? ''));
+const CLASS_MEMBER_ROLE_OPTIONS = [
+  { id: 'student', label: 'Elev' },
+  { id: 'moderator', label: 'Moderator' },
+  { id: 'owner', label: 'Klasseejer' },
+];
+const CLASS_JOIN_POLICY_OPTIONS = [
+  {
+    id: 'open',
+    label: 'Åben',
+    description: 'Nye elever kommer direkte ind med klassekoden.',
+  },
+  {
+    id: 'approval',
+    label: 'Kræver godkendelse',
+    description: 'Nye elever skal godkendes før adgang.',
+  },
+  {
+    id: 'closed',
+    label: 'Lukket',
+    description: 'Ingen nye elever kan joine klassen.',
+  },
+];
 const PROFILE_STATUS_LABELS = {
   active: 'Aktiv',
   pending: 'Afventer',
@@ -1904,6 +1973,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const [pointDuelActionCount, setPointDuelActionCount] = useState(0);
+  const [pendingAdminReportCount, setPendingAdminReportCount] = useState(0);
   const [pendingDirectChatMemberId, setPendingDirectChatMemberId] = useState('');
   const [weeklyCheckInReward, setWeeklyCheckInReward] = useState(null);
   const [weeklyCheckInSnapshot, setWeeklyCheckInSnapshot] = useState(null);
@@ -1916,20 +1986,44 @@ export default function App() {
       : 'Push-notifikationer er ikke tilgængelige i web-versionen.',
     error: '',
     loading: false,
-    testLoading: false,
   });
   const [topBarHeight, setTopBarHeight] = useState(APP_TOP_BAR_HEIGHT);
   const appScrollRef = useRef(null);
   const pushAutoRequestRef = useRef(false);
   const weeklyCheckInAutoRef = useRef('');
+  const strikeWarningAlertOpenRef = useRef(false);
+  const strikeWarningsAcknowledgingRef = useRef(new Set());
 
   const activeClass = schoolClass ?? session?.class;
   const activeMember = session?.member ?? null;
+  const activeMemberStatus = String(activeMember?.status ?? 'active');
+  const isPendingClassApproval = Boolean(
+    step === 'overview'
+    && activeClass
+    && activeMember
+    && activeMemberStatus === 'pending',
+  );
+  const hasActiveClassAccess = Boolean(
+    step === 'overview'
+    && activeClass
+    && activeMember
+    && activeMemberStatus === 'active',
+  );
+  const canViewAdminReports = canAccessAdminReports(activeMember);
   const events = activeClass?.events ?? [];
   const contentBlocks = activeClass?.contentBlocks ?? [];
   const nextEvent = events[0] ?? null;
   const pinnedContent = contentBlocks.find((block) => block.isPinned) ?? contentBlocks[0] ?? null;
   const activeMembers = activeClass?.members?.filter((member) => member.status === 'active') ?? [];
+  const pendingClassApprovalCount = useMemo(() => {
+    const joinPolicy = activeClass?.settings?.joinPolicy || activeClass?.joinPolicy || 'approval';
+
+    if (joinPolicy !== 'approval') {
+      return 0;
+    }
+
+    return (activeClass?.members ?? []).filter((member) => member?.status === 'pending').length;
+  }, [activeClass?.joinPolicy, activeClass?.members, activeClass?.settings?.joinPolicy]);
   const countdown = useMemo(
     () => daysUntil(activeClass?.graduationDate),
     [activeClass?.graduationDate],
@@ -1945,7 +2039,9 @@ export default function App() {
     || activeTab === 'classBattle'
     || activeTab === 'classmates'
     || activeTab === 'connections'
-    || activeTab === 'emergencyContacts';
+    || activeTab === 'emergencyContacts'
+    || activeTab === 'adminFriends'
+    || activeTab === 'adminReports';
 
   const scrollAppToTop = useCallback(() => {
     requestAnimationFrame(() => {
@@ -2332,6 +2428,88 @@ export default function App() {
     }));
   };
 
+  const removeStrikeWarningFromSession = useCallback((strikeId, nextWarnings = null) => {
+    const normalizedStrikeId = String(strikeId ?? '');
+
+    setSession((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const warnings = Array.isArray(nextWarnings)
+        ? nextWarnings
+        : (Array.isArray(current.strikeWarnings) ? current.strikeWarnings : [])
+          .filter((warning) => String(warning?.id ?? '') !== normalizedStrikeId);
+
+      return {
+        ...current,
+        strikeWarnings: warnings,
+      };
+    });
+  }, []);
+
+  const acknowledgeStrikeWarning = useCallback(async (strikeId) => {
+    const normalizedStrikeId = String(strikeId ?? '');
+
+    if (!normalizedStrikeId || !session?.token) {
+      strikeWarningAlertOpenRef.current = false;
+      return;
+    }
+
+    strikeWarningsAcknowledgingRef.current.add(normalizedStrikeId);
+
+    try {
+      const data = await apiFetch(`/members/me/strikes/${encodeURIComponent(normalizedStrikeId)}/acknowledge`, {
+        authToken: session.token,
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      removeStrikeWarningFromSession(normalizedStrikeId, data?.strikeWarnings);
+    } catch {
+      removeStrikeWarningFromSession(normalizedStrikeId);
+    } finally {
+      strikeWarningsAcknowledgingRef.current.delete(normalizedStrikeId);
+      strikeWarningAlertOpenRef.current = false;
+    }
+  }, [removeStrikeWarningFromSession, session?.token]);
+
+  useEffect(() => {
+    if (!session?.token || strikeWarningAlertOpenRef.current) {
+      return;
+    }
+
+    const warnings = Array.isArray(session?.strikeWarnings) ? session.strikeWarnings : [];
+    const warning = warnings.find((entry) => {
+      const warningId = String(entry?.id ?? '');
+
+      return warningId && !strikeWarningsAcknowledgingRef.current.has(warningId);
+    });
+
+    if (!warning?.id) {
+      return;
+    }
+
+    const warningId = String(warning.id);
+    const strikeLimit = Number(warning.strikeLimit || 3);
+    const strikeNumber = Math.min(Number(warning.strikeNumber || 1), strikeLimit);
+    const reason = String(warning.reason || 'Du har fået en strike.').trim();
+
+    strikeWarningAlertOpenRef.current = true;
+
+    Alert.alert(
+      'Du har fået en strike',
+      `${reason}\n\nDu har nu ${strikeNumber}/${strikeLimit} strikes. Ved ${strikeLimit} strikes bliver du udelukket fra klassen.`,
+      [
+        {
+          text: 'Jeg forstår',
+          onPress: () => acknowledgeStrikeWarning(warningId),
+        },
+      ],
+      { cancelable: false },
+    );
+  }, [acknowledgeStrikeWarning, session?.strikeWarnings, session?.token]);
+
   const refreshSessionData = useCallback(async () => {
     if (!session?.token) {
       return;
@@ -2401,7 +2579,7 @@ export default function App() {
   }, [session?.member?.id, session?.token]);
 
   useEffect(() => {
-    if (step !== 'overview' || !session?.member?.id || !session?.token) {
+    if (!hasActiveClassAccess || !session?.member?.id || !session?.token) {
       return undefined;
     }
 
@@ -2475,13 +2653,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [session?.member?.id, session?.token, step]);
+  }, [hasActiveClassAccess, session?.member?.id, session?.token]);
 
   useEffect(() => {
     let isMounted = true;
     const token = session?.token;
 
-    if (!token || step !== 'overview') {
+    if (!token || !hasActiveClassAccess) {
       setChatUnreadCount(0);
 
       return () => {
@@ -2510,14 +2688,14 @@ export default function App() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [session?.token, step]);
+  }, [hasActiveClassAccess, session?.token]);
 
   useEffect(() => {
     let isMounted = true;
     const token = session?.token;
     const memberId = session?.member?.id;
 
-    if (!token || !memberId || step !== 'overview') {
+    if (!token || !memberId || !hasActiveClassAccess) {
       setPointDuelActionCount(0);
 
       return () => {
@@ -2546,7 +2724,46 @@ export default function App() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [session?.member?.id, session?.token, step]);
+  }, [hasActiveClassAccess, session?.member?.id, session?.token]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const token = session?.token;
+
+    if (!token || !canViewAdminReports || !hasActiveClassAccess) {
+      setPendingAdminReportCount(0);
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const refreshPendingAdminReportCount = async () => {
+      try {
+        const data = await apiFetch('/admin/reports', {
+          authToken: token,
+        });
+        const reports = Array.isArray(data?.reports) ? data.reports : [];
+        const pendingCount = Number.isFinite(Number(data?.summary?.pending))
+          ? Number(data.summary.pending)
+          : reports.filter((report) => report?.status === 'pending').length;
+
+        if (isMounted) {
+          setPendingAdminReportCount(pendingCount);
+        }
+      } catch {
+        // The reports screen surfaces fetch errors; the sidebar badge should stay quiet.
+      }
+    };
+
+    refreshPendingAdminReportCount();
+    const interval = setInterval(refreshPendingAdminReportCount, 20000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [canViewAdminReports, hasActiveClassAccess, session?.token]);
 
   const clearSession = async () => {
     await SessionStore.deleteItemAsync(SESSION_STORAGE_KEY);
@@ -2559,6 +2776,7 @@ export default function App() {
     setSidebarOpen(false);
     setChatUnreadCount(0);
     setPointDuelActionCount(0);
+    setPendingAdminReportCount(0);
     setWeeklyCheckInSnapshot(null);
     setWeeklyCheckInReward(null);
     setNotificationState((current) => ({
@@ -2570,6 +2788,28 @@ export default function App() {
     }));
     setError('');
     setStep('invite');
+  };
+
+  const refreshPendingApprovalStatus = async () => {
+    if (loading) {
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      await refreshSessionData();
+    } catch (apiError) {
+      if (apiError?.status === 401) {
+        await clearSession();
+        return;
+      }
+
+      setError(apiError?.message || 'Status kunne ikke opdateres.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const enablePushNotifications = useCallback(async ({ requestPermission = true, silent = false } = {}) => {
@@ -2648,6 +2888,7 @@ export default function App() {
     if (
       !PUSH_NOTIFICATIONS_ENABLED
       || step !== 'overview'
+      || !hasActiveClassAccess
       || !session?.token
       || notificationState.expoPushToken
       || notificationState.loading
@@ -2699,48 +2940,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, [enablePushNotifications, notificationState.expoPushToken, notificationState.loading, notificationState.permissionStatus, session?.token, step]);
-
-  const sendNotificationTest = useCallback(async () => {
-    if (!session?.token) {
-      setNotificationState((current) => ({
-        ...current,
-        error: 'Login mangler.',
-      }));
-      return;
-    }
-
-    setNotificationState((current) => ({
-      ...current,
-      error: '',
-      testLoading: true,
-      message: 'Sender testnotifikation...',
-    }));
-
-    try {
-      const data = await apiFetch('/notifications/test', {
-        authToken: session.token,
-        method: 'POST',
-        body: JSON.stringify({
-          title: 'Studos tester lige 🔔',
-          body: 'Hvis den her lander, er push-vejen åben.',
-        }),
-      });
-
-      setNotificationState((current) => ({
-        ...current,
-        error: '',
-        testLoading: false,
-        message: data.message ?? 'Testnotifikation sendt.',
-      }));
-    } catch (notificationError) {
-      setNotificationState((current) => ({
-        ...current,
-        error: notificationError.message || 'Testnotifikationen kunne ikke sendes.',
-        testLoading: false,
-      }));
-    }
-  }, [session?.token]);
+  }, [enablePushNotifications, hasActiveClassAccess, notificationState.expoPushToken, notificationState.loading, notificationState.permissionStatus, session?.token, step]);
 
   const disablePushNotifications = useCallback(async () => {
     if (!session?.token) {
@@ -2802,7 +3002,7 @@ export default function App() {
     const code = inviteCode.trim().toUpperCase();
 
     if (!code) {
-      setError('Indtast invitekode for at fortsætte.');
+      setError('Indtast klassekode for at fortsætte.');
       return;
     }
 
@@ -2811,6 +3011,13 @@ export default function App() {
 
     try {
       const data = await apiFetch(`/classes/invite/${encodeURIComponent(code)}`);
+      const joinPolicy = data.class?.settings?.joinPolicy || data.class?.joinPolicy || 'approval';
+
+      if (joinPolicy === 'closed') {
+        setError('Klassens adgang er lukket');
+        return;
+      }
+
       const schools = data.schools?.length
         ? data.schools
         : data.class?.schoolId
@@ -2824,8 +3031,8 @@ export default function App() {
 
       if (!inferredSchoolId) {
         setError(resolvedSchoolName
-          ? 'Skolen for denne invitekode kunne ikke matches automatisk. Prøv igen eller kontakt support.'
-          : 'Invitekoden mangler skoleoplysninger.');
+          ? 'Skolen for denne klassekode kunne ikke matches automatisk. Prøv igen eller kontakt support.'
+          : 'Klassekoden mangler skoleoplysninger.');
         return;
       }
 
@@ -2834,7 +3041,7 @@ export default function App() {
       setProfile((current) => ({ ...current, schoolId: inferredSchoolId }));
       setStep('profile');
     } catch (apiError) {
-      setError(apiError.message || 'Invitekoden kunne ikke findes.');
+      setError(apiError.message || 'Klassekoden kunne ikke findes.');
     } finally {
       setLoading(false);
     }
@@ -2891,7 +3098,7 @@ export default function App() {
     } catch (apiError) {
       const message = apiError?.message || 'Login mislykkedes.';
       setError(isInviteCodeRequiredError(message)
-        ? 'Denne cloud-udgave kræver endnu invitekode. Prøv at skrive din invitekode, ellers brug en nyere App/Cloud-version.'
+        ? 'Denne cloud-udgave kræver endnu klassekode. Prøv at skrive din klassekode, ellers brug en nyere App/Cloud-version.'
         : message);
     } finally {
       setLoading(false);
@@ -3182,7 +3389,7 @@ export default function App() {
     }
   };
 
-  const showAppShell = step === 'overview' && activeClass && activeMember;
+  const showAppShell = hasActiveClassAccess;
 
   if (checkingSession) {
     return (
@@ -3192,6 +3399,22 @@ export default function App() {
           <Image source={STUDOS_LOGO} style={styles.logoMark} />
           <ActivityIndicator color="#ef5b3f" />
         </View>
+      </View>
+    );
+  }
+
+  if (isPendingClassApproval) {
+    return (
+      <View style={styles.safeAreaWhite}>
+        <StatusBar barStyle="dark-content" />
+        <PendingClassApprovalScreen
+          error={error}
+          loading={loading}
+          member={activeMember}
+          onLogout={clearSession}
+          onRefresh={refreshPendingApprovalStatus}
+          schoolClass={activeClass}
+        />
       </View>
     );
   }
@@ -3229,6 +3452,9 @@ export default function App() {
                 activeTab === 'classmates' ? styles.appScreenCrewDetached : null,
                 activeTab === 'connections' ? styles.appScreenCrewDetached : null,
                 activeTab === 'emergencyContacts' ? styles.appScreenCrewDetached : null,
+                activeTab === 'adminFriends' ? styles.appScreenDetached : null,
+                activeTab === 'adminFriends' ? styles.appScreenAdminClassDetached : null,
+                activeTab === 'adminReports' ? styles.appScreenDetached : null,
                 activeTab === 'classBattle' ? styles.appScreenClassBattleDetached : null,
                 activeTab === 'calendar' ? styles.appScreenCalendarUnderFooter : null,
                 activeTab === 'chat' ? styles.appScreenOverlayHost : null,
@@ -3245,6 +3471,7 @@ export default function App() {
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
                   onPointDuelActionCountChange={setPointDuelActionCount}
+                  onAdminReportPendingCountChange={setPendingAdminReportCount}
                   onDirectChatHandled={clearPendingDirectChatMemberId}
                   initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
@@ -3265,7 +3492,6 @@ export default function App() {
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
-                  onSendNotificationTest={sendNotificationTest}
                   onDisablePushNotifications={disablePushNotifications}
                   onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
@@ -3296,6 +3522,7 @@ export default function App() {
                   nextEvent={nextEvent}
                   onChatUnreadCountChange={setChatUnreadCount}
                   onPointDuelActionCountChange={setPointDuelActionCount}
+                  onAdminReportPendingCountChange={setPendingAdminReportCount}
                   onDirectChatHandled={clearPendingDirectChatMemberId}
                   initialDirectChatMemberId={pendingDirectChatMemberId}
                   onChangeTab={setActiveTab}
@@ -3316,7 +3543,6 @@ export default function App() {
                   onReportEvent={reportCalendarEvent}
                   onRespondToEvent={respondToCalendarEvent}
                   onRefreshClassData={refreshSessionData}
-                  onSendNotificationTest={sendNotificationTest}
                   onDisablePushNotifications={disablePushNotifications}
                   onOpenSystemAppSettings={openSystemAppSettings}
                   onUpdateEvent={updateCalendarEvent}
@@ -3339,6 +3565,8 @@ export default function App() {
               activeMember={activeMember}
               activeMembers={activeMembers}
               activeRoute={activeTab}
+              pendingAdminReportCount={pendingAdminReportCount}
+              pendingClassApprovalCount={pendingClassApprovalCount}
               profile={profile}
               topBarHeight={topBarHeight}
               visible={sidebarOpen}
@@ -3421,6 +3649,74 @@ export default function App() {
   );
 }
 
+function PendingClassApprovalScreen({
+  error,
+  loading,
+  member,
+  onLogout,
+  onRefresh,
+  schoolClass,
+}) {
+  const { height } = useWindowDimensions();
+  const displayName = member?.firstName || member?.displayName || 'Din profil';
+  const classLabel = [schoolClass?.schoolName, schoolClass?.className]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <ScrollView
+      contentContainerStyle={[styles.pendingApprovalScreen, { minHeight: height }]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.pendingApprovalLogoWrap}>
+        <Image source={STUDOS_LOGO} style={styles.pendingApprovalLogo} />
+      </View>
+
+      <View style={styles.pendingApprovalCard}>
+        <View style={styles.pendingApprovalIcon}>
+          <Ionicons name="hourglass-outline" size={24} color="#8A650A" />
+        </View>
+        <Text style={styles.pendingApprovalTitle}>
+          Afventer godkendelse af klasseejer
+        </Text>
+        <Text style={styles.pendingApprovalText}>
+          Hej {displayName}. Din profil er oprettet, men du får først adgang til klassen, når en klasseejer har godkendt dig.
+        </Text>
+
+        {classLabel ? (
+          <View style={styles.pendingApprovalClassPill}>
+            <Ionicons name="school-outline" size={16} color={STUDOS_THEME.ink} />
+            <Text numberOfLines={1} style={styles.pendingApprovalClassText}>
+              {classLabel}
+            </Text>
+          </View>
+        ) : null}
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <Button
+          label="Tjek status"
+          loading={loading}
+          onPress={onRefresh}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={loading}
+          onPress={onLogout}
+          style={({ pressed }) => [
+            styles.pendingApprovalLogoutButton,
+            loading ? styles.adminClassControlDisabled : null,
+            pressed && !loading ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Text style={styles.pendingApprovalLogoutText}>Log ud</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
 function InviteScreen({
   error,
   inviteCode,
@@ -3450,13 +3746,13 @@ function InviteScreen({
             <View style={styles.inviteWordmarkDot} />
           </View>
           <Text style={styles.inviteHeroText}>
-            Indtast din invitekode, og kom i gang med din klasse på få sekunder.
+            Indtast din klassekode, og kom i gang med din klasse på få sekunder.
           </Text>
         </View>
 
         <View style={styles.inviteFormCard}>
           <View style={styles.inviteForm}>
-            <Text style={styles.inviteInputLabel}>Indtast invitekode</Text>
+            <Text style={styles.inviteInputLabel}>Indtast klassekode</Text>
             <View style={styles.inviteInputWithIcon}>
               <View style={styles.inviteInputIconWrap}>
                 <Ionicons name="key" size={18} color={STUDOS_THEME.red} />
@@ -3513,6 +3809,7 @@ function AppTabScreen({
   nextEvent,
   initialDirectChatMemberId,
   onChatUnreadCountChange,
+  onAdminReportPendingCountChange,
   onPointDuelActionCountChange,
   onDirectChatHandled,
   onChangeTab,
@@ -3533,7 +3830,6 @@ function AppTabScreen({
   onReportEvent,
   onRespondToEvent,
   onRefreshClassData,
-  onSendNotificationTest,
   onDisablePushNotifications,
   onOpenSystemAppSettings,
   onUpdateEvent,
@@ -3545,6 +3841,8 @@ function AppTabScreen({
   weeklyCheckInSnapshot,
 }) {
   const [selectedMiniGame, setSelectedMiniGame] = useState(null);
+  const canViewClassProfile = canAccessClassProfile(activeMember);
+  const canViewAdminReports = canAccessAdminReports(activeMember);
   const openCalendarTab = useCallback((target) => {
     if (onOpenCalendar) {
       onOpenCalendar(target);
@@ -3559,6 +3857,15 @@ function AppTabScreen({
       setSelectedMiniGame(null);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (
+      (activeTab === 'adminFriends' && !canViewClassProfile)
+      || (activeTab === 'adminReports' && !canViewAdminReports)
+    ) {
+      onChangeTab?.('overview');
+    }
+  }, [activeTab, canViewAdminReports, canViewClassProfile, onChangeTab]);
 
   if (activeTab === 'chat') {
     return (
@@ -3710,6 +4017,26 @@ function AppTabScreen({
     );
   }
 
+  if (activeTab === 'adminFriends' && canViewClassProfile) {
+    return (
+      <AdminClassScreen
+        activeMember={activeMember}
+        onRefreshClassData={onRefreshClassData}
+        schoolClass={schoolClass}
+        sessionToken={sessionToken}
+      />
+    );
+  }
+
+  if (activeTab === 'adminReports' && canViewAdminReports) {
+    return (
+      <AdminReportsScreen
+        onPendingCountChange={onAdminReportPendingCountChange}
+        sessionToken={sessionToken}
+      />
+    );
+  }
+
   if (activeTab === 'settings') {
     return (
       <SettingsScreen
@@ -3718,7 +4045,6 @@ function AppTabScreen({
         schoolClass={schoolClass}
         sessionToken={sessionToken}
         onEnablePushNotifications={onEnablePushNotifications}
-        onSendNotificationTest={onSendNotificationTest}
         onDisablePushNotifications={onDisablePushNotifications}
         onOpenSystemAppSettings={onOpenSystemAppSettings}
         onLogout={onLogout}
@@ -9424,7 +9750,7 @@ function CalendarScreen({
 
 function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, onRefreshClassData, schoolClass, sessionToken }) {
   const leaderboardScrollRef = useRef(null);
-  const [leaderboardScope, setLeaderboardScope] = useState('global');
+  const [leaderboardScope, setLeaderboardScope] = useState('class');
   const [classBattleData, setClassBattleData] = useState(null);
   const [classBattleRefreshing, setClassBattleRefreshing] = useState(false);
   const [classBattleRowsScrolled, setClassBattleRowsScrolled] = useState(false);
@@ -9652,8 +9978,8 @@ function ClassBattleScreen({ activeMember, events = [], onOpenEarnCaps, onRefres
       <View style={styles.classBattleLeaderboardCard}>
         <View style={styles.classBattleScopeSwitch}>
           {[
-            { id: 'global', label: 'Alle klasser' },
             { id: 'class', label: 'Min klasse' },
+            { id: 'global', label: 'Alle klasser' },
           ].map((scope) => {
             const selected = leaderboardScope === scope.id;
 
@@ -10499,9 +10825,13 @@ function WallsAlbumScreen({
   const [savingViewerPhotoId, setSavingViewerPhotoId] = useState('');
   const [viewerSaveStatus, setViewerSaveStatus] = useState(null);
   const viewerOpacity = useRef(new Animated.Value(0)).current;
+  const viewerSwipeX = useRef(new Animated.Value(0)).current;
   const viewerPhotoRef = useRef(null);
   const viewerTouchStartRef = useRef(null);
+  const viewerSwipeLatestRef = useRef(null);
+  const viewerSwipeActiveRef = useRef(false);
   const viewerSwipeHandledRef = useRef(false);
+  const viewerImageAnimatedStyle = useMemo(() => ({ transform: [{ translateX: viewerSwipeX }] }), [viewerSwipeX]);
   const [actionPhoto, setActionPhoto] = useState(null);
   const [deleteConfirmPhoto, setDeleteConfirmPhoto] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -10584,6 +10914,24 @@ function WallsAlbumScreen({
   useEffect(() => {
     viewerPhotoRef.current = viewerPhoto;
   }, [viewerPhoto]);
+
+  useEffect(() => {
+    if (!viewerPhoto || displayedPhotos.length < 2) return;
+
+    const currentId = String(viewerPhoto?.id ?? '');
+    const currentIndex = displayedPhotos.findIndex((photo) => String(photo?.id ?? '') === currentId);
+    const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
+    const adjacentPhotos = [
+      displayedPhotos[(safeCurrentIndex + 1) % displayedPhotos.length],
+      displayedPhotos[(safeCurrentIndex - 1 + displayedPhotos.length) % displayedPhotos.length],
+    ];
+
+    adjacentPhotos.forEach((photo) => {
+      if (photo?.imageUri) {
+        Image.prefetch(photo.imageUri).catch(() => null);
+      }
+    });
+  }, [displayedPhotos, viewerPhoto]);
 
   const refreshAlbumPhotos = useCallback(() => {
     loadAlbumPhotos({ refreshing: true });
@@ -10686,12 +11034,24 @@ function WallsAlbumScreen({
 
   const openViewer = useCallback((photo) => {
     setViewerSaveStatus(null);
+    viewerSwipeX.stopAnimation();
+    viewerSwipeX.setValue(0);
+    viewerTouchStartRef.current = null;
+    viewerSwipeLatestRef.current = null;
+    viewerSwipeActiveRef.current = false;
+    viewerSwipeHandledRef.current = false;
     setViewerPhoto(photo);
     viewerOpacity.setValue(0);
     Animated.timing(viewerOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-  }, [viewerOpacity]);
+  }, [viewerOpacity, viewerSwipeX]);
 
   const closeViewer = useCallback(() => {
+    viewerSwipeX.stopAnimation();
+    viewerSwipeX.setValue(0);
+    viewerTouchStartRef.current = null;
+    viewerSwipeLatestRef.current = null;
+    viewerSwipeActiveRef.current = false;
+    viewerSwipeHandledRef.current = false;
     Animated.timing(viewerOpacity, { toValue: 0, duration: 160, useNativeDriver: true })
       .start(({ finished }) => {
         if (finished) {
@@ -10699,23 +11059,61 @@ function WallsAlbumScreen({
           setViewerSaveStatus(null);
         }
       });
-  }, [viewerOpacity]);
+  }, [viewerOpacity, viewerSwipeX]);
 
-  const showAdjacentViewerPhoto = useCallback((direction) => {
-    if (!viewerPhoto || displayedPhotos.length < 2) return;
+  const getAdjacentViewerPhoto = useCallback((direction) => {
+    if (!viewerPhoto || displayedPhotos.length < 2) return null;
 
     const currentId = String(viewerPhoto?.id ?? '');
     const currentIndex = displayedPhotos.findIndex((photo) => String(photo?.id ?? '') === currentId);
     const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
     const nextIndex = (safeCurrentIndex + direction + displayedPhotos.length) % displayedPhotos.length;
-    const nextPhoto = displayedPhotos[nextIndex];
+    return displayedPhotos[nextIndex] ?? null;
+  }, [displayedPhotos, viewerPhoto]);
 
-    if (nextPhoto) {
-      setViewerSaveStatus(null);
-      viewerOpacity.setValue(1);
-      setViewerPhoto(nextPhoto);
+  const resetViewerSwipe = useCallback(() => {
+    viewerSwipeActiveRef.current = false;
+    viewerSwipeLatestRef.current = null;
+    Animated.spring(viewerSwipeX, {
+      toValue: 0,
+      tension: 170,
+      friction: 22,
+      useNativeDriver: true,
+    }).start();
+  }, [viewerSwipeX]);
+
+  const showAdjacentViewerPhoto = useCallback((direction) => {
+    const nextPhoto = getAdjacentViewerPhoto(direction);
+    if (!nextPhoto) {
+      resetViewerSwipe();
+      return;
     }
-  }, [displayedPhotos, viewerOpacity, viewerPhoto]);
+
+    const exitX = direction > 0 ? -APP_WINDOW_WIDTH : APP_WINDOW_WIDTH;
+    viewerSwipeHandledRef.current = true;
+    viewerSwipeActiveRef.current = false;
+    viewerSwipeLatestRef.current = null;
+
+    Animated.timing(viewerSwipeX, {
+      toValue: exitX,
+      duration: 95,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setViewerSaveStatus(null);
+      setViewerPhoto(nextPhoto);
+      viewerSwipeX.setValue(-exitX);
+      Animated.timing(viewerSwipeX, {
+        toValue: 0,
+        duration: 120,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        viewerSwipeHandledRef.current = false;
+      });
+    });
+  }, [getAdjacentViewerPhoto, resetViewerSwipe, viewerSwipeX]);
 
   const viewerTouchHandlers = useMemo(() => ({
     onTouchStart: (e) => {
@@ -10723,11 +11121,36 @@ function WallsAlbumScreen({
       const touch = e.nativeEvent.touches?.[0] ?? e.nativeEvent;
       if (!Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) return;
 
+      viewerSwipeX.stopAnimation();
+      viewerSwipeX.setValue(0);
       viewerSwipeHandledRef.current = false;
-      viewerTouchStartRef.current = { x: touch.pageX, y: touch.pageY };
+      viewerSwipeActiveRef.current = false;
+      viewerSwipeLatestRef.current = null;
+      viewerTouchStartRef.current = { x: touch.pageX, y: touch.pageY, time: Date.now() };
     },
     onTouchMove: (e) => {
       e.stopPropagation?.();
+      if (displayedPhotos.length < 2) return;
+
+      const start = viewerTouchStartRef.current;
+      const touch = e.nativeEvent.touches?.[0] ?? e.nativeEvent;
+      if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) return;
+
+      const dx = touch.pageX - start.x;
+      const dy = touch.pageY - start.y;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const shouldTrack = viewerSwipeActiveRef.current
+        || (absDx > 6 && absDx > absDy * WALLS_PHOTO_VIEWER_SWIPE_RATIO);
+
+      if (!shouldTrack) return;
+      if (!viewerSwipeActiveRef.current) {
+        viewerSwipeX.stopAnimation();
+        viewerSwipeActiveRef.current = true;
+      }
+
+      viewerSwipeLatestRef.current = { dx, dy, time: Date.now() };
+      viewerSwipeX.setValue(Math.max(Math.min(dx, APP_WINDOW_WIDTH * 0.95), -APP_WINDOW_WIDTH * 0.95));
     },
     onTouchEnd: (e) => {
       e.stopPropagation?.();
@@ -10735,26 +11158,42 @@ function WallsAlbumScreen({
       const touch = e.nativeEvent.changedTouches?.[0] ?? e.nativeEvent;
       viewerTouchStartRef.current = null;
 
-      if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) return;
-
-      const dx = touch.pageX - start.x;
-      const dy = touch.pageY - start.y;
-      const absDx = Math.abs(dx);
-      const absDy = Math.abs(dy);
-
-      if (absDx < WALLS_PHOTO_VIEWER_SWIPE_DISTANCE || absDx <= absDy * WALLS_PHOTO_VIEWER_SWIPE_RATIO) {
+      if (!start || !Number.isFinite(touch?.pageX) || !Number.isFinite(touch?.pageY)) {
+        resetViewerSwipe();
         return;
       }
 
-      viewerSwipeHandledRef.current = true;
+      const latest = viewerSwipeLatestRef.current;
+      const dx = latest?.dx ?? (touch.pageX - start.x);
+      const dy = latest?.dy ?? (touch.pageY - start.y);
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const elapsed = Math.max(1, (latest?.time ?? Date.now()) - start.time);
+      const vx = dx / elapsed;
+      const horizontal = absDx > absDy * WALLS_PHOTO_VIEWER_SWIPE_RATIO;
+      const farEnough = absDx >= WALLS_PHOTO_VIEWER_SWIPE_DISTANCE;
+      const fastEnough = absDx >= 14 && Math.abs(vx) >= WALLS_PHOTO_VIEWER_SWIPE_VELOCITY;
+      const shouldChangePhoto = displayedPhotos.length > 1 && horizontal && (farEnough || fastEnough);
+
+      viewerSwipeLatestRef.current = null;
+      viewerSwipeActiveRef.current = false;
+
+      if (!shouldChangePhoto) {
+        resetViewerSwipe();
+        return;
+      }
+
       showAdjacentViewerPhoto(dx < 0 ? 1 : -1);
     },
     onTouchCancel: (e) => {
       e.stopPropagation?.();
       viewerTouchStartRef.current = null;
+      viewerSwipeLatestRef.current = null;
+      viewerSwipeActiveRef.current = false;
       viewerSwipeHandledRef.current = false;
+      resetViewerSwipe();
     },
-  }), [showAdjacentViewerPhoto]);
+  }), [displayedPhotos.length, resetViewerSwipe, showAdjacentViewerPhoto, viewerSwipeX]);
 
   const handleViewerBackdropPress = useCallback(() => {
     if (viewerSwipeHandledRef.current) {
@@ -11533,14 +11972,14 @@ function WallsAlbumScreen({
               ]}
             >
               <Pressable style={StyleSheet.absoluteFill} onPress={handleViewerBackdropPress} />
-              <View {...viewerTouchHandlers} style={styles.wallsPhotoViewerImageFrame}>
+              <Animated.View {...viewerTouchHandlers} style={[styles.wallsPhotoViewerImageFrame, viewerImageAnimatedStyle]}>
                 <Image
                   accessibilityIgnoresInvertColors
                   resizeMode="contain"
                   source={{ uri: viewerPhoto.imageUri }}
                   style={styles.wallsPhotoViewerImage}
                 />
-              </View>
+              </Animated.View>
               <View style={styles.wallsPhotoViewerBar}>
                 <View style={styles.wallsPhotoViewerMeta}>
                   <Text numberOfLines={1} style={styles.wallsPhotoViewerMetaText}>
@@ -13502,6 +13941,7 @@ const MINI_GAMES = [
     badgeLabel: 'Klassiker',
     badgeTone: 'blue',
     hint: 'Hvem holder masken bedst, når løgnene flyver?',
+    comingSoon: true,
   },
   {
     id: 'most-likely',
@@ -13509,6 +13949,7 @@ const MINI_GAMES = [
     badgeLabel: 'En gammel kending',
     badgeTone: 'red',
     hint: 'Hvem har størst chance for at..',
+    comingSoon: true,
   },
   {
     id: 'fake-news',
@@ -13516,6 +13957,7 @@ const MINI_GAMES = [
     badgeLabel: 'Overraskelse',
     badgeTone: 'blue',
     hint: 'Kan I finde ud af, hvad der er sandt eller fup?',
+    comingSoon: true,
   },
 ];
 
@@ -13538,17 +13980,20 @@ function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
       <View style={styles.miniGamesGameList}>
         {MINI_GAMES.map((game) => {
           const isBottle = game.id === 'bottle-pointer';
+          const isComingSoon = Boolean(game.comingSoon);
 
           return (
             <Pressable
+              accessibilityState={{ disabled: isComingSoon }}
               key={game.id}
-              onPress={() => onOpenGame?.(game.id)}
+              onPress={isComingSoon ? undefined : () => onOpenGame?.(game.id)}
               style={({ pressed }) => [
                 styles.panel,
                 styles.miniGamesCardPanel,
                 styles.miniGamesCardRow,
-                { transform: [{ scale: pressed ? 0.99 : 1 }] },
-                pressed ? styles.miniGamesCardPressed : null,
+                isComingSoon ? styles.miniGamesCardPanelLocked : null,
+                { transform: [{ scale: pressed && !isComingSoon ? 0.99 : 1 }] },
+                pressed && !isComingSoon ? styles.miniGamesCardPressed : null,
               ]}
             >
               <View style={styles.miniGamesCardPattern} />
@@ -13570,6 +14015,12 @@ function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
                   <View style={game.badgeTone === 'blue' ? styles.miniGamesCardBadgeBlue : styles.miniGamesCardBadgeRed}>
                     <Text style={styles.miniGamesCardBadgeText}>{game.badgeLabel}</Text>
                   </View>
+                  {isComingSoon ? (
+                    <View style={styles.miniGamesComingSoonBadge}>
+                      <Ionicons name="lock-closed" size={9} color={STUDOS_THEME.ink} />
+                      <Text style={styles.miniGamesComingSoonBadgeText}>Kommer snart</Text>
+                    </View>
+                  ) : null}
                   <Text
                     style={[styles.miniGamesCardHint, game.id === 'fake-news' ? styles.miniGamesCardHintSingleLine : null]}
                     numberOfLines={game.id === 'fake-news' ? 1 : undefined}
@@ -13593,8 +14044,13 @@ function MiniGamesScreen({ emptyText, emptyTitle, onOpenGame }) {
                   )}
                 </View>
               </View>
-              <View style={styles.miniGamesCardChevronWrap}>
-                <Ionicons name="chevron-forward-outline" size={20} color="#198047" style={styles.miniGamesCardChevronIcon} />
+              <View style={[styles.miniGamesCardChevronWrap, isComingSoon ? styles.miniGamesCardLockWrap : null]}>
+                <Ionicons
+                  name={isComingSoon ? 'lock-closed' : 'chevron-forward-outline'}
+                  size={isComingSoon ? 15 : 20}
+                  color={isComingSoon ? '#65748b' : '#198047'}
+                  style={isComingSoon ? null : styles.miniGamesCardChevronIcon}
+                />
               </View>
             </Pressable>
           );
@@ -16170,7 +16626,8 @@ function BottlePointerScreen({ onBack }) {
                 pressed ? styles.luckyTopAddButtonPressed : null,
               ]}
             >
-              <Ionicons name="add" size={24} color="#FFFFFF" />
+              <Ionicons name="people-outline" size={16} color="#FFFFFF" />
+              <Text style={styles.luckyTopAddButtonText}>Skift spillere</Text>
             </Pressable>
           </View>
         </View>
@@ -16919,13 +17376,1734 @@ function EarnCapsScreen({
   );
 }
 
-const SETTINGS_NOTIFICATION_STATUS_LABELS = {
-  granted: 'Tilladt',
-  denied: 'Afvist',
-  undetermined: 'Ikke besluttet',
-  unknown: 'Ukendt',
-  provisional: 'Foreløbig',
-};
+function AdminInfoScreen({ body, icon, title }) {
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.tabHeader}>
+        <View style={styles.adminInfoHeaderCopy}>
+          <Text style={styles.kicker}>Admin</Text>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            numberOfLines={1}
+            style={[styles.title, styles.titleSmallHeader]}
+          >
+            {title}
+          </Text>
+        </View>
+        <View style={styles.headerIcon}>
+          <Ionicons name={icon} size={28} color="#f6d36d" />
+        </View>
+      </View>
+      <Text style={styles.adminInfoBody}>{body}</Text>
+    </View>
+  );
+}
+
+function AdminClassScreen({ activeMember, onRefreshClassData, schoolClass, sessionToken }) {
+  const [activeAdminClassTab, setActiveAdminClassTab] = useState('class');
+  const [openClassSettingSection, setOpenClassSettingSection] = useState('');
+  const [classNameDraft, setClassNameDraft] = useState(schoolClass?.className || '');
+  const [classNameSaving, setClassNameSaving] = useState(false);
+  const [joinPolicyDraft, setJoinPolicyDraft] = useState(
+    schoolClass?.settings?.joinPolicy || schoolClass?.joinPolicy || 'approval',
+  );
+  const [joinPolicySaving, setJoinPolicySaving] = useState(false);
+  const [graduationDateDraft, setGraduationDateDraft] = useState(schoolClass?.graduationDate || '');
+  const [graduationDateSaving, setGraduationDateSaving] = useState(false);
+  const [graduationDatePickerOpen, setGraduationDatePickerOpen] = useState(false);
+  const [graduationDateVisibleMonth, setGraduationDateVisibleMonth] = useState(() => (
+    dateFromInput(schoolClass?.graduationDate || formatInputDate(new Date()))
+  ));
+  const [pendingApprovalModalOpen, setPendingApprovalModalOpen] = useState(false);
+  const [openMemberRoleMenuId, setOpenMemberRoleMenuId] = useState('');
+  const [memberRoleDrafts, setMemberRoleDrafts] = useState({});
+  const [memberActionId, setMemberActionId] = useState('');
+  const [memberActionType, setMemberActionType] = useState('');
+  const [classAnnouncementTitle, setClassAnnouncementTitle] = useState('Vigtig klassebesked');
+  const [classAnnouncementBody, setClassAnnouncementBody] = useState('');
+  const [classAnnouncementSending, setClassAnnouncementSending] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const canManageClass = String(activeMember?.role ?? '') === 'owner';
+  const schoolClassId = String(schoolClass?.id ?? '');
+  const normalizedClassAnnouncementTitle = classAnnouncementTitle.trim();
+  const normalizedClassAnnouncementBody = classAnnouncementBody.trim();
+  const canSendClassAnnouncement = Boolean(
+    canManageClass
+      && !classAnnouncementSending
+      && normalizedClassAnnouncementTitle
+      && normalizedClassAnnouncementBody
+  );
+  const classAnnouncementOpen = openClassSettingSection === 'announcement';
+  const normalizedClassNameDraft = classNameDraft.trim();
+  const currentClassName = String(schoolClass?.className ?? '').trim();
+  const classNameChanged = Boolean(normalizedClassNameDraft) && normalizedClassNameDraft !== currentClassName;
+  const currentJoinPolicy = schoolClass?.settings?.joinPolicy || schoolClass?.joinPolicy || 'approval';
+  const joinPolicyChanged = joinPolicyDraft !== currentJoinPolicy;
+  const normalizedGraduationDateDraft = graduationDateDraft.trim();
+  const currentGraduationDate = String(schoolClass?.graduationDate ?? '').trim();
+  const graduationDateChanged = normalizedGraduationDateDraft !== currentGraduationDate;
+  const graduationDateDisplayValue = graduationDateDraft ? formatProfileDate(graduationDateDraft) : 'Vælg dimissionsdato';
+  const graduationDateVisibleMonthLabel = new Intl.DateTimeFormat('da-DK', { month: 'long' }).format(graduationDateVisibleMonth);
+  const visibleGraduationDateDays = useMemo(
+    () => calendarDaysForMonth(graduationDateVisibleMonth),
+    [graduationDateVisibleMonth],
+  );
+
+  const manageableMembers = useMemo(() => {
+    const members = Array.isArray(schoolClass?.members) ? schoolClass.members : [];
+
+    return members
+      .filter((member) => member?.status !== 'removed')
+      .sort((left, right) => {
+        const leftPendingOrder = left?.status === 'pending' ? 0 : 1;
+        const rightPendingOrder = right?.status === 'pending' ? 0 : 1;
+
+        if (leftPendingOrder !== rightPendingOrder) {
+          return leftPendingOrder - rightPendingOrder;
+        }
+
+        const leftRoleOrder = left?.role === 'owner' ? 0 : (left?.role === 'moderator' ? 1 : 2);
+        const rightRoleOrder = right?.role === 'owner' ? 0 : (right?.role === 'moderator' ? 1 : 2);
+
+        if (leftRoleOrder !== rightRoleOrder) {
+          return leftRoleOrder - rightRoleOrder;
+        }
+
+        return String(left?.displayName ?? '').localeCompare(String(right?.displayName ?? ''), 'da');
+      });
+  }, [schoolClass?.members]);
+  const pendingApprovalMembers = useMemo(
+    () => manageableMembers.filter((member) => member?.status === 'pending'),
+    [manageableMembers],
+  );
+  const pendingApprovalCount = pendingApprovalMembers.length;
+  const showPendingApprovalNotice = currentJoinPolicy === 'approval' && pendingApprovalCount > 0;
+
+  useEffect(() => {
+    setClassNameDraft(schoolClass?.className || '');
+  }, [schoolClass?.className, schoolClass?.id]);
+
+  useEffect(() => {
+    setJoinPolicyDraft(schoolClass?.settings?.joinPolicy || schoolClass?.joinPolicy || 'approval');
+  }, [schoolClass?.id, schoolClass?.joinPolicy, schoolClass?.settings?.joinPolicy]);
+
+  useEffect(() => {
+    setGraduationDateDraft(schoolClass?.graduationDate || '');
+    setGraduationDateVisibleMonth(dateFromInput(schoolClass?.graduationDate || formatInputDate(new Date())));
+  }, [schoolClass?.graduationDate, schoolClass?.id]);
+
+  useEffect(() => {
+    if (!showPendingApprovalNotice) {
+      setPendingApprovalModalOpen(false);
+    }
+  }, [showPendingApprovalNotice]);
+
+  useEffect(() => {
+    setOpenMemberRoleMenuId('');
+    setMemberRoleDrafts({});
+  }, [schoolClass?.id]);
+
+  const selectGraduationDate = useCallback((value) => {
+    setGraduationDateDraft(value);
+    setGraduationDateVisibleMonth(dateFromInput(value));
+    setGraduationDatePickerOpen(false);
+  }, []);
+
+  const toggleGraduationDatePicker = useCallback(() => {
+    setGraduationDatePickerOpen((current) => {
+      if (!current) {
+        setGraduationDateVisibleMonth(dateFromInput(graduationDateDraft || formatInputDate(new Date())));
+      }
+
+      return !current;
+    });
+  }, [graduationDateDraft]);
+
+  const jumpGraduationDateYear = useCallback((years) => {
+    setGraduationDateVisibleMonth((current) => addCalendarYears(current, years));
+  }, []);
+
+  const refreshClass = useCallback(async () => {
+    if (onRefreshClassData) {
+      await onRefreshClassData();
+    }
+  }, [onRefreshClassData]);
+
+  const sendClassAnnouncement = useCallback(async () => {
+    const title = classAnnouncementTitle.trim();
+    const body = classAnnouncementBody.trim();
+
+    if (!canManageClass) {
+      setError('Kun klasseejere kan sende klassebeskeder.');
+      return;
+    }
+
+    if (!sessionToken || !schoolClassId) {
+      setError('Login eller klasse mangler.');
+      return;
+    }
+
+    if (!title || !body) {
+      setError('Udfyld titel og besked.');
+      return;
+    }
+
+    setClassAnnouncementSending(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const data = await apiFetch(`/classes/${encodeURIComponent(schoolClassId)}/announcements`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({ title, body }),
+      });
+
+      setNotice(data?.message || 'Klassebeskeden er sendt.');
+      setClassAnnouncementBody('');
+    } catch (apiError) {
+      setError(apiError?.message || 'Klassebeskeden kunne ikke sendes.');
+    } finally {
+      setClassAnnouncementSending(false);
+    }
+  }, [canManageClass, classAnnouncementBody, classAnnouncementTitle, schoolClassId, sessionToken]);
+
+  const updateClassName = useCallback(async () => {
+    const nextClassName = classNameDraft.trim();
+
+    if (!canManageClass) {
+      setError('Kun klasseejere kan ændre klassenavnet.');
+      return;
+    }
+
+    if (!sessionToken || !schoolClassId) {
+      setError('Login eller klasse mangler.');
+      return;
+    }
+
+    if (!nextClassName) {
+      setError('Indtast et klassenavn.');
+      return;
+    }
+
+    setClassNameSaving(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const data = await apiFetch(`/classes/${encodeURIComponent(schoolClassId)}/settings`, {
+        authToken: sessionToken,
+        method: 'PATCH',
+        body: JSON.stringify({
+          className: nextClassName,
+        }),
+      });
+
+      setClassNameDraft(data?.class?.className || nextClassName);
+      setNotice('Klassenavnet er opdateret.');
+      await refreshClass();
+    } catch (apiError) {
+      setError(apiError?.message || 'Klassenavnet kunne ikke opdateres.');
+    } finally {
+      setClassNameSaving(false);
+    }
+  }, [canManageClass, classNameDraft, refreshClass, schoolClassId, sessionToken]);
+
+  const updateJoinPolicy = useCallback(async () => {
+    if (!canManageClass) {
+      setError('Kun klasseejere kan ændre join-indstillinger.');
+      return;
+    }
+
+    if (!sessionToken || !schoolClassId) {
+      setError('Login eller klasse mangler.');
+      return;
+    }
+
+    setJoinPolicySaving(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const data = await apiFetch(`/classes/${encodeURIComponent(schoolClassId)}/settings`, {
+        authToken: sessionToken,
+        method: 'PATCH',
+        body: JSON.stringify({
+          joinPolicy: joinPolicyDraft,
+        }),
+      });
+
+      setJoinPolicyDraft(data?.class?.settings?.joinPolicy || joinPolicyDraft);
+      setNotice('Join-indstillingen er opdateret.');
+      await refreshClass();
+    } catch (apiError) {
+      setError(apiError?.message || 'Join-indstillingen kunne ikke opdateres.');
+    } finally {
+      setJoinPolicySaving(false);
+    }
+  }, [canManageClass, joinPolicyDraft, refreshClass, schoolClassId, sessionToken]);
+
+  const updateGraduationDate = useCallback(async () => {
+    const nextGraduationDate = graduationDateDraft.trim();
+
+    if (!canManageClass) {
+      setError('Kun klasseejere kan ændre dimissionsdato.');
+      return;
+    }
+
+    if (!sessionToken || !schoolClassId) {
+      setError('Login eller klasse mangler.');
+      return;
+    }
+
+    if (nextGraduationDate && !isValidProfileBirthday(nextGraduationDate)) {
+      setError('Skriv en gyldig dimissionsdato i format YYYY-MM-DD.');
+      return;
+    }
+
+    setGraduationDateSaving(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const data = await apiFetch(`/classes/${encodeURIComponent(schoolClassId)}/settings`, {
+        authToken: sessionToken,
+        method: 'PATCH',
+        body: JSON.stringify({
+          graduationDate: nextGraduationDate || null,
+        }),
+      });
+
+      setGraduationDateDraft(data?.class?.graduationDate || '');
+      setNotice('Dimissionsdatoen er opdateret.');
+      await refreshClass();
+    } catch (apiError) {
+      setError(apiError?.message || 'Dimissionsdatoen kunne ikke opdateres.');
+    } finally {
+      setGraduationDateSaving(false);
+    }
+  }, [canManageClass, graduationDateDraft, refreshClass, schoolClassId, sessionToken]);
+
+  const updateMemberAccess = useCallback(async (member, updates, actionType) => {
+    const memberId = String(member?.id ?? '');
+
+    if (!canManageClass) {
+      setError('Kun klasseejere kan administrere medlemmer.');
+      return;
+    }
+
+    if (!sessionToken || !schoolClassId || !memberId || memberActionId) {
+      return;
+    }
+
+    setMemberActionId(memberId);
+    setMemberActionType(actionType);
+    setError('');
+    setNotice('');
+
+    try {
+      await apiFetch(`/classes/${encodeURIComponent(schoolClassId)}/members/${encodeURIComponent(memberId)}/access`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify(updates),
+      });
+      setNotice(
+        actionType === 'remove'
+          ? 'Medlemmet er fjernet fra klassen.'
+          : actionType === 'approve'
+            ? 'Anmodningen er godkendt.'
+            : 'Rollen er opdateret.'
+      );
+      await refreshClass();
+      if (String(actionType ?? '').startsWith('role:')) {
+        setOpenMemberRoleMenuId('');
+        setMemberRoleDrafts((current) => {
+          const next = { ...current };
+          delete next[memberId];
+          return next;
+        });
+      }
+    } catch (apiError) {
+      setError(apiError?.message || 'Medlemmet kunne ikke opdateres.');
+    } finally {
+      setMemberActionId('');
+      setMemberActionType('');
+    }
+  }, [canManageClass, memberActionId, refreshClass, schoolClassId, sessionToken]);
+
+  const confirmRemoveMember = useCallback((member) => {
+    const displayName = member?.displayName || 'medlemmet';
+    const pending = member?.status === 'pending';
+
+    Alert.alert(
+      pending ? 'Afvis anmodning?' : 'Fjern medlem?',
+      pending ? `${displayName} får ikke adgang til klassen.` : `${displayName} mister adgang til klassen.`,
+      [
+        { text: 'Annuller', style: 'cancel' },
+        {
+          text: pending ? 'Afvis' : 'Fjern',
+          style: 'destructive',
+          onPress: () => updateMemberAccess(member, { status: 'removed' }, 'remove'),
+        },
+      ],
+    );
+  }, [updateMemberAccess]);
+
+  const toggleMemberRoleMenu = useCallback((member) => {
+    const memberId = String(member?.id ?? '');
+
+    if (!memberId) {
+      return;
+    }
+
+    setMemberRoleDrafts((current) => (
+      current[memberId]
+        ? current
+        : { ...current, [memberId]: member?.role || 'student' }
+    ));
+    setOpenMemberRoleMenuId((current) => (current === memberId ? '' : memberId));
+  }, []);
+
+  const selectMemberRoleDraft = useCallback((memberId, roleId) => {
+    setMemberRoleDrafts((current) => ({
+      ...current,
+      [memberId]: roleId,
+    }));
+  }, []);
+
+  const confirmRoleChange = useCallback((member, role) => {
+    if (role.id !== 'owner') {
+      updateMemberAccess(member, { role: role.id }, `role:${role.id}`);
+      return;
+    }
+
+    const displayName = member?.displayName || 'medlemmet';
+
+    Alert.alert(
+      'Overdrag klasseejer?',
+      `${displayName} bliver ny klasseejer. Du mister selv klasseejer-rollen og bliver moderator.`,
+      [
+        { text: 'Annuller', style: 'cancel' },
+        {
+          text: 'Overdrag',
+          style: 'destructive',
+          onPress: () => updateMemberAccess(member, { role: role.id }, `role:${role.id}`),
+        },
+      ],
+    );
+  }, [updateMemberAccess]);
+
+  const saveMemberRoleDraft = useCallback((member) => {
+    const memberId = String(member?.id ?? '');
+    const currentRoleId = member?.role || 'student';
+    const selectedRoleId = memberRoleDrafts[memberId] || currentRoleId;
+    const selectedRole = CLASS_MEMBER_ROLE_OPTIONS.find((role) => role.id === selectedRoleId);
+
+    if (!selectedRole || selectedRole.id === currentRoleId) {
+      return;
+    }
+
+    confirmRoleChange(member, selectedRole);
+  }, [confirmRoleChange, memberRoleDrafts]);
+
+  const renderClassSettingPanel = ({ children, id, title }) => {
+    const open = openClassSettingSection === id;
+
+    return (
+      <View style={styles.adminClassPanel}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setOpenClassSettingSection((current) => (current === id ? '' : id))}
+          style={({ pressed }) => [
+            styles.adminClassAccordionHeader,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Text numberOfLines={1} style={styles.sectionTitle}>{title}</Text>
+          <View style={styles.adminClassAccordionIcon}>
+            <Ionicons
+              name={open ? 'chevron-up' : 'chevron-forward'}
+              size={18}
+              color={STUDOS_THEME.ink}
+            />
+          </View>
+        </Pressable>
+        {open ? (
+          <View style={styles.adminClassAccordionBody}>
+            {children}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
+  return (
+    <>
+      <View style={styles.adminClassScreen}>
+      <View style={styles.tabHeader}>
+        <View style={styles.adminInfoHeaderCopy}>
+          <Text style={styles.kicker}>Admin</Text>
+          <View style={styles.titleWithLogoRow}>
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+              numberOfLines={1}
+              style={[styles.title, styles.titleSmallHeader, styles.adminClassHeaderTitle]}
+            >
+              Klasseprofil
+            </Text>
+            <ClassProfileTitleGraphic />
+          </View>
+        </View>
+      </View>
+
+      <Text style={[styles.adminInfoBody, styles.adminClassInfoBody]}>
+        Tildel roller og hold klassens adgang opdateret.
+      </Text>
+
+      {!canManageClass ? (
+        <View style={styles.adminClassPermissionNotice}>
+          <Ionicons name="lock-closed-outline" size={17} color="#8A650A" />
+          <Text style={styles.adminClassPermissionText}>
+            Kun klasseejere kan ændre roller og fjerne medlemmer.
+          </Text>
+        </View>
+      ) : null}
+
+      {showPendingApprovalNotice ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setPendingApprovalModalOpen(true)}
+          style={({ pressed }) => [
+            styles.adminClassApprovalNotice,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <View style={styles.adminClassApprovalIcon}>
+            <Ionicons name="person-add-outline" size={18} color="#8A650A" />
+          </View>
+          <View style={styles.adminClassApprovalCopy}>
+            <Text style={styles.adminClassApprovalTitle}>
+              {pendingApprovalCount === 1 ? 'Godkend en anmodning' : 'Godkend anmodninger'}
+            </Text>
+            <Text style={styles.adminClassApprovalText}>
+              {pendingApprovalCount} {pendingApprovalCount === 1 ? 'elev venter' : 'elever venter'} på adgang til klassen.
+            </Text>
+          </View>
+          <View style={styles.adminClassApprovalCount}>
+            <Text style={styles.adminClassApprovalCountText}>{pendingApprovalCount}</Text>
+          </View>
+        </Pressable>
+      ) : null}
+
+      <View style={styles.adminClassTabs}>
+        {[
+          { id: 'class', label: 'Klasse' },
+          { id: 'manage', label: 'Medlemmer' },
+        ].map((tab) => {
+          const active = activeAdminClassTab === tab.id;
+
+          return (
+            <Pressable
+              accessibilityRole="button"
+              key={tab.id}
+              onPress={() => setActiveAdminClassTab(tab.id)}
+              style={({ pressed }) => [
+                styles.adminClassTab,
+                active ? styles.adminClassTabActive : null,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.adminClassTabText,
+                active ? styles.adminClassTabTextActive : null,
+              ]}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {notice ? <Text style={styles.successText}>{notice}</Text> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+      {activeAdminClassTab === 'class' ? (
+        <ScrollView
+          contentContainerStyle={styles.adminClassBodyScrollContent}
+          showsVerticalScrollIndicator={false}
+          style={styles.adminClassBodyScroll}
+        >
+          <View style={styles.adminClassAnnouncementPanel}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setOpenClassSettingSection((current) => (current === 'announcement' ? '' : 'announcement'))}
+              style={({ pressed }) => [
+                styles.adminClassAnnouncementAccordionHeader,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.adminClassAnnouncementHeader}>
+                <View style={styles.adminClassAnnouncementIcon}>
+                  <Ionicons name="megaphone-outline" size={19} color="#8A650A" />
+                </View>
+                <View style={styles.adminClassAnnouncementCopy}>
+                  <Text style={styles.sectionTitle}>Send klassebesked</Text>
+                  <Text style={styles.adminClassAnnouncementText}>
+                    Send en kort notifikation til aktive medlemmer.
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.adminClassAccordionIcon, styles.adminClassAnnouncementChevron]}>
+                <Ionicons
+                  name={classAnnouncementOpen ? 'chevron-up' : 'chevron-forward'}
+                  size={18}
+                  color={STUDOS_THEME.ink}
+                />
+              </View>
+            </Pressable>
+
+            {classAnnouncementOpen ? (
+              <View style={[styles.adminClassAccordionBody, styles.adminClassAnnouncementBody]}>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Titel</Text>
+                  <TextInput
+                    editable={canManageClass && !classAnnouncementSending}
+                    maxLength={70}
+                    onChangeText={setClassAnnouncementTitle}
+                    placeholder="Vigtig klassebesked"
+                    placeholderTextColor="#8b93a1"
+                    returnKeyType="next"
+                    style={[
+                      styles.input,
+                      (!canManageClass || classAnnouncementSending) ? styles.adminClassControlDisabled : null,
+                    ]}
+                    value={classAnnouncementTitle}
+                  />
+                </View>
+
+                <View style={styles.field}>
+                  <Text style={styles.label}>Besked</Text>
+                  <TextInput
+                    editable={canManageClass && !classAnnouncementSending}
+                    maxLength={180}
+                    multiline
+                    onChangeText={setClassAnnouncementBody}
+                    placeholder="Skriv beskeden til klassen..."
+                    placeholderTextColor="#8b93a1"
+                    style={[
+                      styles.input,
+                      styles.adminClassAnnouncementBodyInput,
+                      (!canManageClass || classAnnouncementSending) ? styles.adminClassControlDisabled : null,
+                    ]}
+                    textAlignVertical="top"
+                    value={classAnnouncementBody}
+                  />
+                  <Text style={styles.adminClassAnnouncementCounter}>{classAnnouncementBody.length}/180</Text>
+                </View>
+
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canSendClassAnnouncement}
+                  onPress={sendClassAnnouncement}
+                  style={({ pressed }) => [
+                    styles.adminClassSaveAction,
+                    !canSendClassAnnouncement ? styles.adminClassControlDisabled : null,
+                    pressed && canSendClassAnnouncement ? styles.primaryButtonPressed : null,
+                  ]}
+                >
+                  {classAnnouncementSending ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="send-outline" size={17} color="#FFFFFF" />
+                      <Text style={styles.adminClassSaveActionText}>Send klassebesked</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+
+          {renderClassSettingPanel({
+            id: 'className',
+            title: 'Ændre klassenavn',
+            children: (
+              <>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Klassenavn</Text>
+                  <TextInput
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    editable={canManageClass && !classNameSaving}
+                    maxLength={100}
+                    onChangeText={setClassNameDraft}
+                    placeholder="Fx 3.B"
+                    placeholderTextColor="#8b93a1"
+                    returnKeyType="done"
+                    style={[styles.input, (!canManageClass || classNameSaving) ? styles.adminClassControlDisabled : null]}
+                    value={classNameDraft}
+                  />
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canManageClass || classNameSaving || !classNameChanged}
+                  onPress={updateClassName}
+                  style={({ pressed }) => [
+                    styles.adminClassSaveAction,
+                    (!canManageClass || classNameSaving || !classNameChanged) ? styles.adminClassControlDisabled : null,
+                    pressed && canManageClass && !classNameSaving && classNameChanged ? styles.primaryButtonPressed : null,
+                  ]}
+                >
+                  {classNameSaving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="save-outline" size={17} color="#FFFFFF" />
+                      <Text style={styles.adminClassSaveActionText}>Gem klassenavn</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            ),
+          })}
+
+          {renderClassSettingPanel({
+            id: 'join',
+            title: 'Join',
+            children: (
+              <>
+                <View style={styles.adminClassJoinOptions}>
+                  {CLASS_JOIN_POLICY_OPTIONS.map((option) => {
+                    const active = joinPolicyDraft === option.id;
+                    const disabled = !canManageClass || joinPolicySaving;
+
+                    return (
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={disabled}
+                        key={option.id}
+                        onPress={() => setJoinPolicyDraft(option.id)}
+                        style={({ pressed }) => [
+                          styles.adminClassJoinOption,
+                          active ? styles.adminClassJoinOptionActive : null,
+                          disabled ? styles.adminClassControlDisabled : null,
+                          pressed && !disabled ? styles.footerItemPressed : null,
+                        ]}
+                      >
+                        <View style={[
+                          styles.adminClassJoinRadio,
+                          active ? styles.adminClassJoinRadioActive : null,
+                        ]}>
+                          {active ? <View style={styles.adminClassJoinRadioDot} /> : null}
+                        </View>
+                        <View style={styles.adminClassJoinCopy}>
+                          <Text style={[
+                            styles.adminClassJoinTitle,
+                            active ? styles.adminClassJoinTitleActive : null,
+                          ]}>
+                            {option.label}
+                          </Text>
+                          <Text style={styles.adminClassJoinDescription}>
+                            {option.description}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canManageClass || joinPolicySaving || !joinPolicyChanged}
+                  onPress={updateJoinPolicy}
+                  style={({ pressed }) => [
+                    styles.adminClassSaveAction,
+                    (!canManageClass || joinPolicySaving || !joinPolicyChanged) ? styles.adminClassControlDisabled : null,
+                    pressed && canManageClass && !joinPolicySaving && joinPolicyChanged ? styles.primaryButtonPressed : null,
+                  ]}
+                >
+                  {joinPolicySaving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="save-outline" size={17} color="#FFFFFF" />
+                      <Text style={styles.adminClassSaveActionText}>Gem join</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            ),
+          })}
+
+          {renderClassSettingPanel({
+            id: 'graduationDate',
+            title: 'Dimissionsdato',
+            children: (
+              <>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Dato</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canManageClass || graduationDateSaving}
+                    onPress={toggleGraduationDatePicker}
+                    style={({ pressed }) => [
+                      styles.calendarDateSelect,
+                      (!canManageClass || graduationDateSaving) ? styles.adminClassControlDisabled : null,
+                      pressed && canManageClass && !graduationDateSaving ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <View style={styles.calendarDateSelectValue}>
+                      <View style={styles.calendarDateSelectIcon}>
+                        <Ionicons name="calendar" size={16} color={STUDOS_THEME.ink} />
+                      </View>
+                      <Text numberOfLines={1} style={styles.calendarDateSelectText}>
+                        {graduationDateDisplayValue}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={graduationDatePickerOpen ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color="#65748b"
+                    />
+                  </Pressable>
+                  {graduationDatePickerOpen ? (
+                    <View style={styles.calendarPickerBlock}>
+                      <View style={styles.calendarPickerHeader}>
+                        <View style={styles.calendarYearControls}>
+                          <Pressable
+                            accessibilityLabel="Forrige år"
+                            accessibilityRole="button"
+                            onPress={() => jumpGraduationDateYear(-1)}
+                            style={({ pressed }) => [
+                              styles.calendarMonthButton,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                          </Pressable>
+                          <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                            {graduationDateVisibleMonth.getFullYear()}
+                          </Text>
+                          <Pressable
+                            accessibilityLabel="Næste år"
+                            accessibilityRole="button"
+                            onPress={() => jumpGraduationDateYear(1)}
+                            style={({ pressed }) => [
+                              styles.calendarMonthButton,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                          </Pressable>
+                        </View>
+                        <View style={styles.calendarMonthControls}>
+                          <Pressable
+                            accessibilityLabel="Forrige måned"
+                            accessibilityRole="button"
+                            onPress={() => setGraduationDateVisibleMonth((current) => addCalendarMonths(current, -1))}
+                            style={({ pressed }) => [
+                              styles.calendarMonthButton,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                          </Pressable>
+                          <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                            {graduationDateVisibleMonthLabel}
+                          </Text>
+                          <Pressable
+                            accessibilityLabel="Næste måned"
+                            accessibilityRole="button"
+                            onPress={() => setGraduationDateVisibleMonth((current) => addCalendarMonths(current, 1))}
+                            style={({ pressed }) => [
+                              styles.calendarMonthButton,
+                              pressed ? styles.footerItemPressed : null,
+                            ]}
+                          >
+                            <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                          </Pressable>
+                        </View>
+                      </View>
+                      <View style={styles.calendarWeekdayRow}>
+                        {CALENDAR_WEEKDAYS.map((weekday) => (
+                          <Text key={weekday} style={styles.calendarWeekdayText}>{weekday}</Text>
+                        ))}
+                      </View>
+                      <View style={styles.calendarDayGrid}>
+                        {visibleGraduationDateDays.map((day) => {
+                          if (day.empty) {
+                            return <View key={day.id} style={styles.calendarDayCell} />;
+                          }
+
+                          const active = graduationDateDraft === day.value;
+
+                          return (
+                            <View key={day.id} style={styles.calendarDayCell}>
+                              <Pressable
+                                accessibilityRole="button"
+                                onPress={() => selectGraduationDate(day.value)}
+                                style={({ pressed }) => [
+                                  styles.calendarDayButton,
+                                  active ? styles.calendarDayButtonActive : null,
+                                  pressed ? styles.footerItemPressed : null,
+                                ]}
+                              >
+                                <Text style={[
+                                  styles.calendarDayText,
+                                  active ? styles.calendarDayTextActive : null,
+                                ]}>
+                                  {day.day}
+                                </Text>
+                              </Pressable>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canManageClass || graduationDateSaving || !graduationDateChanged}
+                  onPress={updateGraduationDate}
+                  style={({ pressed }) => [
+                    styles.adminClassSaveAction,
+                    (!canManageClass || graduationDateSaving || !graduationDateChanged) ? styles.adminClassControlDisabled : null,
+                    pressed && canManageClass && !graduationDateSaving && graduationDateChanged ? styles.primaryButtonPressed : null,
+                  ]}
+                >
+                  {graduationDateSaving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="save-outline" size={17} color="#FFFFFF" />
+                      <Text style={styles.adminClassSaveActionText}>Gem dato</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            ),
+          })}
+        </ScrollView>
+      ) : (
+        <View style={[styles.adminClassPanel, styles.adminClassMembersPanel]}>
+          <ScrollView
+            contentContainerStyle={styles.adminClassMembersList}
+            showsVerticalScrollIndicator={false}
+            style={styles.adminClassMembersScroll}
+          >
+            {manageableMembers.length ? (
+              manageableMembers.map((member) => {
+              const memberId = String(member?.id ?? '');
+              const isSelf = memberId && memberId === String(activeMember?.id ?? '');
+              const isPendingMember = member?.status === 'pending';
+              const actionLoading = memberActionId === memberId;
+              const approveLoading = actionLoading && memberActionType === 'approve';
+              const removeLoading = actionLoading && memberActionType === 'remove';
+              const currentRoleId = member?.role || 'student';
+              const currentRole = CLASS_MEMBER_ROLE_OPTIONS.find((role) => role.id === currentRoleId)
+                || CLASS_MEMBER_ROLE_OPTIONS[0];
+              const selectedRoleId = memberRoleDrafts[memberId] || currentRoleId;
+              const roleMenuOpen = openMemberRoleMenuId === memberId;
+              const roleChanged = selectedRoleId !== currentRoleId;
+              const roleSaving = actionLoading && memberActionType === `role:${selectedRoleId}`;
+
+              return (
+                <View key={memberId || member.email} style={styles.adminClassMemberCard}>
+                  <View style={styles.adminClassMemberHeader}>
+                    <Avatar profile={member} variant="smallCircle" />
+                    <View style={styles.adminClassMemberCopy}>
+                      <View style={styles.adminClassMemberNameRow}>
+                        <Text numberOfLines={1} style={[styles.adminClassMemberName, styles.adminClassMemberNameInline]}>
+                          {member?.displayName || 'Ukendt medlem'}
+                        </Text>
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={!canManageClass || actionLoading || !memberId}
+                          onPress={() => toggleMemberRoleMenu(member)}
+                          style={({ pressed }) => [
+                            styles.adminClassRoleSelectButton,
+                            currentRoleId === 'owner' ? styles.adminClassRoleSelectOwner : null,
+                            currentRoleId === 'moderator' ? styles.adminClassRoleSelectModerator : null,
+                            currentRoleId === 'student' ? styles.adminClassRoleSelectStudent : null,
+                            (actionLoading || !memberId) ? styles.adminClassControlDisabled : null,
+                            pressed && canManageClass && !actionLoading && memberId ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.82}
+                            numberOfLines={1}
+                            style={[
+                              styles.adminClassRoleSelectText,
+                              currentRoleId === 'owner' ? styles.adminClassRoleSelectTextOwner : null,
+                            ]}
+                          >
+                            {currentRole.label}
+                          </Text>
+                          <Ionicons
+                            name={roleMenuOpen ? 'chevron-up' : 'chevron-down'}
+                            size={14}
+                            color={currentRoleId === 'owner' ? '#8A650A' : STUDOS_THEME.ink}
+                          />
+                        </Pressable>
+                      </View>
+                      <Text numberOfLines={1} style={styles.adminClassMemberMeta}>
+                        {[member?.email, PROFILE_STATUS_LABELS[member?.status] || member?.status]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {roleMenuOpen ? (
+                    <View style={styles.adminClassRoleDropdown}>
+                      <View style={styles.adminClassRoleDropdownOptions}>
+                        {CLASS_MEMBER_ROLE_OPTIONS.map((role) => {
+                          const selected = selectedRoleId === role.id;
+                          const disabled = !canManageClass || actionLoading;
+
+                          return (
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={disabled}
+                              key={role.id}
+                              onPress={() => selectMemberRoleDraft(memberId, role.id)}
+                              style={({ pressed }) => [
+                                styles.adminClassRoleDropdownOption,
+                                selected ? styles.adminClassRoleDropdownOptionSelected : null,
+                                disabled ? styles.adminClassControlDisabled : null,
+                                pressed && !disabled ? styles.footerItemPressed : null,
+                              ]}
+                            >
+                              <Text style={[
+                                styles.adminClassRoleDropdownOptionText,
+                                selected ? styles.adminClassRoleDropdownOptionTextSelected : null,
+                              ]}>
+                                {role.label}
+                              </Text>
+                              {selected ? (
+                                <Ionicons name="checkmark-circle" size={17} color={STUDOS_THEME.green} />
+                              ) : null}
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!canManageClass || actionLoading || !roleChanged}
+                        onPress={() => saveMemberRoleDraft(member)}
+                        style={({ pressed }) => [
+                          styles.adminClassRoleSaveButton,
+                          (!canManageClass || actionLoading || !roleChanged) ? styles.adminClassControlDisabled : null,
+                          pressed && canManageClass && !actionLoading && roleChanged ? styles.primaryButtonPressed : null,
+                        ]}
+                      >
+                        {roleSaving ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <>
+                            <Ionicons name="save-outline" size={16} color="#FFFFFF" />
+                            <Text style={styles.adminClassRoleSaveButtonText}>Gem rolle</Text>
+                          </>
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : null}
+
+                  {isPendingMember ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={!canManageClass || actionLoading}
+                      onPress={() => updateMemberAccess(member, { status: 'active' }, 'approve')}
+                      style={({ pressed }) => [
+                        styles.adminClassApproveButton,
+                        (!canManageClass || actionLoading) ? styles.adminClassControlDisabled : null,
+                        pressed && canManageClass && !actionLoading ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      {approveLoading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <>
+                          <Ionicons name="checkmark-circle-outline" size={16} color="#FFFFFF" />
+                          <Text style={styles.adminClassApproveButtonText}>Godkend anmodning</Text>
+                        </>
+                      )}
+                    </Pressable>
+                  ) : null}
+
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canManageClass || actionLoading || isSelf}
+                    onPress={() => confirmRemoveMember(member)}
+                    style={({ pressed }) => [
+                      styles.adminClassRemoveButton,
+                      (!canManageClass || actionLoading || isSelf) ? styles.adminClassControlDisabled : null,
+                      pressed && canManageClass && !actionLoading && !isSelf ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    {removeLoading ? (
+                      <ActivityIndicator color={STUDOS_THEME.red} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons name="person-remove-outline" size={16} color={STUDOS_THEME.red} />
+                        <Text style={styles.adminClassRemoveButtonText}>
+                          {isSelf ? 'Din egen profil' : isPendingMember ? 'Afvis anmodning' : 'Fjern medlem'}
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+              );
+              })
+            ) : (
+              <Text style={styles.emptyText}>Der er ingen medlemmer at administrere.</Text>
+            )}
+          </ScrollView>
+        </View>
+      )}
+      </View>
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setPendingApprovalModalOpen(false)}
+        transparent
+        visible={pendingApprovalModalOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk godkendelser"
+            accessibilityRole="button"
+            onPress={() => setPendingApprovalModalOpen(false)}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.adminClassApprovalModalPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.adminClassApprovalModalTitleWrap}>
+                <Text style={styles.chatModalKicker}>Join</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>
+                  Godkend anmodninger
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setPendingApprovalModalOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={styles.adminClassApprovalModalList}
+              showsVerticalScrollIndicator={false}
+              style={styles.adminClassApprovalModalScroll}
+            >
+              {pendingApprovalMembers.length ? (
+                pendingApprovalMembers.map((member) => {
+                  const memberId = String(member?.id ?? '');
+                  const actionLoading = memberActionId === memberId;
+                  const approveLoading = actionLoading && memberActionType === 'approve';
+                  const removeLoading = actionLoading && memberActionType === 'remove';
+
+                  return (
+                    <View key={memberId || member.email} style={styles.adminClassApprovalModalCard}>
+                      <View style={styles.adminClassMemberHeader}>
+                        <Avatar profile={member} variant="smallCircle" />
+                        <View style={styles.adminClassMemberCopy}>
+                          <Text numberOfLines={1} style={styles.adminClassMemberName}>
+                            {member?.displayName || 'Ukendt medlem'}
+                          </Text>
+                          <Text numberOfLines={1} style={styles.adminClassMemberMeta}>
+                            {[member?.email, PROFILE_STATUS_LABELS[member?.status] || member?.status]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.adminClassApprovalModalActions}>
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={!canManageClass || actionLoading}
+                          onPress={() => updateMemberAccess(member, { status: 'active' }, 'approve')}
+                          style={({ pressed }) => [
+                            styles.adminClassApproveButton,
+                            styles.adminClassApprovalModalAction,
+                            (!canManageClass || actionLoading) ? styles.adminClassControlDisabled : null,
+                            pressed && canManageClass && !actionLoading ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          {approveLoading ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                          ) : (
+                            <>
+                              <Ionicons name="checkmark-circle-outline" size={16} color="#FFFFFF" />
+                              <Text style={styles.adminClassApproveButtonText}>Godkend</Text>
+                            </>
+                          )}
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={!canManageClass || actionLoading}
+                          onPress={() => confirmRemoveMember(member)}
+                          style={({ pressed }) => [
+                            styles.adminClassRemoveButton,
+                            styles.adminClassApprovalModalAction,
+                            (!canManageClass || actionLoading) ? styles.adminClassControlDisabled : null,
+                            pressed && canManageClass && !actionLoading ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          {removeLoading ? (
+                            <ActivityIndicator color={STUDOS_THEME.red} size="small" />
+                          ) : (
+                            <>
+                              <Ionicons name="close-circle-outline" size={16} color={STUDOS_THEME.red} />
+                              <Text style={styles.adminClassRemoveButtonText}>Afvis</Text>
+                            </>
+                          )}
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                })
+              ) : (
+                <Text style={styles.emptyText}>Ingen anmodninger lige nu.</Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+function AdminReportsScreen({ onPendingCountChange, sessionToken }) {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [actionReportId, setActionReportId] = useState('');
+  const [actionReportType, setActionReportType] = useState('');
+  const [previewReport, setPreviewReport] = useState(null);
+  const [activeReportFilter, setActiveReportFilter] = useState('pending');
+
+  const loadReports = useCallback(async ({ refreshing: shouldRefresh = false, silent = false } = {}) => {
+    if (!sessionToken) {
+      setError('Login mangler.');
+      setLoading(false);
+      onPendingCountChange?.(0);
+      return;
+    }
+
+    if (shouldRefresh) {
+      setRefreshing(true);
+    } else if (!silent) {
+      setLoading(true);
+    }
+
+    setError('');
+
+    try {
+      const data = await apiFetch('/admin/reports', { authToken: sessionToken });
+      const nextReports = Array.isArray(data?.reports) ? data.reports : [];
+      setReports(nextReports);
+      onPendingCountChange?.(nextReports.filter((report) => report?.status === 'pending').length);
+    } catch (apiError) {
+      setError(
+        apiError?.status === 403
+          ? 'Kun klasseejer og moderator kan se rapporteringer.'
+          : apiError?.message || 'Rapporteringer kunne ikke hentes.'
+      );
+    } finally {
+      if (shouldRefresh) {
+        setRefreshing(false);
+      } else if (!silent) {
+        setLoading(false);
+      }
+    }
+  }, [onPendingCountChange, sessionToken]);
+
+  useEffect(() => {
+    loadReports();
+  }, [loadReports]);
+
+  const summary = useMemo(() => {
+    const pending = reports.filter((report) => report?.status === 'pending' && !report?.isExcluded).length;
+    const handled = reports.filter((report) => report?.status !== 'pending' && !report?.isExcluded).length;
+    const excluded = reports.filter((report) => report?.isExcluded).length;
+
+    return { pending, handled, excluded };
+  }, [reports]);
+
+  const filteredReports = useMemo(() => reports.filter((report) => {
+    if (activeReportFilter === 'pending') {
+      return report?.status === 'pending' && !report?.isExcluded;
+    }
+
+    if (activeReportFilter === 'handled') {
+      return report?.status !== 'pending' && !report?.isExcluded;
+    }
+
+    if (activeReportFilter === 'excluded') {
+      return Boolean(report?.isExcluded);
+    }
+
+    return true;
+  }), [activeReportFilter, reports]);
+
+  const updateReportInList = useCallback((updatedReport) => {
+    if (!updatedReport?.id) {
+      return;
+    }
+
+    setReports((current) => current.map((report) => (
+      String(report.id) === String(updatedReport.id) ? updatedReport : report
+    )));
+    setPreviewReport((current) => (
+      current && String(current.id) === String(updatedReport.id) ? updatedReport : current
+    ));
+  }, []);
+
+  const runReportAction = useCallback(async (report, action) => {
+    if (!report?.id || actionReportId) {
+      return;
+    }
+
+    setActionReportId(report.id);
+    setActionReportType(action);
+    setError('');
+    setNotice('');
+
+    try {
+      const data = await apiFetch(`/admin/reports/${encodeURIComponent(report.id)}/${action}`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+
+      if (data?.report) {
+        updateReportInList(data.report);
+      }
+
+      setNotice(action === 'strike' ? 'Strike er sendt.' : 'Rapporteringen er afvist.');
+      await loadReports({ silent: true });
+    } catch (apiError) {
+      setError(apiError?.message || 'Handlingen kunne ikke gennemføres.');
+    } finally {
+      setActionReportId('');
+      setActionReportType('');
+    }
+  }, [actionReportId, loadReports, sessionToken, updateReportInList]);
+
+  const confirmStrike = useCallback((report) => {
+    const reportedName = report?.reportedMember?.displayName || 'personen';
+
+    Alert.alert(
+      'Send strike?',
+      `${reportedName} får en strike. Ved 3 strikes bliver personen udelukket fra klassen.`,
+      [
+        { text: 'Annuller', style: 'cancel' },
+        {
+          text: 'Send strike',
+          style: 'destructive',
+          onPress: () => runReportAction(report, 'strike'),
+        },
+      ],
+    );
+  }, [runReportAction]);
+
+  const confirmDismiss = useCallback((report) => {
+    Alert.alert(
+      'Afvis rapportering?',
+      'Rapporteringen markeres som behandlet uden strike.',
+      [
+        { text: 'Annuller', style: 'cancel' },
+        {
+          text: 'Afvis',
+          onPress: () => runReportAction(report, 'dismiss'),
+        },
+      ],
+    );
+  }, [runReportAction]);
+
+  const previewTarget = previewReport?.targetPreview;
+  const previewSender = previewTarget?.sender || previewReport?.reportedMember;
+  const previewReporter = previewReport?.reporter;
+  const previewReportedMember = previewReport?.reportedMember;
+  const previewStatus = previewReport?.status || 'pending';
+  const previewStatusLabel = ADMIN_REPORT_STATUS_LABELS[previewStatus] || 'Håndteret';
+  const previewIsPending = previewStatus === 'pending';
+  const previewTargetIcon = ADMIN_REPORT_TARGET_ICONS[previewReport?.targetType] || 'flag-outline';
+  const rawPreviewStrikeLimit = Number(previewReport?.strikeLimit || 3);
+  const previewStrikeLimit = Number.isFinite(rawPreviewStrikeLimit)
+    ? Math.max(rawPreviewStrikeLimit, 1)
+    : 3;
+  const previewStrikeCount = Math.min(Number(previewReport?.strikeCount || 0), previewStrikeLimit);
+  const previewIsLoadingAction = Boolean(
+    previewReport?.id && String(actionReportId) === String(previewReport.id)
+  );
+  const previewIsDismissLoading = previewIsLoadingAction && actionReportType === 'dismiss';
+  const previewIsStrikeLoading = previewIsLoadingAction && actionReportType === 'strike';
+  const previewCanStrike = Boolean(previewReport?.canStrike) && previewIsPending && !actionReportId;
+
+  return (
+    <>
+    <ScrollView
+      contentContainerStyle={styles.flowStack}
+      refreshControl={studosRefreshControl({
+        onRefresh: () => loadReports({ refreshing: true }),
+        refreshing,
+      })}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.tabHeader}>
+        <View style={styles.adminInfoHeaderCopy}>
+          <Text style={styles.kicker}>Admin</Text>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            numberOfLines={1}
+            style={[styles.title, styles.titleSmallHeader]}
+          >
+            Rapporteringer
+          </Text>
+        </View>
+        <View style={styles.headerIcon}>
+          <Ionicons name="flag" size={28} color="#f6d36d" />
+        </View>
+      </View>
+
+      <Text style={styles.adminInfoBody}>Anmeldte hændelser i klassen</Text>
+
+      <View style={styles.adminReportSummaryGrid}>
+        {ADMIN_REPORT_FILTERS.map((filter) => {
+          const isActive = activeReportFilter === filter.id;
+
+          return (
+            <Pressable
+              key={filter.id}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              onPress={() => setActiveReportFilter(filter.id)}
+              style={({ pressed }) => [
+                styles.adminReportSummaryTile,
+                isActive ? styles.adminReportSummaryTileActive : null,
+                pressed ? styles.adminReportSummaryTilePressed : null,
+              ]}
+            >
+              <Text style={[
+                styles.adminReportSummaryValue,
+                isActive ? styles.adminReportSummaryValueActive : null,
+              ]}>
+                {summary[filter.countKey]}
+              </Text>
+              <Text style={[
+                styles.adminReportSummaryLabel,
+                isActive ? styles.adminReportSummaryLabelActive : null,
+              ]}>
+                {filter.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {notice ? <Text style={styles.successText}>{notice}</Text> : null}
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+      {loading && !reports.length ? (
+        <View style={styles.adminReportsLoader}>
+          <ActivityIndicator color={STUDOS_THEME.red} />
+          <Text style={styles.emptyText}>Henter rapporteringer...</Text>
+        </View>
+      ) : null}
+
+      {!loading && !reports.length ? (
+        <View style={styles.notice}>
+          <Text style={styles.noticeTitle}>Ingen rapporteringer</Text>
+          <Text style={styles.noticeText}>
+            Når elever anmelder indhold eller beskeder, kan de behandles her.
+          </Text>
+        </View>
+      ) : null}
+
+      {!loading && reports.length > 0 && !filteredReports.length ? (
+        <View style={styles.notice}>
+          <Text style={styles.noticeTitle}>Tom kategori</Text>
+          <Text style={styles.noticeText}>
+            {ADMIN_REPORT_FILTER_EMPTY_TEXT[activeReportFilter] || 'Der er ingen rapporteringer i denne kategori.'}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={styles.adminReportList}>
+        {filteredReports.map((report) => {
+          const status = report?.status || 'pending';
+          const statusLabel = ADMIN_REPORT_STATUS_LABELS[status] || 'Håndteret';
+          const targetIcon = ADMIN_REPORT_TARGET_ICONS[report?.targetType] || 'flag-outline';
+          const isPending = status === 'pending';
+          const reportedMember = report?.reportedMember;
+          const reporter = report?.reporter;
+          const targetPreview = report?.targetPreview;
+          const rawStrikeLimit = Number(report?.strikeLimit || 3);
+          const strikeLimit = Number.isFinite(rawStrikeLimit) ? Math.max(rawStrikeLimit, 1) : 3;
+          const strikeCount = Math.min(Number(report?.strikeCount || 0), strikeLimit);
+          const previewSnippet = targetPreview?.body || report?.details || report?.reason || 'Rapportering';
+          const reporterLabel = reporter?.displayName
+            ? `Anmeldt af ${reporter.displayName}`
+            : 'Anmeldt af ukendt';
+
+          return (
+            <Pressable
+              key={report.id}
+              accessibilityLabel={`Åbn rapportering om ${reportedMember?.displayName || 'ukendt person'}`}
+              accessibilityRole="button"
+              onPress={() => setPreviewReport(report)}
+              style={({ pressed }) => [
+                styles.adminReportCompactCard,
+                !isPending ? styles.adminReportCardHandled : null,
+                pressed ? styles.adminReportCompactCardPressed : null,
+              ]}
+            >
+              <View style={styles.adminReportHeaderRow}>
+                <View style={styles.adminReportTargetPill}>
+                  <Ionicons name={targetIcon} size={15} color={STUDOS_THEME.ink} />
+                  <Text numberOfLines={1} style={styles.adminReportTargetText}>
+                    {report?.targetLabel || 'Rapport'}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.adminReportStatusPill,
+                  isPending ? styles.adminReportStatusPending : styles.adminReportStatusDone,
+                  report?.isExcluded ? styles.adminReportStatusDanger : null,
+                ]}>
+                  <Text style={[
+                    styles.adminReportStatusText,
+                    isPending ? styles.adminReportStatusTextPending : null,
+                    report?.isExcluded ? styles.adminReportStatusTextDanger : null,
+                  ]}>
+                    {report?.isExcluded ? 'Udelukket' : statusLabel}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.adminReportCompactBodyRow}>
+                <Avatar profile={reportedMember} variant="smallCircle" />
+                <View style={styles.adminReportCompactCopy}>
+                  <Text numberOfLines={1} style={styles.adminReportCompactTitle}>
+                    {reportedMember?.displayName || 'Ukendt person'}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.adminReportCompactMeta}>
+                    {reporterLabel}
+                  </Text>
+                </View>
+                <View style={styles.adminReportOpenIcon}>
+                  <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                </View>
+              </View>
+
+              <Text numberOfLines={2} style={styles.adminReportCompactSnippet}>
+                {previewSnippet}
+              </Text>
+
+              <View style={styles.adminReportCompactFooter}>
+                <Text style={styles.adminReportStrikeText}>
+                  {strikeCount}/{strikeLimit} strikes
+                </Text>
+                <Text numberOfLines={1} style={styles.adminReportMeta}>
+                  {formatDateTime(report?.createdAt) || 'Dato ukendt'}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    </ScrollView>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(previewReport)}
+        onRequestClose={() => setPreviewReport(null)}
+      >
+        <View style={styles.adminReportModalOverlay}>
+          <Pressable
+            accessibilityLabel="Luk rapportdetaljer"
+            accessibilityRole="button"
+            onPress={() => setPreviewReport(null)}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.adminReportModalCard}>
+            <View style={styles.adminReportModalHeader}>
+              <View style={styles.adminReportModalTitleWrap}>
+                <Text style={styles.kicker}>Rapportering</Text>
+                <Text numberOfLines={1} style={styles.adminReportModalTitle}>
+                  {previewReportedMember?.displayName || previewReport?.targetLabel || 'Rapportering'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => setPreviewReport(null)}
+                style={({ pressed }) => [
+                  styles.adminReportModalClose,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={20} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              style={styles.adminReportModalScroll}
+              contentContainerStyle={styles.adminReportModalContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.adminReportModalStatusRow}>
+                <View style={styles.adminReportTargetPill}>
+                  <Ionicons name={previewTargetIcon} size={15} color={STUDOS_THEME.ink} />
+                  <Text numberOfLines={1} style={styles.adminReportTargetText}>
+                    {previewReport?.targetLabel || 'Rapport'}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.adminReportStatusPill,
+                  previewIsPending ? styles.adminReportStatusPending : styles.adminReportStatusDone,
+                  previewReport?.isExcluded ? styles.adminReportStatusDanger : null,
+                ]}>
+                  <Text style={[
+                    styles.adminReportStatusText,
+                    previewIsPending ? styles.adminReportStatusTextPending : null,
+                    previewReport?.isExcluded ? styles.adminReportStatusTextDanger : null,
+                  ]}>
+                    {previewReport?.isExcluded ? 'Udelukket' : previewStatusLabel}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.adminReportPeopleGrid}>
+                <View style={styles.adminReportPersonRow}>
+                  <Avatar profile={previewReporter} variant="smallCircle" />
+                  <View style={styles.adminReportPersonCopy}>
+                    <Text style={styles.adminReportPersonLabel}>Anmeldt af</Text>
+                    <Text numberOfLines={1} style={styles.adminReportPersonName}>
+                      {previewReporter?.displayName || 'Slettet bruger'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.adminReportPersonRow}>
+                  <Avatar profile={previewReportedMember} variant="smallCircle" />
+                  <View style={styles.adminReportPersonCopy}>
+                    <Text style={styles.adminReportPersonLabel}>Anmeldt person</Text>
+                    <Text numberOfLines={1} style={styles.adminReportPersonName}>
+                      {previewReportedMember?.displayName || 'Ukendt person'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {previewTarget?.isMissing ? (
+                <View style={styles.notice}>
+                  <Text style={styles.noticeTitle}>Indholdet mangler</Text>
+                  <Text style={styles.noticeText}>{previewTarget.body}</Text>
+                </View>
+              ) : previewTarget ? (
+                <View style={styles.adminReportMessagePreview}>
+                  <View style={styles.adminReportMessageSenderRow}>
+                    <Avatar profile={previewSender} variant="smallCircle" />
+                    <View style={styles.adminReportPersonCopy}>
+                      <Text style={styles.adminReportPersonLabel}>Skrevet af</Text>
+                      <Text numberOfLines={1} style={styles.adminReportPersonName}>
+                        {previewSender?.displayName || 'Ukendt person'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.adminReportMessageBody}>
+                    {previewTarget?.body || 'Beskedindhold kunne ikke vises.'}
+                  </Text>
+                  <Text style={styles.adminReportMessageMeta}>
+                    {[previewTarget?.conversationTitle, formatDateTime(previewTarget?.createdAt)]
+                      .filter(Boolean)
+                      .join(' · ') || 'Rapporteret indhold'}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.adminReportStrikeRow}>
+                <Text style={styles.adminReportStrikeText}>
+                  {previewStrikeCount}/{previewStrikeLimit} strikes
+                </Text>
+                <View style={styles.adminReportStrikeDots}>
+                  {Array.from({ length: previewStrikeLimit }).map((_, index) => (
+                    <View
+                      key={`preview-strike-${index}`}
+                      style={[
+                        styles.adminReportStrikeDot,
+                        index < previewStrikeCount ? styles.adminReportStrikeDotActive : null,
+                      ]}
+                    />
+                  ))}
+                </View>
+              </View>
+            </ScrollView>
+
+            {previewReport && previewIsPending ? (
+              <View style={styles.adminReportActionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={Boolean(actionReportId)}
+                  onPress={() => confirmDismiss(previewReport)}
+                  style={({ pressed }) => [
+                    styles.adminReportActionButton,
+                    styles.adminReportActionSecondary,
+                    pressed && !actionReportId ? styles.primaryButtonPressed : null,
+                    actionReportId ? styles.adminReportActionDisabled : null,
+                  ]}
+                >
+                  {previewIsDismissLoading ? (
+                    <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                  ) : (
+                    <Text style={[styles.adminReportActionText, styles.adminReportActionTextSecondary]}>
+                      Afvis
+                    </Text>
+                  )}
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!previewCanStrike}
+                  onPress={() => confirmStrike(previewReport)}
+                  style={({ pressed }) => [
+                    styles.adminReportActionButton,
+                    styles.adminReportActionStrike,
+                    pressed && previewCanStrike ? styles.primaryButtonPressed : null,
+                    !previewCanStrike ? styles.adminReportActionDisabled : null,
+                  ]}
+                >
+                  {previewIsStrikeLoading ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="flash" size={15} color="#FFFFFF" />
+                      <Text style={styles.adminReportActionText}>Strike</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
 
 const NOTIFICATION_CATEGORY_LABELS = {
   chat_message: { title: 'Chatbeskeder', description: 'Direkte og gruppe-beskeder.' },
@@ -16941,6 +19119,7 @@ const NOTIFICATION_CATEGORY_LABELS = {
   rsvp_reminder: { title: 'RSVP reminders', description: 'Hvis du ikke har svaret på en invitation.' },
   gallery_new: { title: 'Nyt album', description: 'Når klassen opretter et nyt fælles album.' },
   gallery_photos: { title: 'Nye billeder i album', description: 'Kun for albums du følger eller er del af.' },
+  class_announcement: { title: 'Klassebeskeder', description: 'Vigtige beskeder fra klasseejer.' },
   connection_request: { title: 'Connection requests', description: 'Når nogen vil connecte med dig.' },
   connection_accepted: { title: 'Connection accepteret', description: 'Når din request bliver accepteret.' },
   good_deed_reminder: { title: 'Ugens gode gerning', description: 'Påmindelse hvis du ikke har claimet endnu.' },
@@ -16961,6 +19140,7 @@ const NOTIFICATION_CATEGORY_ORDER = [
   'rsvp_reminder',
   'gallery_new',
   'gallery_photos',
+  'class_announcement',
   'connection_request',
   'connection_accepted',
   'good_deed_reminder',
@@ -16973,7 +19153,6 @@ function SettingsScreen({
   schoolClass,
   sessionToken,
   onEnablePushNotifications,
-  onSendNotificationTest,
   onDisablePushNotifications,
   onOpenSystemAppSettings,
   onLogout,
@@ -16990,15 +19169,27 @@ function SettingsScreen({
   const [deleteAccountError, setDeleteAccountError] = useState('');
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [blockedInfoModalOpen, setBlockedInfoModalOpen] = useState(false);
   const [categoryPreferences, setCategoryPreferences] = useState({});
   const [prefsLoading, setPrefsLoading] = useState(false);
   const [prefsError, setPrefsError] = useState('');
   const [prefsTogglingCategory, setPrefsTogglingCategory] = useState('');
+  const [notificationPrefsModalOpen, setNotificationPrefsModalOpen] = useState(false);
 
   const permissionStatus = notificationState?.permissionStatus ?? 'unknown';
-  const permissionStatusLabel = SETTINGS_NOTIFICATION_STATUS_LABELS[permissionStatus] ?? permissionStatus;
   const notificationsActive = Boolean(notificationState?.expoPushToken) && permissionStatus === 'granted';
-  const tokenPreview = notificationState?.expoPushToken || 'Ingen token gemt på enheden.';
+  const notificationCategoryCount = NOTIFICATION_CATEGORY_ORDER.filter((category) => NOTIFICATION_CATEGORY_LABELS[category]).length;
+  const enabledNotificationCategoryCount = NOTIFICATION_CATEGORY_ORDER.reduce((count, category) => {
+    if (!NOTIFICATION_CATEGORY_LABELS[category]) {
+      return count;
+    }
+
+    const stored = categoryPreferences[category];
+    return count + (stored === undefined || Boolean(stored) ? 1 : 0);
+  }, 0);
+  const notificationCategorySummary = prefsLoading
+    ? 'Henter kategorier...'
+    : `${enabledNotificationCategoryCount}/${notificationCategoryCount} kategorier slået til`;
 
   const loadBlocked = useCallback(async ({ refreshing = false } = {}) => {
     if (!sessionToken) {
@@ -17131,7 +19322,7 @@ function SettingsScreen({
       }
     } catch (apiError) {
       setPrefsError(apiError.message || 'Indstillingen kunne ikke gemmes.');
-      setCategoryPreferences((current) => ({ ...current, [category]: Boolean(currentValue) }));
+      setCategoryPreferences((current) => ({ ...current, [category]: currentValue === undefined ? true : Boolean(currentValue) }));
     } finally {
       setPrefsTogglingCategory('');
     }
@@ -17216,7 +19407,7 @@ function SettingsScreen({
           <View style={styles.settingsNotificationCopy}>
             <Text style={styles.sectionTitle}>Notifikationer</Text>
             <Text style={styles.feedText}>
-              Modtag push om chats, begivenheder og vigtige beskeder fra klassen.
+              Administrer notifikationer.
             </Text>
           </View>
         </View>
@@ -17235,9 +19426,6 @@ function SettingsScreen({
         >
           <View style={styles.settingsToggleCopy}>
             <Text style={styles.settingsToggleTitle}>Push-notifikationer</Text>
-            <Text style={styles.settingsToggleText}>
-              Status: {permissionStatusLabel}{notificationsActive ? ' · Aktiv' : ' · Inaktiv'}
-            </Text>
           </View>
           <View style={[styles.settingsToggleSwitch, notificationsActive ? styles.settingsToggleSwitchActive : null]}>
             <View style={[styles.settingsToggleKnob, notificationsActive ? styles.settingsToggleKnobActive : null]} />
@@ -17252,7 +19440,6 @@ function SettingsScreen({
         ) : null}
 
         {notificationState?.error ? <Text style={styles.errorText}>{notificationState.error}</Text> : null}
-        {notificationState?.message ? <Text style={styles.successText}>{notificationState.message}</Text> : null}
 
         {!PUSH_NOTIFICATIONS_ENABLED ? (
           <View style={styles.notice}>
@@ -17277,77 +19464,25 @@ function SettingsScreen({
           <Ionicons name="chevron-forward" size={18} color="#65748b" />
         </Pressable>
 
-        {PUSH_NOTIFICATIONS_ENABLED && notificationsActive ? (
-          <>
-            <Button
-              label="Send testnotifikation"
-              loading={notificationState?.testLoading}
-              onPress={onSendNotificationTest}
-            />
-            <View style={styles.settingsNotificationTokenBox}>
-              <Text style={styles.settingsNotificationTokenLabel}>Expo push token</Text>
-              <Text numberOfLines={2} selectable style={styles.settingsNotificationTokenText}>{tokenPreview}</Text>
-            </View>
-          </>
-        ) : null}
-      </View>
-
-      <View style={styles.panel}>
-        <View style={styles.settingsNotificationHeader}>
-          <View style={styles.settingsNotificationIcon}>
-            <Ionicons name="options" size={24} color={STUDOS_THEME.red} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Administrer notifikationstyper"
+          onPress={() => setNotificationPrefsModalOpen(true)}
+          style={({ pressed }) => [
+            styles.settingsLinkRow,
+            pressed ? styles.footerItemPressed : null,
+          ]}
+        >
+          <Ionicons name="options-outline" size={18} color={STUDOS_THEME.ink} />
+          <View style={styles.settingsLinkRowCopy}>
+            <Text style={styles.settingsLinkRowTitle}>Notifikationstyper</Text>
+            <Text numberOfLines={1} style={styles.settingsLinkRowMeta}>{notificationCategorySummary}</Text>
           </View>
-          <View style={styles.settingsNotificationCopy}>
-            <Text style={styles.sectionTitle}>Hvad vil du have notifikation om?</Text>
-            <Text style={styles.feedText}>
-              Slå individuelle kategorier til eller fra. Indstillingerne gælder på tværs af dine enheder.
-            </Text>
-          </View>
-        </View>
+          <Ionicons name="chevron-forward" size={18} color="#65748b" />
+        </Pressable>
 
         {prefsError ? <Text style={styles.errorText}>{prefsError}</Text> : null}
 
-        {prefsLoading ? (
-          <View style={styles.settingsInlineLoader}>
-            <ActivityIndicator color={STUDOS_THEME.red} />
-            <Text style={styles.settingsInlineLoaderText}>Henter indstillinger...</Text>
-          </View>
-        ) : null}
-
-        {NOTIFICATION_CATEGORY_ORDER.map((category) => {
-          const labels = NOTIFICATION_CATEGORY_LABELS[category];
-          if (!labels) {
-            return null;
-          }
-
-          const stored = categoryPreferences[category];
-          const isEnabled = stored === undefined ? true : Boolean(stored);
-          const isToggling = prefsTogglingCategory === category;
-
-          return (
-            <Pressable
-              key={category}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: isEnabled, disabled: !sessionToken || isToggling }}
-              accessibilityLabel={`${labels.title} ${isEnabled ? 'slået til' : 'slået fra'}`}
-              disabled={!sessionToken || isToggling}
-              onPress={() => toggleCategoryPreference(category)}
-              style={({ pressed }) => [
-                styles.settingsToggleRow,
-                isEnabled ? styles.settingsToggleRowActive : null,
-                pressed && !isToggling ? styles.footerItemPressed : null,
-              ]}
-            >
-              <View style={styles.settingsToggleCopy}>
-                <Text style={styles.settingsToggleTitle}>{labels.title}</Text>
-                <Text style={styles.settingsToggleText}>{labels.description}</Text>
-              </View>
-              <View style={[styles.settingsToggleSwitch, isEnabled ? styles.settingsToggleSwitchActive : null]}>
-                <View style={[styles.settingsToggleKnob, isEnabled ? styles.settingsToggleKnobActive : null]} />
-              </View>
-            </Pressable>
-          );
-        })}
       </View>
 
       <View style={styles.panel}>
@@ -17357,9 +19492,21 @@ function SettingsScreen({
           </View>
           <View style={styles.settingsNotificationCopy}>
             <Text style={styles.sectionTitle}>Blokerede brugere</Text>
-            <Text style={styles.feedText}>
-              Blokerede brugere kan ikke kontakte dig, og du ser ikke deres aktivitet.
-            </Text>
+            <View style={styles.settingsHelpTextRow}>
+              <Text style={[styles.feedText, styles.settingsHelpText]}>Overblik over blokeringer</Text>
+              <Pressable
+                accessibilityLabel="Se vilkår for blokeringer"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => setBlockedInfoModalOpen(true)}
+                style={({ pressed }) => [
+                  styles.settingsInlineHelpButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Text style={styles.settingsInlineHelpText}>?</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
 
@@ -17439,7 +19586,7 @@ function SettingsScreen({
           <View style={styles.settingsNotificationCopy}>
             <Text style={styles.sectionTitle}>Sikkerhed og moderation</Text>
             <Text style={styles.feedText}>
-              Studos har nul tolerance for stødende indhold og misbrug. Rapportér eller blokér efter behov.
+              Rapportering og tryghed.
             </Text>
           </View>
         </View>
@@ -17653,6 +19800,138 @@ function SettingsScreen({
           © {new Date().getFullYear()} Studos. Alle rettigheder forbeholdes. Studos er ikke tilknyttet Apple Inc. eller Google LLC.
         </Text>
       </View>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setBlockedInfoModalOpen(false)}
+        transparent
+        visible={blockedInfoModalOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk vilkår for blokeringer"
+            onPress={() => setBlockedInfoModalOpen(false)}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.settingsBlockedInfoPanel]}>
+            <View style={styles.chatModalHeader}>
+              <Text numberOfLines={1} style={styles.chatModalTitle}>Blokeringer</Text>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setBlockedInfoModalOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <View style={styles.settingsInfoBulletList}>
+              {[
+                'Brugere du har blokeret kan ikke kontakte dig.',
+                'Du ser ikke deres aktivitet i appen, hvor det er muligt.',
+                'Personen får ikke en notifikation om blokeringen.',
+                'Du kan altid fjerne blokeringen igen herfra.',
+              ].map((text) => (
+                <View key={text} style={styles.settingsInfoBulletRow}>
+                  <View style={styles.settingsInfoBulletDot} />
+                  <Text style={styles.settingsInfoBulletText}>{text}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setNotificationPrefsModalOpen(false)}
+        transparent
+        visible={notificationPrefsModalOpen}
+      >
+        <View style={styles.chatModalRoot}>
+          <Pressable
+            accessibilityLabel="Luk notifikationstyper"
+            onPress={() => setNotificationPrefsModalOpen(false)}
+            style={styles.chatModalBackdrop}
+          />
+          <View style={[styles.chatModalPanel, styles.settingsNotificationPrefsPanel]}>
+            <View style={styles.chatModalHeader}>
+              <View style={styles.settingsNotificationPrefsHeaderCopy}>
+                <Text style={styles.chatModalKicker}>Notifikationer</Text>
+                <Text numberOfLines={1} style={styles.chatModalTitle}>Notifikationstyper</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Luk"
+                accessibilityRole="button"
+                onPress={() => setNotificationPrefsModalOpen(false)}
+                style={({ pressed }) => [
+                  styles.chatModalCloseButton,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={18} color={STUDOS_THEME.ink} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.chatCodeModalText}>
+              Slå de kategorier til eller fra, som du vil have push-notifikationer om.
+            </Text>
+
+            {prefsError ? <Text style={styles.errorText}>{prefsError}</Text> : null}
+            {prefsLoading ? (
+              <View style={styles.settingsInlineLoader}>
+                <ActivityIndicator color={STUDOS_THEME.red} />
+                <Text style={styles.settingsInlineLoaderText}>Henter indstillinger...</Text>
+              </View>
+            ) : null}
+
+            <ScrollView
+              contentContainerStyle={styles.settingsNotificationPrefsList}
+              showsVerticalScrollIndicator={false}
+              style={styles.settingsNotificationPrefsScroll}
+            >
+              {NOTIFICATION_CATEGORY_ORDER.map((category) => {
+                const labels = NOTIFICATION_CATEGORY_LABELS[category];
+                if (!labels) {
+                  return null;
+                }
+
+                const stored = categoryPreferences[category];
+                const isEnabled = stored === undefined ? true : Boolean(stored);
+                const isToggling = prefsTogglingCategory === category;
+
+                return (
+                  <Pressable
+                    key={category}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: isEnabled, disabled: !sessionToken || isToggling }}
+                    accessibilityLabel={`${labels.title} ${isEnabled ? 'slået til' : 'slået fra'}`}
+                    disabled={!sessionToken || isToggling}
+                    onPress={() => toggleCategoryPreference(category)}
+                    style={({ pressed }) => [
+                      styles.settingsToggleRow,
+                      isEnabled ? styles.settingsToggleRowActive : null,
+                      pressed && !isToggling ? styles.footerItemPressed : null,
+                    ]}
+                  >
+                    <View style={styles.settingsToggleCopy}>
+                      <Text style={styles.settingsToggleTitle}>{labels.title}</Text>
+                      <Text style={styles.settingsToggleText}>{labels.description}</Text>
+                    </View>
+                    <View style={[styles.settingsToggleSwitch, isEnabled ? styles.settingsToggleSwitchActive : null]}>
+                      <View style={[styles.settingsToggleKnob, isEnabled ? styles.settingsToggleKnobActive : null]} />
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -18860,11 +21139,19 @@ function CrewScreen({
     const displayName = member.displayName
       || `${member.firstName ?? ''} ${member.lastName ?? ''}`.trim()
       || 'Ukendt medlem';
+    const roleLabel = PROFILE_ROLE_LABELS[member.role] || 'Elev';
+    const roleBadge = ['owner', 'moderator'].includes(String(member.role ?? ''))
+      ? {
+        label: roleLabel,
+        variant: member.role,
+      }
+      : null;
 
     return {
       displayName,
-      meta: PROFILE_ROLE_LABELS[member.role] || 'Elev',
+      meta: roleBadge ? 'Klassemedlem' : roleLabel,
       profile: member,
+      roleBadge,
     };
   }), [crewMembers]);
 
@@ -19006,6 +21293,7 @@ function CrewScreen({
                 const displayName = entry.displayName;
                 const metaText = entry.meta;
                 const profile = entry.profile;
+                const roleBadge = entry.roleBadge;
                 const rawPhone = String(profile?.phone ?? '').trim();
                 const normalizedPhone = rawPhone.replace(/[^\d+]/g, '');
                 const canCall = Boolean(normalizedPhone.length);
@@ -19020,9 +21308,25 @@ function CrewScreen({
                   >
                     <Avatar profile={profile} variant="smallCircle" />
                     <View style={styles.connectionCopy}>
-                      <Text numberOfLines={1} style={styles.connectionName}>
-                        {displayName}
-                      </Text>
+                      <View style={styles.crewMemberNameRow}>
+                        <Text numberOfLines={1} style={[styles.connectionName, styles.crewMemberNameText]}>
+                          {displayName}
+                        </Text>
+                        {roleBadge ? (
+                          <View style={[
+                            styles.crewMemberRoleBadge,
+                            roleBadge.variant === 'owner' ? styles.crewMemberRoleBadgeOwner : null,
+                            roleBadge.variant === 'moderator' ? styles.crewMemberRoleBadgeModerator : null,
+                          ]}>
+                            <Text style={[
+                              styles.crewMemberRoleBadgeText,
+                              roleBadge.variant === 'owner' ? styles.crewMemberRoleBadgeTextOwner : null,
+                            ]}>
+                              {roleBadge.label}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
                       <Text numberOfLines={1} style={styles.connectionMeta}>
                         {metaText}
                       </Text>
@@ -19472,7 +21776,18 @@ function GoodDeedClaimRewardModal({ reward, visible, onDismiss }) {
   );
 }
 
-function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, onSelect, profile, topBarHeight, visible }) {
+function AppSidebar({
+  activeMember,
+  activeMembers = [],
+  activeRoute,
+  onClose,
+  onSelect,
+  pendingAdminReportCount = 0,
+  pendingClassApprovalCount = 0,
+  profile,
+  topBarHeight,
+  visible,
+}) {
   const safeAreaInsets = useSafeAreaInsets();
   const sidebarBottomInset = Math.max(safeAreaInsets.bottom, 10);
   const [isRendered, setIsRendered] = useState(visible);
@@ -19488,6 +21803,23 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
     : 'Medlemmer';
   const crewActive = activeRoute === 'classmates';
   const emergencyActive = activeRoute === 'emergencyContacts';
+  const canViewClassProfile = canAccessClassProfile(activeMember);
+  const canViewAdminReports = canAccessAdminReports(activeMember);
+  const drawerSections = APP_DRAWER_SECTIONS
+    .map((section) => {
+      if (section.variant !== 'admin') {
+        return section;
+      }
+
+      return {
+        ...section,
+        items: section.items.filter((item) => (
+          (item.id === 'adminFriends' && canViewClassProfile)
+          || (item.id === 'adminReports' && canViewAdminReports)
+        )),
+      };
+    })
+    .filter((section) => section.variant !== 'admin' || section.items.length > 0);
   const fullProfileName = [activeMember?.firstName, activeMember?.lastName]
     .filter(Boolean)
     .join(' ');
@@ -19624,23 +21956,44 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
               </Text>
             </Pressable>
 
-            {APP_DRAWER_SECTIONS.map((section) => (
-              <View key={section.title} style={styles.sidebarNavSection}>
-                <View style={styles.sidebarNavSectionHeader}>
+            {drawerSections.map((section) => {
+              const isAdminSection = section.variant === 'admin';
+
+              return (
+              <View
+                key={section.title}
+                style={[
+                  styles.sidebarNavSection,
+                  isAdminSection ? styles.sidebarAdminSection : null,
+                ]}
+              >
+                <View style={[
+                  styles.sidebarNavSectionHeader,
+                  isAdminSection ? styles.sidebarAdminSectionHeader : null,
+                ]}>
                   <Text style={styles.sidebarNavSectionTitle}>{section.title}</Text>
                   <View style={styles.sidebarNavSectionLine} />
                 </View>
 
                 {section.items.map((item) => {
                   const isActive = activeRoute === item.id;
+                  const itemBadgeCount = item.id === 'adminReports'
+                    ? Number(pendingAdminReportCount) || 0
+                    : item.id === 'adminFriends'
+                      ? Number(pendingClassApprovalCount) || 0
+                      : 0;
 
                   return (
                     <Pressable
+                      accessibilityLabel={itemBadgeCount > 0
+                        ? `${item.label}, ${itemBadgeCount} afventer`
+                        : item.label}
                       accessibilityRole="button"
                       key={item.id}
                       onPress={() => onSelect(item.id)}
                       style={({ pressed }) => [
                         styles.sidebarMenuItem,
+                        isAdminSection ? styles.sidebarAdminMenuItem : null,
                         pressed ? styles.sidebarMenuItemPressed : null,
                       ]}
                     >
@@ -19666,21 +22019,37 @@ function AppSidebar({ activeMember, activeMembers = [], activeRoute, onClose, on
                           ]} />
                         </View>
                       ) : (
-                        <Text
-                          style={[
-                            styles.sidebarMenuText,
-                            item.locked ? styles.lockedNavigationText : null,
-                            isActive ? styles.sidebarMenuTextActive : null,
-                          ]}
-                        >
-                          {item.label}
-                        </Text>
+                        <View style={styles.sidebarMenuCopy}>
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.sidebarMenuText,
+                              item.locked ? styles.lockedNavigationText : null,
+                              isActive ? styles.sidebarMenuTextActive : null,
+                            ]}
+                          >
+                            {item.label}
+                          </Text>
+                          {item.description ? (
+                            <Text numberOfLines={2} style={styles.sidebarMenuDescription}>
+                              {item.description}
+                            </Text>
+                          ) : null}
+                        </View>
                       )}
+                      {itemBadgeCount > 0 ? (
+                        <View style={styles.sidebarUnreadBadge}>
+                          <Text numberOfLines={1} style={styles.sidebarUnreadText}>
+                            {formatUnreadBadgeCount(itemBadgeCount)}
+                          </Text>
+                        </View>
+                      ) : null}
                     </Pressable>
                   );
                 })}
               </View>
-            ))}
+              );
+            })}
           </View>
           <View style={styles.sidebarBottomNav}>
             <View style={styles.sidebarSectionDivider} />
@@ -20466,18 +22835,21 @@ function AccountProfileScreen({
 
   return (
     <ScrollView
-      contentContainerStyle={[styles.overviewBlank, styles.overviewSurface]}
+      contentContainerStyle={styles.accountProfileContent}
       keyboardShouldPersistTaps="handled"
       refreshControl={studosRefreshControl({
         onRefresh: refreshProfile,
         refreshing: profileRefreshing,
       })}
       showsVerticalScrollIndicator={false}
+      style={styles.accountProfileScreen}
     >
-      <View style={styles.tabHeader}>
-        <View>
-          <Text style={styles.kicker}>{schoolClass.className}</Text>
-          <Text style={styles.title}>Min profil</Text>
+      <View style={[styles.tabHeader, styles.accountProfileHeader]}>
+        <View style={styles.accountProfileHeaderCopy}>
+          <Text numberOfLines={1} style={styles.kicker}>{schoolClass.className}</Text>
+          <Text adjustsFontSizeToFit minimumFontScale={0.82} numberOfLines={1} style={[styles.title, styles.accountProfileTitle]}>
+            Min profil
+          </Text>
         </View>
         <View style={styles.headerIcon}>
           <Ionicons name="person" size={28} color="#f6d36d" />
@@ -20503,7 +22875,7 @@ function AccountProfileScreen({
               </View>
             )}
             <View style={styles.accountProfilePhotoActionBadge}>
-              <Ionicons name="camera" size={14} color={STUDOS_THEME.ink} />
+              <Ionicons name="camera" size={17} color={STUDOS_THEME.ink} />
             </View>
           </View>
         </Pressable>
@@ -20787,7 +23159,7 @@ function AccountProfileScreen({
         </View>
       </Modal>
 
-      <View style={styles.panel}>
+      <View style={[styles.panel, styles.accountProfileInfoPanel]}>
         <Text style={styles.sectionTitle}>Profiloplysninger</Text>
         <View style={styles.detailList}>
           {profileRows.map((row) => (
@@ -20845,6 +23217,7 @@ function AccountProfileScreen({
           style={({ pressed }) => [
             styles.chatActionCancelButton,
             styles.accountProfileActionButtonRow,
+            styles.accountProfileBottomActionButton,
             pressed && !loading ? styles.footerItemPressed : null,
           ]}
         >
@@ -20860,6 +23233,7 @@ function AccountProfileScreen({
             styles.chatActionConfirmButton,
             styles.chatActionConfirmButtonDanger,
             styles.accountProfileActionButtonRow,
+            styles.accountProfileBottomActionButton,
             pressed && !loading ? styles.footerItemPressed : null,
           ]}
         >
@@ -20881,6 +23255,7 @@ function OverviewScreen({
   onOpenEarnCaps,
   onOpenPointDuel,
   onRefresh,
+  schoolClass,
   sessionToken,
 }) {
   const [completedClipIds, setCompletedClipIds] = useState([]);
@@ -20909,6 +23284,7 @@ function OverviewScreen({
     || [activeMember?.firstName, activeMember?.lastName].filter(Boolean).join(' ')
     || 'Din profil';
   const personalStudosCode = activeMember?.personalCode ?? 'Mangler';
+  const classInviteCode = schoolClass?.inviteCode || 'Mangler';
   const overviewNumberFormat = useMemo(() => new Intl.NumberFormat('da-DK'), []);
   const formatOverviewNumber = useCallback((value) => overviewNumberFormat.format(value), [overviewNumberFormat]);
   const capsBalance = Number.isFinite(Number(activeMember?.capsBalance ?? activeMember?.points))
@@ -21404,6 +23780,19 @@ function OverviewScreen({
           onLayout={setOverviewCardLayout('studos')}
           style={overviewCardScrollStyle('studos')}
         >
+          <View style={styles.overviewClassCodeCard}>
+            <View style={styles.overviewClassCodeCopy}>
+              <Text numberOfLines={1} style={styles.overviewClassCodeTitle}>
+                Klassekode
+              </Text>
+              <Text numberOfLines={1} style={styles.overviewClassCodeBody}>
+                Inviter venner til klassen
+              </Text>
+            </View>
+            <Text selectable numberOfLines={1} style={styles.overviewClassCodeValue}>
+              {classInviteCode}
+            </Text>
+          </View>
           <View style={styles.overviewStudosCard}>
             <View pointerEvents="none" style={styles.overviewStudosAccentRail}>
               <View style={[styles.overviewStudosAccentSegment, styles.overviewStudosAccentBlue]} />
@@ -22017,6 +24406,25 @@ function CrewTitleGraphic() {
   );
 }
 
+function ClassProfileTitleGraphic() {
+  return (
+    <View style={styles.classProfileTitleGraphic} pointerEvents="none">
+      <View style={styles.classProfileTitleGraphicBack} />
+      <View style={styles.classProfileTitleGraphicFace}>
+        <Ionicons name="school" size={17} color={STUDOS_THEME.ink} />
+        <View style={styles.classProfileTitleGraphicDots}>
+          <View style={[styles.classProfileTitleGraphicDot, styles.classProfileTitleGraphicDotGreen]} />
+          <View style={[styles.classProfileTitleGraphicDot, styles.classProfileTitleGraphicDotBlue]} />
+        </View>
+      </View>
+      <View style={styles.classProfileTitleGraphicBadge}>
+        <Ionicons name="settings-sharp" size={9} color="#FFFFFF" />
+      </View>
+      <View style={styles.classProfileTitleGraphicOuterDot} />
+    </View>
+  );
+}
+
 function EmergencyContactsTitleGraphic() {
   return (
     <View style={styles.emergencyContactsTitleGraphic} pointerEvents="none">
@@ -22353,6 +24761,84 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: '#FFFFFF',
   },
+  pendingApprovalScreen: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    gap: 22,
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+  },
+  pendingApprovalLogoWrap: {
+    alignItems: 'center',
+  },
+  pendingApprovalLogo: {
+    width: 78,
+    height: 78,
+    borderRadius: 20,
+  },
+  pendingApprovalCard: {
+    gap: 14,
+    borderColor: '#FFE1B1',
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: '#FFFDF6',
+    padding: 18,
+  },
+  pendingApprovalIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFE8A8',
+  },
+  pendingApprovalTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 25,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 31,
+  },
+  pendingApprovalText: {
+    color: '#536176',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 21,
+  },
+  pendingApprovalClassPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 40,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 11,
+  },
+  pendingApprovalClassText: {
+    color: STUDOS_THEME.ink,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  pendingApprovalLogoutButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    borderColor: '#D6DEEA',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  pendingApprovalLogoutText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
   appShell: {
     flex: 1,
     backgroundColor: '#F1FBF8',
@@ -22365,6 +24851,9 @@ const styles = StyleSheet.create({
   },
   appScreenDetached: {
     flex: 1,
+  },
+  appScreenAdminClassDetached: {
+    paddingBottom: 0,
   },
   appScreenWallsDetached: {
     paddingBottom: 0,
@@ -22574,12 +25063,24 @@ const styles = StyleSheet.create({
   sidebarNavSection: {
     gap: 12,
   },
+  sidebarAdminSection: {
+    gap: 10,
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 212, 109, 0.85)',
+    backgroundColor: 'rgba(255, 244, 216, 0.72)',
+    padding: 10,
+  },
   sidebarNavSectionHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
     minHeight: 18,
     paddingHorizontal: 10,
+  },
+  sidebarAdminSectionHeader: {
+    paddingHorizontal: 2,
   },
   sidebarNavSectionTitle: {
     color: '#65748b',
@@ -22606,6 +25107,14 @@ const styles = StyleSheet.create({
     gap: 10,
     minHeight: 46,
     paddingHorizontal: 10,
+  },
+  sidebarAdminMenuItem: {
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 212, 109, 0.56)',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    paddingHorizontal: 8,
   },
   sidebarMenuItemPressed: {
     opacity: 0.68,
@@ -22880,11 +25389,46 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 18,
   },
+  sidebarMenuCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
   sidebarMenuText: {
     color: '#172143',
     fontSize: 15,
     fontWeight: '600',
     letterSpacing: 0,
+  },
+  sidebarMenuDescription: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0,
+    lineHeight: 14,
+  },
+  sidebarUnreadBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 24,
+    height: 24,
+    borderColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 2,
+    backgroundColor: STUDOS_THEME.red,
+    paddingHorizontal: 6,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.24,
+    shadowRadius: 7,
+    elevation: 5,
+  },
+  sidebarUnreadText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 12,
   },
   sidebarMenuTextActive: {
     color: '#FF6F73',
@@ -25976,6 +28520,56 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  overviewClassCodeCard: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 58,
+    marginBottom: 10,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: STUDOS_THEME.yellow,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 3,
+  },
+  overviewClassCodeCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  overviewClassCodeTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  overviewClassCodeBody: {
+    color: '#8A650A',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  overviewClassCodeValue: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 0,
+    maxWidth: '48%',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'right',
+  },
   overviewStudosCard: {
     gap: 12,
     position: 'relative',
@@ -27453,6 +30047,83 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     top: 0,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  classProfileTitleGraphic: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    width: 47,
+    height: 40,
+    marginLeft: 8,
+    marginBottom: -2,
+  },
+  classProfileTitleGraphicBack: {
+    position: 'absolute',
+    right: 0,
+    bottom: 1,
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    backgroundColor: STUDOS_THEME.yellow,
+    transform: [{ rotate: '8deg' }],
+  },
+  classProfileTitleGraphicFace: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    width: 35,
+    height: 35,
+    borderColor: STUDOS_THEME.ink,
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 3,
+    transform: [{ rotate: '-4deg' }],
+  },
+  classProfileTitleGraphicDots: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    marginTop: -2,
+  },
+  classProfileTitleGraphicDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 6,
+  },
+  classProfileTitleGraphicDotGreen: {
+    backgroundColor: STUDOS_THEME.green,
+  },
+  classProfileTitleGraphicDotBlue: {
+    backgroundColor: STUDOS_THEME.blue,
+  },
+  classProfileTitleGraphicBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: -2,
+    right: 3,
+    width: 16,
+    height: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: STUDOS_THEME.red,
+  },
+  classProfileTitleGraphicOuterDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 7,
+    height: 7,
+    borderRadius: 8,
     backgroundColor: STUDOS_THEME.yellow,
   },
   emergencyContactsTitleGraphic: {
@@ -29421,6 +32092,11 @@ const styles = StyleSheet.create({
     borderColor: '#f25c63',
     backgroundColor: '#fff2e8',
   },
+  miniGamesCardPanelLocked: {
+    borderColor: 'rgba(148, 163, 184, 0.38)',
+    backgroundColor: '#F7FAFA',
+    shadowOpacity: 0.06,
+  },
   miniGamesCardTextWrap: {
     flex: 1,
     marginRight: 8,
@@ -29463,12 +32139,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(117, 222, 208, 0.45)',
   },
+  miniGamesComingSoonBadge: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(23, 33, 67, 0.16)',
+    backgroundColor: '#FFFFFF',
+  },
   miniGamesCardBadgeText: {
     color: '#333e56',
     fontSize: 10,
     lineHeight: 13,
     fontWeight: '900',
     letterSpacing: 0.2,
+  },
+  miniGamesComingSoonBadgeText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   miniGamesCardHint: {
     color: '#6c6f7d',
@@ -29600,6 +32294,12 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
+  miniGamesCardLockWrap: {
+    backgroundColor: '#EEF2F6',
+    borderColor: '#CBD5E1',
+    shadowColor: '#64748b',
+    shadowOpacity: 0.08,
+  },
   miniGamesCardChevronIcon: {
     transform: [{ translateX: 1 }],
   },
@@ -29655,11 +32355,14 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 111, 115, 0.35)',
   },
   luckyTopAddButton: {
-    width: 32,
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 118,
     height: 32,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 12,
     backgroundColor: '#1f9d55',
     borderWidth: 1,
     borderColor: '#1f9d55',
@@ -29668,6 +32371,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 12,
     elevation: 8,
+  },
+  luckyTopAddButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   luckyTopAddButtonPressed: {
     transform: [{ scale: 0.96 }],
@@ -31002,11 +33711,12 @@ const styles = StyleSheet.create({
   emergencyContactsScreen: {
     flex: 1,
     gap: 10,
-    marginTop: -10,
     minHeight: 0,
+    paddingTop: 8,
+    width: '100%',
   },
   emergencyContactsTabHeader: {
-    paddingTop: 4,
+    paddingTop: 8,
   },
   crewPanel: {
     flex: 1,
@@ -31082,6 +33792,987 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  adminInfoHeaderCopy: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
+  },
+  adminInfoBody: {
+    color: '#65748b',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
+    marginTop: -8,
+  },
+  adminClassInfoBody: {
+    marginTop: -14,
+  },
+  adminClassHeaderTitle: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  adminClassPermissionNotice: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 8,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  adminClassPermissionText: {
+    color: '#8A650A',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  adminClassScreen: {
+    flex: 1,
+    gap: 16,
+    minHeight: 0,
+  },
+  adminClassBodyScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  adminClassBodyScrollContent: {
+    gap: 13,
+    paddingBottom: 12,
+  },
+  adminClassAnnouncementPanel: {
+    gap: 13,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    padding: 14,
+  },
+  adminClassAnnouncementAccordionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 44,
+  },
+  adminClassAnnouncementHeader: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minWidth: 0,
+  },
+  adminClassAnnouncementIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFE8A8',
+  },
+  adminClassAnnouncementCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  adminClassAnnouncementText: {
+    color: '#8A650A',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  adminClassAnnouncementBody: {
+    borderTopColor: '#F4DA9A',
+  },
+  adminClassAnnouncementBodyInput: {
+    minHeight: 92,
+    paddingTop: 12,
+  },
+  adminClassAnnouncementCounter: {
+    alignSelf: 'flex-end',
+    color: '#65748B',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+    marginTop: 4,
+  },
+  adminClassAnnouncementChevron: {
+    borderColor: '#F7D588',
+    backgroundColor: '#FFF2C9',
+  },
+  adminClassApprovalNotice: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 64,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF8E8',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  adminClassApprovalIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFE8A8',
+  },
+  adminClassApprovalCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  adminClassApprovalTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassApprovalText: {
+    color: '#8A650A',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  adminClassApprovalCount: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: STUDOS_THEME.yellow,
+    paddingHorizontal: 8,
+  },
+  adminClassApprovalCountText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassApprovalModalPanel: {
+    gap: 14,
+    maxHeight: Math.min(APP_WINDOW_HEIGHT * 0.82, 620),
+    maxWidth: 430,
+    width: '100%',
+  },
+  adminClassApprovalModalTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  adminClassApprovalModalScroll: {
+    maxHeight: Math.min(APP_WINDOW_HEIGHT * 0.56, 420),
+  },
+  adminClassApprovalModalList: {
+    gap: 10,
+    paddingBottom: 2,
+  },
+  adminClassApprovalModalCard: {
+    gap: 11,
+    borderColor: '#FFE1B1',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFDF6',
+    padding: 12,
+  },
+  adminClassApprovalModalActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  adminClassApprovalModalAction: {
+    alignSelf: 'stretch',
+    flex: 1,
+    justifyContent: 'center',
+  },
+  adminClassTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    borderColor: '#E5E8EF',
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 3,
+  },
+  adminClassTab: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 39,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+  },
+  adminClassTabActive: {
+    backgroundColor: STUDOS_THEME.ink,
+  },
+  adminClassTabText: {
+    color: '#65748B',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  adminClassTabTextActive: {
+    color: '#FFFFFF',
+  },
+  adminClassPanel: {
+    gap: 13,
+    borderColor: '#DDD6C7',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+  },
+  adminClassMembersPanel: {
+    flex: 1,
+    gap: 0,
+    minHeight: 0,
+    overflow: 'hidden',
+    padding: 0,
+  },
+  adminClassMembersScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  adminClassMembersList: {
+    gap: 13,
+    padding: 14,
+    paddingBottom: 14,
+  },
+  adminClassAccordionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 32,
+  },
+  adminClassAccordionIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 30,
+    height: 30,
+    borderColor: '#E5E8EF',
+    borderRadius: 15,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+  },
+  adminClassAccordionBody: {
+    gap: 13,
+    borderTopColor: '#F0E9DD',
+    borderTopWidth: 1,
+    paddingTop: 13,
+  },
+  adminClassRoleSelectButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 28,
+    maxWidth: 132,
+    borderColor: '#D6DEEA',
+    borderRadius: 14,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 9,
+  },
+  adminClassRoleSelectOwner: {
+    borderColor: '#F6D36D',
+    backgroundColor: '#FFF4D8',
+  },
+  adminClassRoleSelectModerator: {
+    borderColor: '#BCE8D8',
+    backgroundColor: '#EAF8F2',
+  },
+  adminClassRoleSelectStudent: {
+    borderColor: '#CFE0FF',
+    backgroundColor: '#EEF6FF',
+  },
+  adminClassRoleSelectText: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassRoleSelectTextOwner: {
+    color: '#8A650A',
+  },
+  adminClassRoleDropdown: {
+    gap: 9,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+  },
+  adminClassRoleDropdownOptions: {
+    gap: 6,
+  },
+  adminClassRoleDropdownOption: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    minHeight: 38,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+  },
+  adminClassRoleDropdownOptionSelected: {
+    borderColor: STUDOS_THEME.green,
+    backgroundColor: '#EEFBEF',
+  },
+  adminClassRoleDropdownOptionText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassRoleDropdownOptionTextSelected: {
+    color: '#176C55',
+  },
+  adminClassRoleSaveButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 7,
+    minHeight: 42,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.green,
+    paddingHorizontal: 12,
+  },
+  adminClassRoleSaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassControlDisabled: {
+    opacity: 0.48,
+  },
+  adminClassSaveAction: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 48,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.green,
+    paddingHorizontal: 14,
+  },
+  adminClassSaveActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassJoinOptions: {
+    gap: 9,
+  },
+  adminClassJoinOption: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 62,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 11,
+  },
+  adminClassJoinOptionActive: {
+    borderColor: STUDOS_THEME.green,
+    backgroundColor: '#EEFBEF',
+  },
+  adminClassJoinRadio: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 20,
+    height: 20,
+    borderColor: '#B8C3D4',
+    borderRadius: 10,
+    borderWidth: 2,
+    backgroundColor: '#FFFFFF',
+    marginTop: 1,
+  },
+  adminClassJoinRadioActive: {
+    borderColor: STUDOS_THEME.green,
+  },
+  adminClassJoinRadioDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: STUDOS_THEME.green,
+  },
+  adminClassJoinCopy: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
+  },
+  adminClassJoinTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassJoinTitleActive: {
+    color: '#176C55',
+  },
+  adminClassJoinDescription: {
+    color: '#65748B',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 17,
+  },
+  adminClassMemberCard: {
+    gap: 11,
+    borderColor: '#E5E8EF',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F7FAFA',
+    padding: 12,
+  },
+  adminClassMemberHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  adminClassMemberCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  adminClassMemberNameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minWidth: 0,
+  },
+  adminClassMemberName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassMemberNameInline: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  adminClassMemberMeta: {
+    color: '#65748B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  adminClassApproveButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 36,
+    borderRadius: 8,
+    backgroundColor: STUDOS_THEME.green,
+    paddingHorizontal: 11,
+  },
+  adminClassApproveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminClassRemoveButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 36,
+    borderColor: '#FFD0D2',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF2F2',
+    paddingHorizontal: 10,
+  },
+  adminClassRemoveButtonText: {
+    color: STUDOS_THEME.red,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportSummaryGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  adminReportSummaryTile: {
+    flex: 1,
+    gap: 2,
+    borderColor: '#E6D9B5',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF9E8',
+    padding: 12,
+  },
+  adminReportSummaryTileActive: {
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: STUDOS_THEME.red,
+    shadowColor: STUDOS_THEME.red,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  adminReportSummaryTilePressed: {
+    transform: [{ scale: 0.985 }],
+  },
+  adminReportSummaryValue: {
+    color: STUDOS_THEME.ink,
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportSummaryValueActive: {
+    color: '#FFFFFF',
+  },
+  adminReportSummaryLabel: {
+    color: '#7A6740',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportSummaryLabelActive: {
+    color: '#FFFFFF',
+  },
+  adminReportsLoader: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 18,
+  },
+  adminReportList: {
+    gap: 12,
+  },
+  adminReportCard: {
+    gap: 12,
+    borderColor: '#DDD6C7',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+  },
+  adminReportCardHandled: {
+    backgroundColor: '#F8FAFC',
+  },
+  adminReportCompactCard: {
+    gap: 9,
+    borderColor: '#DDD6C7',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+  },
+  adminReportCompactCardPressed: {
+    transform: [{ scale: 0.992 }],
+    borderColor: 'rgba(255, 111, 115, 0.42)',
+    backgroundColor: '#FFFDFB',
+  },
+  adminReportHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  adminReportTargetPill: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 30,
+    maxWidth: '62%',
+    borderRadius: 15,
+    backgroundColor: '#EEF6FF',
+    paddingHorizontal: 10,
+  },
+  adminReportTargetText: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportStatusPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 30,
+    borderRadius: 15,
+    paddingHorizontal: 10,
+  },
+  adminReportStatusPending: {
+    backgroundColor: '#FFF4D8',
+  },
+  adminReportStatusDone: {
+    backgroundColor: '#EAF8F2',
+  },
+  adminReportStatusDanger: {
+    backgroundColor: '#FFE8E8',
+  },
+  adminReportStatusText: {
+    color: '#176C55',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportStatusTextPending: {
+    color: '#8A650A',
+  },
+  adminReportStatusTextDanger: {
+    color: '#BD2F23',
+  },
+  adminReportMainCopy: {
+    gap: 4,
+  },
+  adminReportReason: {
+    color: STUDOS_THEME.ink,
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 22,
+  },
+  adminReportMeta: {
+    color: '#65748B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  adminReportDetails: {
+    color: '#48566D',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    marginTop: 4,
+  },
+  adminReportCompactBodyRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 42,
+  },
+  adminReportCompactCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  adminReportCompactTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportCompactMeta: {
+    color: '#65748B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  adminReportOpenIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F3F6FA',
+  },
+  adminReportCompactSnippet: {
+    color: '#42506A',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  adminReportCompactFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderTopColor: '#F0E9DD',
+    borderTopWidth: 1,
+    paddingTop: 8,
+  },
+  adminReportPreviewButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 34,
+    borderColor: '#D6DEEA',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    marginTop: 6,
+    paddingHorizontal: 10,
+  },
+  adminReportPreviewButtonText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportInlinePreview: {
+    gap: 7,
+    borderColor: '#FFE0E0',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF7F7',
+    marginTop: 8,
+    padding: 10,
+  },
+  adminReportInlinePreviewHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  adminReportInlinePreviewTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    flex: 1,
+    minWidth: 0,
+  },
+  adminReportInlinePreviewTitle: {
+    color: STUDOS_THEME.ink,
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportInlinePreviewLink: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 28,
+    borderColor: '#FFD0D2',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+  },
+  adminReportInlinePreviewLinkText: {
+    color: STUDOS_THEME.red,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportInlinePreviewBody: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  adminReportInlinePreviewMeta: {
+    color: '#65748B',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  adminReportModalOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(23, 33, 67, 0.48)',
+    padding: 20,
+  },
+  adminReportModalCard: {
+    width: '100%',
+    maxWidth: 430,
+    maxHeight: '86%',
+    gap: 14,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+  },
+  adminReportModalHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  adminReportModalTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  adminReportModalTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportModalScroll: {
+    flexShrink: 1,
+    maxHeight: Math.min(APP_WINDOW_HEIGHT * 0.56, 430),
+    minHeight: 0,
+  },
+  adminReportModalContent: {
+    gap: 12,
+    paddingBottom: 2,
+  },
+  adminReportModalStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  adminReportModalClose: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 38,
+    height: 38,
+    borderColor: '#D6DEEA',
+    borderRadius: 19,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  adminReportMessagePreview: {
+    gap: 10,
+    borderColor: '#FFE0E0',
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#FFF7F7',
+    padding: 12,
+  },
+  adminReportMessageSenderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  adminReportMessageBody: {
+    color: STUDOS_THEME.ink,
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 21,
+  },
+  adminReportMessageMeta: {
+    color: '#65748B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  adminReportModalReportBox: {
+    gap: 5,
+    borderTopColor: '#ECE5D8',
+    borderTopWidth: 1,
+    paddingTop: 12,
+  },
+  adminReportPeopleGrid: {
+    gap: 8,
+  },
+  adminReportPersonRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 46,
+    borderRadius: 8,
+    backgroundColor: '#F7FAFA',
+    paddingHorizontal: 10,
+  },
+  adminReportPersonIcon: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EAF3FF',
+  },
+  adminReportPersonIconDanger: {
+    backgroundColor: '#FFF0F0',
+  },
+  adminReportPersonCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  adminReportPersonLabel: {
+    color: '#65748B',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportPersonName: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportStrikeRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderTopColor: '#ECE5D8',
+    borderTopWidth: 1,
+    paddingTop: 10,
+  },
+  adminReportStrikeText: {
+    color: '#48566D',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportStrikeDots: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  adminReportStrikeDot: {
+    width: 13,
+    height: 13,
+    borderColor: '#D9DFE8',
+    borderRadius: 7,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  adminReportStrikeDotActive: {
+    borderColor: STUDOS_THEME.red,
+    backgroundColor: STUDOS_THEME.red,
+  },
+  adminReportActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  adminReportActionButton: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 44,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+  },
+  adminReportActionSecondary: {
+    borderColor: '#D6DEEA',
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  adminReportActionStrike: {
+    backgroundColor: STUDOS_THEME.red,
+  },
+  adminReportActionDisabled: {
+    opacity: 0.52,
+  },
+  adminReportActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  adminReportActionTextSecondary: {
+    color: STUDOS_THEME.ink,
+  },
   settingsNotificationHeader: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -31120,6 +34811,78 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     lineHeight: 16,
+  },
+  settingsNotificationPrefsPanel: {
+    gap: 12,
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: Math.min(APP_WINDOW_HEIGHT * 0.78, 660),
+  },
+  settingsNotificationPrefsHeaderCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  settingsNotificationPrefsScroll: {
+    maxHeight: Math.min(APP_WINDOW_HEIGHT * 0.52, 430),
+  },
+  settingsNotificationPrefsList: {
+    gap: 10,
+    paddingBottom: 2,
+  },
+  settingsHelpTextRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    minWidth: 0,
+  },
+  settingsHelpText: {
+    flexShrink: 1,
+  },
+  settingsInlineHelpButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(23, 33, 67, 0.22)',
+    backgroundColor: '#F7FAFA',
+  },
+  settingsInlineHelpText: {
+    color: STUDOS_THEME.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 16,
+    letterSpacing: 0,
+  },
+  settingsBlockedInfoPanel: {
+    gap: 12,
+    width: '100%',
+    maxWidth: 420,
+  },
+  settingsInfoBulletList: {
+    gap: 10,
+  },
+  settingsInfoBulletRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 9,
+  },
+  settingsInfoBulletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: STUDOS_THEME.red,
+    marginTop: 7,
+  },
+  settingsInfoBulletText: {
+    color: '#42506a',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   settingsToggleRow: {
     flexDirection: 'row',
@@ -31200,6 +34963,23 @@ const styles = StyleSheet.create({
     color: STUDOS_THEME.ink,
     fontSize: 14,
     fontWeight: '800',
+    letterSpacing: 0,
+  },
+  settingsLinkRowCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  settingsLinkRowTitle: {
+    color: STUDOS_THEME.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  settingsLinkRowMeta: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '700',
     letterSpacing: 0,
   },
   settingsDangerRow: {
@@ -31658,11 +35438,40 @@ const styles = StyleSheet.create({
   accountProfilePanel: {
     alignItems: 'center',
     gap: 12,
+    alignSelf: 'stretch',
     borderColor: '#DDE8E5',
     borderRadius: 8,
     borderWidth: 1,
     backgroundColor: '#F7FAFA',
     padding: 18,
+    width: '100%',
+  },
+  accountProfileScreen: {
+    flex: 1,
+    width: '100%',
+  },
+  accountProfileContent: {
+    flexGrow: 1,
+    gap: 16,
+    paddingBottom: 4,
+    width: '100%',
+  },
+  accountProfileHeader: {
+    alignItems: 'center',
+    paddingTop: 0,
+    width: '100%',
+  },
+  accountProfileHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  accountProfileTitle: {
+    fontSize: 38,
+    lineHeight: 42,
+  },
+  accountProfileInfoPanel: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
   accountProfilePhotoPressable: {
     alignItems: 'center',
@@ -31682,11 +35491,11 @@ const styles = StyleSheet.create({
   },
   accountProfilePhotoActionBadge: {
     position: 'absolute',
-    right: 2,
-    bottom: 2,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    right: 0,
+    bottom: 0,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFF4D8',
@@ -31737,6 +35546,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: 0,
+    maxWidth: '100%',
   },
   accountProfileMeta: {
     color: '#65748b',
@@ -31788,6 +35598,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 14,
     minHeight: 30,
+    width: '100%',
   },
   detailLabel: {
     color: '#65748b',
@@ -31799,6 +35610,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 14,
     fontWeight: '900',
+    minWidth: 0,
     textAlign: 'right',
   },
   accountProfileDetailValueWrap: {
@@ -31808,6 +35620,7 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 8,
     minHeight: 30,
+    minWidth: 0,
   },
   accountProfileDetailAction: {
     alignItems: 'center',
@@ -31819,6 +35632,7 @@ const styles = StyleSheet.create({
   },
   accountProfileBottomActions: {
     gap: 10,
+    width: '100%',
   },
   accountProfileActionButtonRow: {
     alignItems: 'center',
@@ -31826,6 +35640,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     width: '100%',
+  },
+  accountProfileBottomActionButton: {
+    flex: 0,
   },
   chatTitleActions: {
     alignItems: 'flex-end',
@@ -34151,6 +37968,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  crewMemberNameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    minWidth: 0,
+  },
+  crewMemberNameText: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  crewMemberRoleBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 22,
+    borderRadius: 11,
+    paddingHorizontal: 8,
+  },
+  crewMemberRoleBadgeOwner: {
+    backgroundColor: '#FFF4D8',
+  },
+  crewMemberRoleBadgeModerator: {
+    backgroundColor: '#EAF8F2',
+  },
+  crewMemberRoleBadgeText: {
+    color: '#176C55',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  crewMemberRoleBadgeTextOwner: {
+    color: '#8A650A',
   },
   connectionActions: {
     flexDirection: 'row',

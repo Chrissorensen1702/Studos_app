@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Mail\MemberInvitationMail;
 use App\Models\User;
+use App\Support\PushNotifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -145,6 +146,7 @@ class ExampleTest extends TestCase
         $inviteId = 'delete-invite-1';
         $reportId = 'delete-report-1';
         $violationId = 'delete-violation-1';
+        $strikeId = 'delete-strike-1';
         $pushTokenId = 'delete-push-token';
 
         $this->createActiveDemoMember($memberId, 'Delete Me', 'delete.me@example.test');
@@ -194,6 +196,19 @@ class ExampleTest extends TestCase
             'updated_at' => now(),
         ]);
 
+        DB::table('member_strikes')->insert([
+            'id' => $strikeId,
+            'member_id' => $memberId,
+            'class_id' => 'demo-class',
+            'issued_by_member_id' => $inviteTargetId,
+            'report_id' => $reportId,
+            'reason' => 'Test strike',
+            'strike_number' => 1,
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
         DB::table('member_push_tokens')->insert([
             'id' => $pushTokenId,
             'member_id' => $memberId,
@@ -239,6 +254,7 @@ class ExampleTest extends TestCase
         $this->assertNull(DB::table('member_reports')->where('id', $reportId)->value('reporter_member_id'));
         $this->assertNull(DB::table('member_reports')->where('id', $reportId)->value('reported_member_id'));
         $this->assertNull(DB::table('moderation_violations')->where('id', $violationId)->value('member_id'));
+        $this->assertNull(DB::table('member_strikes')->where('id', $strikeId)->value('member_id'));
     }
 
     public function test_class_battle_ranks_classes_by_caps_per_active_member(): void
@@ -825,6 +841,144 @@ class ExampleTest extends TestCase
         $this->assertDatabaseMissing('events', ['id' => $eventId]);
         $this->assertDatabaseMissing('event_invites', ['event_id' => $eventId]);
         $this->assertDatabaseMissing('event_rsvps', ['event_id' => $eventId]);
+    }
+
+    public function test_class_admins_can_review_reports_and_issue_strikes(): void
+    {
+        $this->createActiveDemoMember('reporter-student', 'Reporter Student', 'reporter.student@example.test');
+        $this->createActiveDemoMember('strike-target', 'Strike Target', 'strike.target@example.test');
+
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+        $studentToken = $this->issueTestMemberToken('reporter-student');
+        $targetToken = $this->issueTestMemberToken('strike-target');
+        $now = now()->format('Y-m-d H:i:s');
+
+        DB::table('chat_conversations')->insert([
+            'id' => 'admin-report-chat',
+            'class_id' => 'demo-class',
+            'type' => 'direct',
+            'title' => null,
+            'direct_pair_key' => 'reporter-student:strike-target',
+            'owner_member_id' => null,
+            'created_by_member_id' => 'reporter-student',
+            'status' => 'active',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        DB::table('chat_messages')->insert([
+            'id' => 'reported-message-1',
+            'conversation_id' => 'admin-report-chat',
+            'sender_member_id' => 'strike-target',
+            'type' => 'text',
+            'body' => 'Det her er den anmeldte besked.',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        DB::table('member_reports')->insert([
+            'id' => 'admin-report-1',
+            'reporter_member_id' => 'reporter-student',
+            'reported_member_id' => 'strike-target',
+            'target_type' => 'chat_message',
+            'target_id' => 'reported-message-1',
+            'reason' => 'Ubehagelig besked',
+            'details' => 'Beskeden skal vurderes.',
+            'status' => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$studentToken)
+            ->getJson('/api/admin/reports')
+            ->assertStatus(403);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/admin/reports')
+            ->assertStatus(200)
+            ->assertJsonPath('reports.0.id', 'admin-report-1')
+            ->assertJsonPath('reports.0.targetLabel', 'Chatbesked')
+            ->assertJsonPath('reports.0.targetPreview.body', 'Det her er den anmeldte besked.')
+            ->assertJsonPath('reports.0.targetPreview.sender.displayName', 'Strike Target')
+            ->assertJsonPath('reports.0.status', 'pending')
+            ->assertJsonPath('reports.0.reportedMember.displayName', 'Strike Target')
+            ->assertJsonPath('reports.0.strikeCount', 0);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/admin/reports/admin-report-1/strike', [
+                'reason' => 'Første strike',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('report.status', 'struck')
+            ->assertJsonPath('report.strikeCount', 1)
+            ->assertJsonPath('report.isExcluded', false);
+
+        $this->assertDatabaseHas('member_reports', [
+            'id' => 'admin-report-1',
+            'status' => 'struck',
+            'resolution' => 'strike',
+            'reviewed_by_member_id' => 'demo-owner',
+        ]);
+        $this->assertDatabaseHas('member_strikes', [
+            'member_id' => 'strike-target',
+            'issued_by_member_id' => 'demo-owner',
+            'report_id' => 'admin-report-1',
+            'strike_number' => 1,
+            'status' => 'active',
+        ]);
+
+        $firstStrikeId = DB::table('member_strikes')
+            ->where('member_id', 'strike-target')
+            ->where('report_id', 'admin-report-1')
+            ->value('id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$targetToken)
+            ->getJson('/api/session/me')
+            ->assertStatus(200)
+            ->assertJsonPath('session.strikeWarnings.0.id', $firstStrikeId)
+            ->assertJsonPath('session.strikeWarnings.0.strikeNumber', 1)
+            ->assertJsonPath('session.strikeWarnings.0.strikeLimit', 3)
+            ->assertJsonPath('session.strikeWarnings.0.reason', 'Første strike');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$targetToken)
+            ->postJson('/api/members/me/strikes/'.$firstStrikeId.'/acknowledge')
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true)
+            ->assertJsonCount(0, 'strikeWarnings');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$targetToken)
+            ->getJson('/api/session/me')
+            ->assertStatus(200)
+            ->assertJsonCount(0, 'session.strikeWarnings');
+
+        foreach (['admin-report-2', 'admin-report-3'] as $index => $reportId) {
+            DB::table('member_reports')->insert([
+                'id' => $reportId,
+                'reporter_member_id' => 'reporter-student',
+                'reported_member_id' => 'strike-target',
+                'target_type' => 'gallery_photo',
+                'target_id' => 'reported-photo-'.$index,
+                'reason' => 'Gentagen rapportering',
+                'status' => 'pending',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $this
+                ->withHeader('Authorization', 'Bearer '.$ownerToken)
+                ->postJson('/api/admin/reports/'.$reportId.'/strike')
+                ->assertStatus(200)
+                ->assertJsonPath('report.status', 'struck');
+        }
+
+        $this->assertSame(3, DB::table('member_strikes')->where('member_id', 'strike-target')->count());
+        $this->assertSame('removed', DB::table('members')->where('id', 'strike-target')->value('status'));
     }
 
     public function test_authenticated_member_can_register_push_tokens(): void
@@ -2303,6 +2457,60 @@ class ExampleTest extends TestCase
         $this->assertTrue(Hash::check('hemmeligt123', $passwordHash));
     }
 
+    public function test_closed_class_code_lookup_returns_closed_access_message(): void
+    {
+        DB::table('classes')->where('id', 'demo-class')->update([
+            'join_policy' => 'closed',
+        ]);
+
+        $this->getJson('/api/classes/invite/STU-DEMO26')
+            ->assertStatus(403)
+            ->assertJsonPath('message', 'Klassens adgang er lukket');
+    }
+
+    public function test_pending_invited_member_stays_pending_after_profile_completion(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        DB::table('members')->insert([
+            'id' => 'pending-placeholder-member',
+            'personal_code' => 'MARIA-PENDING',
+            'class_id' => 'demo-class',
+            'school_id' => $schoolId,
+            'display_name' => 'Maria Pending',
+            'first_name' => 'Maria',
+            'last_name' => 'Pending',
+            'email' => 'maria.pending@example.test',
+            'role' => 'student',
+            'status' => 'pending',
+            'joined_at' => now(),
+        ]);
+
+        $this->postJson('/api/classes/join', [
+            'inviteCode' => 'STU-DEMO26',
+            'schoolId' => $schoolId,
+            'firstName' => 'Maria',
+            'lastName' => 'Pending',
+            'email' => 'maria.pending@example.test',
+            'birthday' => '2007-05-14',
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('session.member.status', 'pending');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'pending-placeholder-member',
+            'email' => 'maria.pending@example.test',
+            'status' => 'pending',
+        ]);
+
+        $passwordHash = DB::table('members')->where('id', 'pending-placeholder-member')->value('password_hash');
+        $this->assertTrue(Hash::check('hemmeligt123', $passwordHash));
+    }
+
     public function test_join_rejects_email_already_used_in_another_class(): void
     {
         $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
@@ -2519,7 +2727,7 @@ class ExampleTest extends TestCase
         $this->assertStringNotContainsString('name="inviteCode"', $html);
         $this->assertStringNotContainsString('overview-identity-pills', $html);
         $this->assertStringContainsString('STU-DEMO26', $html);
-        $this->assertStringContainsString('KlasseID', $html);
+        $this->assertStringNotContainsString('KlasseID', $html);
 
         $this->from('/admin/classes/demo-class')
             ->patch('/admin/classes/demo-class/settings', [
@@ -2864,6 +3072,266 @@ class ExampleTest extends TestCase
         ])
             ->assertStatus(200)
             ->assertJsonPath('member.role', 'moderator');
+    }
+
+    public function test_owner_can_update_class_name_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->patchJson('/api/classes/demo-class/settings', [
+            'className' => '3.Z',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.className', '3.Z');
+
+        $this->assertDatabaseHas('classes', [
+            'id' => 'demo-class',
+            'class_name' => '3.Z',
+        ]);
+    }
+
+    public function test_owner_can_update_class_join_policy_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->patchJson('/api/classes/demo-class/settings', [
+            'joinPolicy' => 'closed',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.settings.joinPolicy', 'closed');
+
+        $this->assertDatabaseHas('classes', [
+            'id' => 'demo-class',
+            'join_policy' => 'closed',
+        ]);
+    }
+
+    public function test_owner_can_update_class_graduation_date_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->patchJson('/api/classes/demo-class/settings', [
+            'graduationDate' => '2026-06-28',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('class.graduationDate', '2026-06-28');
+
+        $this->assertDatabaseHas('classes', [
+            'id' => 'demo-class',
+            'graduation_date' => '2026-06-28',
+        ]);
+    }
+
+    public function test_moderator_cannot_update_class_name_from_api(): void
+    {
+        $this->createActiveDemoMember('api-class-settings-moderator', 'API Class Moderator', 'api-class-settings-moderator@example.test');
+        DB::table('members')->where('id', 'api-class-settings-moderator')->update(['role' => 'moderator']);
+
+        $moderatorToken = $this->issueTestMemberToken('api-class-settings-moderator');
+
+        $this->patchJson('/api/classes/demo-class/settings', [
+            'className' => '3.X',
+        ], [
+            'Authorization' => 'Bearer '.$moderatorToken,
+        ])->assertForbidden();
+
+        $this->assertDatabaseMissing('classes', [
+            'id' => 'demo-class',
+            'class_name' => '3.X',
+        ]);
+    }
+
+    public function test_owner_can_send_class_announcement_push_from_api(): void
+    {
+        $this->createActiveDemoMember('api-class-announcement-member', 'API Announcement', 'api.announcement@example.test');
+
+        $pushToken = 'ExpoPushToken['.Str::random(32).']';
+        DB::table('member_push_tokens')->insert([
+            'id' => (string) Str::uuid(),
+            'member_id' => 'api-class-announcement-member',
+            'expo_push_token' => $pushToken,
+            'platform' => 'ios',
+            'device_name' => 'iPhone Test',
+            'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+            'app_variant' => 'development',
+            'native_application_version' => '0.0.1',
+            'native_build_version' => '1',
+            'last_registered_at' => now(),
+            'disabled_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        Http::fake([
+            'https://exp.host/--/api/v2/push/send' => Http::response([
+                'data' => [
+                    ['status' => 'ok'],
+                ],
+            ]),
+        ]);
+
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $response = $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/classes/demo-class/announcements', [
+                'title' => 'Vigtig klassebesked',
+                'body' => 'Husk fællesmøde i morgen.',
+            ]);
+
+        $response
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('sent', 1)
+            ->assertJsonPath('message', 'Klassebeskeden er sendt.');
+        $this->assertGreaterThanOrEqual(1, $response->json('recipientCount'));
+
+        Http::assertSent(function ($request) use ($pushToken): bool {
+            $messages = collect($request->data());
+            $message = $messages->firstWhere('to', $pushToken);
+
+            return $request->url() === 'https://exp.host/--/api/v2/push/send'
+                && $message
+                && ($message['title'] ?? '') === 'Vigtig klassebesked'
+                && ($message['body'] ?? '') === 'Husk fællesmøde i morgen.'
+                && ($message['data']['type'] ?? '') === PushNotifier::CAT_CLASS_ANNOUNCEMENT
+                && ($message['data']['screen'] ?? '') === 'overview';
+        });
+        $this->assertDatabaseHas('notification_dispatch_log', [
+            'member_id' => 'api-class-announcement-member',
+            'category' => PushNotifier::CAT_CLASS_ANNOUNCEMENT,
+            'source_type' => 'class_announcement',
+        ]);
+    }
+
+    public function test_moderator_cannot_send_class_announcement_from_api(): void
+    {
+        $this->createActiveDemoMember('api-class-announcement-moderator', 'API Announcement Moderator', 'api.announcement.moderator@example.test');
+        DB::table('members')->where('id', 'api-class-announcement-moderator')->update(['role' => 'moderator']);
+
+        $moderatorToken = $this->issueTestMemberToken('api-class-announcement-moderator');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$moderatorToken)
+            ->postJson('/api/classes/demo-class/announcements', [
+                'title' => 'Vigtig klassebesked',
+                'body' => 'Husk fællesmøde i morgen.',
+            ])
+            ->assertForbidden();
+    }
+
+    public function test_owner_can_invite_pending_class_member_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->postJson('/api/classes/demo-class/members/invite', [
+            'email' => 'api.invited@example.test',
+            'role' => 'moderator',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('member.role', 'moderator')
+            ->assertJsonPath('member.status', 'pending');
+
+        $this->assertDatabaseHas('members', [
+            'class_id' => 'demo-class',
+            'email' => 'api.invited@example.test',
+            'role' => 'moderator',
+            'status' => 'pending',
+        ]);
+        $this->assertNull(DB::table('members')->where('email', 'api.invited@example.test')->value('password_hash'));
+    }
+
+    public function test_owner_can_approve_pending_class_member_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $inviteResponse = $this->postJson('/api/classes/demo-class/members/invite', [
+            'email' => 'api.pending.approve@example.test',
+            'role' => 'student',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])->assertCreated();
+
+        $memberId = $inviteResponse->json('member.id');
+
+        $this->postJson("/api/classes/demo-class/members/{$memberId}/access", [
+            'status' => 'active',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('member.status', 'active');
+
+        $this->assertDatabaseHas('members', [
+            'id' => $memberId,
+            'status' => 'active',
+        ]);
+    }
+
+    public function test_owner_role_transfer_demotes_previous_owner(): void
+    {
+        $this->createActiveDemoMember('api-new-owner', 'API New Owner', 'api-new-owner@example.test');
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->postJson('/api/classes/demo-class/members/api-new-owner/access', [
+            'role' => 'owner',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])
+            ->assertStatus(200)
+            ->assertJsonPath('member.role', 'owner');
+
+        $this->assertDatabaseHas('members', [
+            'id' => 'api-new-owner',
+            'role' => 'owner',
+        ]);
+        $this->assertDatabaseHas('members', [
+            'id' => 'demo-owner',
+            'role' => 'moderator',
+        ]);
+        $this->assertSame(1, DB::table('members')->where('class_id', 'demo-class')->where('role', 'owner')->count());
+    }
+
+    public function test_owner_cannot_invite_pending_class_owner_from_api(): void
+    {
+        $ownerToken = $this->issueTestMemberToken('demo-owner');
+
+        $this->postJson('/api/classes/demo-class/members/invite', [
+            'email' => 'api.pending-owner@example.test',
+            'role' => 'owner',
+        ], [
+            'Authorization' => 'Bearer '.$ownerToken,
+        ])->assertUnprocessable();
+
+        $this->assertDatabaseMissing('members', [
+            'email' => 'api.pending-owner@example.test',
+        ]);
+    }
+
+    public function test_moderator_cannot_invite_class_member_from_api(): void
+    {
+        $this->createActiveDemoMember('api-invite-moderator', 'API Invite Moderator', 'api-invite-moderator@example.test');
+        DB::table('members')->where('id', 'api-invite-moderator')->update(['role' => 'moderator']);
+
+        $moderatorToken = $this->issueTestMemberToken('api-invite-moderator');
+
+        $this->postJson('/api/classes/demo-class/members/invite', [
+            'email' => 'api.denied@example.test',
+            'role' => 'student',
+        ], [
+            'Authorization' => 'Bearer '.$moderatorToken,
+        ])->assertForbidden();
+
+        $this->assertDatabaseMissing('members', [
+            'email' => 'api.denied@example.test',
+        ]);
     }
 
     public function test_public_create_class_creates_user_and_owner(): void

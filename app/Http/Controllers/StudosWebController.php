@@ -19,9 +19,9 @@ use Illuminate\Validation\Rule;
 class StudosWebController extends Controller
 {
     private const ROLES = [
-        'owner' => 'Owner',
+        'owner' => 'Klasseejer',
         'moderator' => 'Moderator',
-        'student' => 'Student',
+        'student' => 'Elev',
     ];
 
     private const STATUSES = [
@@ -167,7 +167,7 @@ class StudosWebController extends Controller
 
         return redirect()
             ->route('classes.show', $classId)
-            ->with('status', 'Klassen er oprettet, og du er owner.');
+            ->with('status', 'Klassen er oprettet, og du er klasseejer.');
     }
 
     public function storeClassWithUser(Request $request): RedirectResponse
@@ -220,7 +220,7 @@ class StudosWebController extends Controller
 
         return redirect()
             ->route('classes.show', $classId)
-            ->with('status', 'Din bruger og klasse er oprettet. Du er owner.');
+            ->with('status', 'Din bruger og klasse er oprettet. Du er klasseejer.');
     }
 
     public function redirectLegacyClass(string $class): RedirectResponse
@@ -364,6 +364,12 @@ class StudosWebController extends Controller
             'emergencyContactPhone' => ['nullable', 'string', 'max:40'],
         ]);
 
+        if ($data['role'] === 'owner') {
+            return back()
+                ->withErrors(['role' => 'Klasseejer kan kun overdrages til et aktivt medlem.'])
+                ->withInput();
+        }
+
         $displayName = trim($data['displayName']);
         $email = Str::lower(trim($data['email']));
         $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
@@ -454,14 +460,28 @@ class StudosWebController extends Controller
         $nextRole = $data['role'] ?? $current->role;
         $nextStatus = $data['status'] ?? $current->status;
 
-        if ($this->wouldRemoveLastOwner($current, $nextRole, $nextStatus)) {
-            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv owner.']);
+        if ($nextRole === 'owner' && $nextStatus !== 'active') {
+            return back()->withErrors(['member' => 'Klasseejer skal være aktiv.']);
         }
 
-        DB::table('members')->where('id', $member)->update([
-            'role' => $nextRole,
-            'status' => $nextStatus,
-        ]);
+        if ($this->wouldRemoveLastOwner($current, $nextRole, $nextStatus)) {
+            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv klasseejer.']);
+        }
+
+        DB::transaction(function () use ($class, $member, $nextRole, $nextStatus): void {
+            if ($nextRole === 'owner') {
+                DB::table('members')
+                    ->where('class_id', $class)
+                    ->where('id', '!=', $member)
+                    ->where('role', 'owner')
+                    ->update(['role' => 'moderator']);
+            }
+
+            DB::table('members')->where('id', $member)->update([
+                'role' => $nextRole,
+                'status' => $nextStatus,
+            ]);
+        });
 
         return back()->with('status', 'Medlemsadgangen er opdateret.');
     }
@@ -473,7 +493,7 @@ class StudosWebController extends Controller
         $current = $this->memberForClass($class, $member);
 
         if ($this->wouldRemoveLastOwner($current, $current->role, 'removed')) {
-            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv owner.']);
+            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv klasseejer.']);
         }
 
         DB::table('members')->where('id', $member)->update(['status' => 'removed']);
@@ -511,7 +531,7 @@ class StudosWebController extends Controller
             ->count();
 
         if ($selectedActiveOwnerCount > 0 && $activeOwnerCount - $selectedActiveOwnerCount < 1) {
-            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv owner.']);
+            return back()->withErrors(['member' => 'Klassen skal have mindst en aktiv klasseejer.']);
         }
 
         DB::table('members')
