@@ -34,7 +34,6 @@ import * as SecureStore from 'expo-secure-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SESSION_STORAGE_KEY = 'studos.session.v1';
-const PUSH_AUTO_REQUEST_STORAGE_KEY = 'studos.pushAutoRequest.v1';
 const PUSH_MANUAL_DISABLED_STORAGE_KEY = 'studos.pushManualDisabled.v1';
 const OVERVIEW_CLIPS_STORAGE_KEY = 'studos.overviewClips.v1';
 const EARN_CAPS_CHECKIN_STORAGE_KEY = 'studos.earnCapsCheckIn.v1';
@@ -118,12 +117,48 @@ const OVERVIEW_HEADER_FEATHER_STOPS = Array.from({ length: 40 }, (_, index) => {
   };
 });
 const OVERVIEW_CLIP_COUNTERS = [
-  { id: 'home', icon: 'home', value: '12' },
-  { id: 'wave', icon: 'water', value: '8' },
-  { id: 'bolt', icon: 'flash', value: '4' },
-  { id: 'heart', icon: 'heart', value: '21' },
-  { id: 'square', icon: 'square', value: '6' },
-  { id: 'triangle', icon: 'triangle', value: '3' },
+  {
+    id: 'home',
+    icon: 'home',
+    value: '12',
+    title: 'Huset i svedbåndet',
+    body: 'Huset i svedbåndet er en kombination af firkanten og trekanten. Man må nemlig klippe huset, hvis man har drukket en hel kasse øl (eller genstande svarende til) på under 25 timer, og herefter har set solopgangen.',
+  },
+  {
+    id: 'wave',
+    icon: 'water',
+    value: '8',
+    title: 'Bølgen i svedbåndet',
+    body: 'Er man hoppet i vandet kun iført studenterhuen, så må du klippe et lille bølgetegn.',
+  },
+  {
+    id: 'bolt',
+    icon: 'flash',
+    value: '4',
+    title: 'Lynet i svedbåndet',
+    body: 'Knalder man med en og er man iført sin studenterhue, så må man klippe et lyn i svedbåndet',
+  },
+  {
+    id: 'heart',
+    icon: 'heart',
+    value: '21',
+    title: 'Hjerte i svedbåndet',
+    body: 'Er det kæresten man har knaldet, så er det dog et hjerte, som man må klippe i studenterhuens svedbånd.',
+  },
+  {
+    id: 'square',
+    icon: 'square',
+    value: '6',
+    title: 'Firkant i svedbåndet',
+    body: 'Har du drukket en hel kasse øl - eller genstande svarende til en kasse øl - på under 24 timer?',
+  },
+  {
+    id: 'triangle',
+    icon: 'triangle',
+    value: '3',
+    title: 'Trekanten i svedbåndet',
+    body: 'Når man har festet hele natten indtil solopgang, så må du klippe en trekant i studenterhuens svedbånd!',
+  },
 ];
 const OVERVIEW_STUDOS_BOTTOM_WAVE_CURVES = Array.from({ length: 10 }, (_, index) => index);
 const BrowserSessionStore = {
@@ -192,6 +227,7 @@ const loadNativeExpoModule = (moduleName) => {
 const loadNotificationsModule = () => loadNativeExpoModule('expo-notifications');
 const loadDeviceModule = () => loadNativeExpoModule('expo-device');
 const loadConstantsModule = () => loadNativeExpoModule('expo-constants');
+const isTerminalPushPermissionStatus = (status) => status === 'granted' || status === 'denied';
 
 const configureNotificationHandler = (notifications) => {
   if (!notifications || pushNotificationHandlerConfigured) {
@@ -321,11 +357,19 @@ function useScaleAnim(scaleDown = 0.97) {
 
 function ChatConversationRow({ conversation, isMemberOnline, lastMessagePreview, lastMessageTime, onLongPress, onPress, otherMember }) {
   const { scale, onPressIn, onPressOut } = useScaleAnim(0.97);
+  const muted = isConversationMuted(conversation);
+  const accessibilityParts = [
+    conversation.title,
+    muted ? 'Notifikationer slået fra' : null,
+    conversation.unreadCount > 0 ? `${conversation.unreadCount} ulæste beskeder` : null,
+    lastMessagePreview,
+  ].filter(Boolean);
 
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <Pressable
         accessibilityHint="Hold inde for chatindstillinger"
+        accessibilityLabel={accessibilityParts.join('. ')}
         accessibilityRole="button"
         delayLongPress={280}
         onLongPress={onLongPress}
@@ -355,12 +399,19 @@ function ChatConversationRow({ conversation, isMemberOnline, lastMessagePreview,
               />
             )}
             <View style={styles.chatConversationCopy}>
-              <Text
-                numberOfLines={1}
-                style={[styles.chatConversationTitle, conversation.unreadCount > 0 ? styles.chatConversationTitleUnread : null]}
-              >
-                {conversation.title}
-              </Text>
+              <View style={styles.chatConversationTitleRow}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.chatConversationTitle, conversation.unreadCount > 0 ? styles.chatConversationTitleUnread : null]}
+                >
+                  {conversation.title}
+                </Text>
+                {muted ? (
+                  <View style={styles.chatConversationMutedBadge}>
+                    <Ionicons name="notifications-off" size={14} color={STUDOS_THEME.ink} />
+                  </View>
+                ) : null}
+              </View>
               <View style={styles.chatConversationPreviewRow}>
                 <Text numberOfLines={1} style={styles.chatConversationPreview}>{lastMessagePreview}</Text>
                 {lastMessageTime ? (
@@ -575,10 +626,8 @@ const localApiBaseUrlFromHost = (rawHost) => {
 };
 
 const WEB_PUBLIC_BASE_URL = createWebPublicBaseUrl();
-const CREATE_CLASS_URL =
-  readNonEmptyEnv(process.env.EXPO_PUBLIC_CREATE_CLASS_URL)
-  ?? (WEB_PUBLIC_BASE_URL ? `${WEB_PUBLIC_BASE_URL}/opret-klasse` : 'https://studos.dk/opret-klasse');
-const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'hej@studos.dk';
+const STUDOS_SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? 'chris.sorensen1702@gmail.com';
+const STUDOS_PUBLIC_WEBSITE_URL = 'https://studos.laravel.cloud';
 const STUDOS_APP_VERSION = (() => {
   try {
     return require('./app.json')?.expo?.version ?? '0.0.0';
@@ -586,15 +635,11 @@ const STUDOS_APP_VERSION = (() => {
     return '0.0.0';
   }
 })();
-const WEB_SITE_URL =
-  process.env.EXPO_PUBLIC_WEBSITE_URL
-  ?? (WEB_PUBLIC_BASE_URL
-    ? WEB_PUBLIC_BASE_URL
-    : CREATE_CLASS_URL.replace(/\/opret-klasse\/?$/, '').replace(/\/$/, ''));
-const STUDOS_TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL ?? `${WEB_SITE_URL}/brugervilkaar`;
-const STUDOS_PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL ?? `${WEB_SITE_URL}/privatlivspolitik`;
-const STUDOS_COOKIES_URL = process.env.EXPO_PUBLIC_COOKIES_URL ?? `${WEB_SITE_URL}/cookiepolitik`;
-const STUDOS_DELETE_ACCOUNT_URL = process.env.EXPO_PUBLIC_DELETE_ACCOUNT_URL ?? `${WEB_SITE_URL}/slet-konto`;
+const STUDOS_WEBSITE_URL = readNonEmptyEnv(process.env.EXPO_PUBLIC_WEBSITE_URL) ?? STUDOS_PUBLIC_WEBSITE_URL;
+const STUDOS_TERMS_URL = readNonEmptyEnv(process.env.EXPO_PUBLIC_TERMS_URL) ?? `${STUDOS_WEBSITE_URL}/brugervilkaar`;
+const STUDOS_PRIVACY_URL = readNonEmptyEnv(process.env.EXPO_PUBLIC_PRIVACY_URL) ?? `${STUDOS_WEBSITE_URL}/privatlivspolitik`;
+const STUDOS_COOKIES_URL = readNonEmptyEnv(process.env.EXPO_PUBLIC_COOKIES_URL) ?? `${STUDOS_WEBSITE_URL}/cookiepolitik`;
+const STUDOS_DELETE_ACCOUNT_URL = readNonEmptyEnv(process.env.EXPO_PUBLIC_DELETE_ACCOUNT_URL) ?? `${STUDOS_WEBSITE_URL}/slet-konto`;
 const EXPLICIT_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL);
 const WEB_API_BASE_URL = WEB_PUBLIC_BASE_URL ? `${normalizeApiBaseUrl(WEB_PUBLIC_BASE_URL)}/api` : null;
 const FALLBACK_CLOUD_API_BASE_URL = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_CLOUD_API_URL ?? 'https://studos.laravel.cloud/api');
@@ -644,6 +689,9 @@ const STUDOS_THEME = {
   red: '#FF6F73',
   ink: '#172143',
 };
+const MINIMUM_ACCOUNT_AGE = 16;
+const MINIMUM_ACCOUNT_AGE_MESSAGE = 'Du skal være mindst 16 år for at oprette en konto.';
+const CHAT_REACTION_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '👏', '🔥'];
 
 const studosRefreshControl = ({ offset = 0, onRefresh, refreshing }) => {
   if (typeof onRefresh !== 'function') {
@@ -756,6 +804,47 @@ const emptyProfile = {
   privacyAccepted: false,
 };
 
+const createEmptyClassForm = () => ({
+  ownerName: '',
+  ownerEmail: '',
+  ownerBirthday: '',
+  password: '',
+  passwordConfirmation: '',
+  schoolId: '',
+  className: '',
+  graduationYear: String(new Date().getFullYear()),
+  graduationDate: '',
+  joinPolicy: 'approval',
+  termsAccepted: false,
+  privacyAccepted: false,
+});
+
+const selectSearchTextVariants = (value) => {
+  const rawValue = String(value ?? '')
+    .trim()
+    .toLocaleLowerCase('da-DK')
+    .replace(/\s+/g, ' ');
+
+  if (!rawValue) {
+    return [];
+  }
+
+  const stripMarks = (text) => text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const normalizedValue = stripMarks(rawValue);
+  const danishExpanded = stripMarks(rawValue
+    .replace(/æ/g, 'ae')
+    .replace(/ø/g, 'oe')
+    .replace(/å/g, 'aa'));
+  const danishSimple = stripMarks(rawValue
+    .replace(/æ/g, 'a')
+    .replace(/ø/g, 'o')
+    .replace(/å/g, 'a'));
+
+  return Array.from(new Set([normalizedValue, danishExpanded, danishSimple]));
+};
+
 const formatDate = (value) => {
   if (!value) {
     return '';
@@ -863,6 +952,29 @@ const isValidProfileBirthday = (value) => {
     && parsedDate.getUTCFullYear() === year
     && parsedDate.getUTCMonth() + 1 === month
     && parsedDate.getUTCDate() === day;
+};
+
+const minimumAccountBirthdayValue = () => {
+  const cutoff = new Date();
+
+  cutoff.setFullYear(cutoff.getFullYear() - MINIMUM_ACCOUNT_AGE);
+
+  return formatInputDate(cutoff);
+};
+
+const isProfileBirthdayOldEnough = (value) => {
+  if (!isValidProfileBirthday(value)) {
+    return false;
+  }
+
+  const [year, month, day] = String(value).split('-').map(Number);
+  const birthday = new Date(year, month - 1, day, 12);
+  const cutoff = new Date();
+
+  cutoff.setFullYear(cutoff.getFullYear() - MINIMUM_ACCOUNT_AGE);
+  cutoff.setHours(23, 59, 59, 999);
+
+  return birthday.getTime() <= cutoff.getTime();
 };
 
 const PROFILE_ROLE_LABELS = {
@@ -1617,6 +1729,17 @@ const initialsFor = (profile) => {
   return (letters.length === 1 ? `${letters}${letters}` : letters || 'ST').toLocaleUpperCase('da-DK');
 };
 
+const inviteCodeSuffixFromInput = (value) => String(value ?? '')
+  .toLocaleUpperCase('da-DK')
+  .replace(/\s+/g, '')
+  .replace(/^STU-?/, '');
+
+const inviteCodeWithPrefix = (value) => {
+  const suffix = inviteCodeSuffixFromInput(value);
+
+  return suffix ? `STU-${suffix}` : '';
+};
+
 const createTimeoutError = () => new Error('Forbindelsen tog for lang tid.');
 const fetchWithTimeout = (url, options, timeoutMs = API_REQUEST_TIMEOUT_MS) => {
   const controller = new AbortController();
@@ -1803,6 +1926,10 @@ const registerForPushNotificationsAsync = async ({ requestPermission = true } = 
     };
   }
 
+  if (!configureNotificationHandler(notifications)) {
+    throw new Error('Notification-runtime kunne ikke startes i denne build.');
+  }
+
   if (!device.isDevice) {
     const platformName = Platform.OS === 'ios' ? 'iOS' : 'Android';
 
@@ -1816,7 +1943,13 @@ const registerForPushNotificationsAsync = async ({ requestPermission = true } = 
   let permissionStatus = existingPermission.status;
 
   if (permissionStatus !== 'granted' && requestPermission) {
-    const requestedPermission = await notifications.requestPermissionsAsync();
+    const requestedPermission = await notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
     permissionStatus = requestedPermission.status;
   }
 
@@ -1965,6 +2098,9 @@ export default function App() {
   const [profile, setProfile] = useState(emptyProfile);
   const [session, setSession] = useState(null);
   const [existingLogin, setExistingLogin] = useState({ email: '', password: '' });
+  const [createClassForm, setCreateClassForm] = useState(() => createEmptyClassForm());
+  const [schoolOptions, setSchoolOptions] = useState([]);
+  const [schoolOptionsLoading, setSchoolOptionsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [calendarFocusTarget, setCalendarFocusTarget] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1990,6 +2126,7 @@ export default function App() {
   const [topBarHeight, setTopBarHeight] = useState(APP_TOP_BAR_HEIGHT);
   const appScrollRef = useRef(null);
   const pushAutoRequestRef = useRef(false);
+  const pushAutoPromptAttemptedRef = useRef(false);
   const weeklyCheckInAutoRef = useRef('');
   const strikeWarningAlertOpenRef = useRef(false);
   const strikeWarningsAcknowledgingRef = useRef(new Set());
@@ -2221,6 +2358,10 @@ export default function App() {
         throw new Error('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
       }
 
+      if (nextBirthday && !isProfileBirthdayOldEnough(nextBirthday)) {
+        throw new Error(MINIMUM_ACCOUNT_AGE_MESSAGE);
+      }
+
       payload.birthday = nextBirthday || null;
     }
 
@@ -2420,6 +2561,29 @@ export default function App() {
   const updateExistingLogin = (key, value) => {
     setExistingLogin((current) => ({ ...current, [key]: value }));
   };
+
+  const updateCreateClassForm = (key, value) => {
+    setCreateClassForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const loadSchoolOptions = useCallback(async ({ silent = false } = {}) => {
+    if (schoolOptions.length || schoolOptionsLoading) {
+      return;
+    }
+
+    setSchoolOptionsLoading(true);
+
+    try {
+      const data = await apiFetch('/schools');
+      setSchoolOptions(Array.isArray(data?.schools) ? data.schools : []);
+    } catch (apiError) {
+      if (!silent) {
+        setError(apiError.message || 'Skolerne kunne ikke hentes.');
+      }
+    } finally {
+      setSchoolOptionsLoading(false);
+    }
+  }, [schoolOptions.length, schoolOptionsLoading]);
 
   const storeSession = async (data) => {
     await SessionStore.setItemAsync(SESSION_STORAGE_KEY, JSON.stringify({
@@ -2772,6 +2936,7 @@ export default function App() {
     setProfile(emptyProfile);
     setInviteCode('');
     setExistingLogin({ email: '', password: '' });
+    setCreateClassForm(createEmptyClassForm());
     setActiveTab('overview');
     setSidebarOpen(false);
     setChatUnreadCount(0);
@@ -2902,10 +3067,7 @@ export default function App() {
     pushAutoRequestRef.current = true;
 
     (async () => {
-      const [autoRequestSeen, manualDisabled] = await Promise.all([
-        SessionStore.getItemAsync(PUSH_AUTO_REQUEST_STORAGE_KEY).catch(() => null),
-        SessionStore.getItemAsync(PUSH_MANUAL_DISABLED_STORAGE_KEY).catch(() => null),
-      ]);
+      const manualDisabled = await SessionStore.getItemAsync(PUSH_MANUAL_DISABLED_STORAGE_KEY).catch(() => null);
 
       if (!isMounted || manualDisabled === 'disabled') {
         return;
@@ -2922,16 +3084,20 @@ export default function App() {
 
       const permissionStatus = existingRegistration?.permissionStatus ?? notificationState.permissionStatus;
 
-      if (permissionStatus === 'denied' || permissionStatus === 'granted') {
+      // The OS permission state is the source of truth: only a terminal OS answer
+      // can stop the automatic native prompt.
+      if (isTerminalPushPermissionStatus(permissionStatus)) {
         return;
       }
 
-      if (autoRequestSeen !== 'seen') {
-        await SessionStore.setItemAsync(PUSH_AUTO_REQUEST_STORAGE_KEY, 'seen');
+      if (pushAutoPromptAttemptedRef.current) {
+        return;
+      }
 
-        if (isMounted) {
-          await enablePushNotifications({ requestPermission: true });
-        }
+      pushAutoPromptAttemptedRef.current = true;
+
+      if (isMounted) {
+        await enablePushNotifications({ requestPermission: true });
       }
     })().finally(() => {
       pushAutoRequestRef.current = false;
@@ -2999,7 +3165,7 @@ export default function App() {
   }, []);
 
   const submitInviteCode = async () => {
-    const code = inviteCode.trim().toUpperCase();
+    const code = inviteCodeWithPrefix(inviteCode);
 
     if (!code) {
       setError('Indtast klassekode for at fortsætte.');
@@ -3049,12 +3215,8 @@ export default function App() {
 
   const openCreateClassPage = async () => {
     setError('');
-
-    try {
-      await Linking.openURL(CREATE_CLASS_URL);
-    } catch {
-      setError('Kunne ikke åbne klasseoprettelsen.');
-    }
+    setStep('createClass');
+    loadSchoolOptions();
   };
 
   const showExistingLogin = () => {
@@ -3068,7 +3230,7 @@ export default function App() {
       email: existingLogin.email.trim().toLowerCase(),
       password: existingLogin.password,
     };
-    const normalizedInviteCode = inviteCode.trim().toUpperCase();
+    const normalizedInviteCode = inviteCodeWithPrefix(inviteCode);
 
     if (normalizedInviteCode) {
       nextLogin.inviteCode = normalizedInviteCode;
@@ -3317,6 +3479,101 @@ export default function App() {
     return data;
   };
 
+  const submitCreateClass = async () => {
+    const nextForm = {
+      ownerName: createClassForm.ownerName.trim(),
+      ownerEmail: createClassForm.ownerEmail.trim().toLowerCase(),
+      ownerBirthday: createClassForm.ownerBirthday.trim(),
+      password: createClassForm.password,
+      passwordConfirmation: createClassForm.passwordConfirmation,
+      schoolId: createClassForm.schoolId,
+      className: createClassForm.className.trim(),
+      graduationYear: createClassForm.graduationYear.trim(),
+      graduationDate: createClassForm.graduationDate.trim(),
+      joinPolicy: createClassForm.joinPolicy || 'approval',
+      termsAccepted: createClassForm.termsAccepted,
+      privacyAccepted: createClassForm.privacyAccepted,
+    };
+
+    const missingField = [
+      'ownerName',
+      'ownerEmail',
+      'ownerBirthday',
+      'password',
+      'passwordConfirmation',
+      'schoolId',
+      'className',
+      'graduationYear',
+    ].find((key) => !nextForm[key]);
+
+    if (missingField) {
+      setError('Udfyld navn, email, fødselsdag, adgangskode, skole, klasse og årgang.');
+      return;
+    }
+
+    if (!nextForm.termsAccepted || !nextForm.privacyAccepted) {
+      setError('Accepter vilkår og privatlivspolitik for at oprette klassen.');
+      return;
+    }
+
+    if (nextForm.password !== nextForm.passwordConfirmation) {
+      setError('Adgangskoderne skal være ens.');
+      return;
+    }
+
+    if (nextForm.password.length < 8) {
+      setError('Adgangskoden skal være mindst 8 tegn.');
+      return;
+    }
+
+    if (!isValidProfileBirthday(nextForm.ownerBirthday)) {
+      setError('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
+      return;
+    }
+
+    if (!isProfileBirthdayOldEnough(nextForm.ownerBirthday)) {
+      setError(MINIMUM_ACCOUNT_AGE_MESSAGE);
+      return;
+    }
+
+    if (!/^\d{4}$/.test(nextForm.graduationYear)) {
+      setError('Skriv årgang som fire cifre.');
+      return;
+    }
+
+    if (nextForm.graduationDate && !/^\d{4}-\d{2}-\d{2}$/.test(nextForm.graduationDate)) {
+      setError('Skriv dimissionsdato som YYYY-MM-DD.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const data = await apiFetch('/classes', {
+        method: 'POST',
+        body: JSON.stringify(nextForm),
+      });
+
+      if (!data?.session?.member || !data?.class) {
+        throw new Error('Klassen blev oprettet, men appen kunne ikke logge dig ind automatisk. Prøv at logge ind med din email og adgangskode.');
+      }
+
+      await storeSession(data);
+      setCreateClassForm(createEmptyClassForm());
+      setInviteCode(data.class.inviteCode ?? '');
+      setProfile(profileFromMember(data.session.member));
+      setSession(data.session);
+      setSchoolClass(data.class);
+      setActiveTab('overview');
+      setStep('overview');
+    } catch (apiError) {
+      setError(apiError.message || 'Klassen kunne ikke oprettes.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const submitProfile = async () => {
     const nextProfile = {
       schoolId: profile.schoolId,
@@ -3359,8 +3616,13 @@ export default function App() {
       return;
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(nextProfile.birthday)) {
-      setError('Skriv fødselsdag som YYYY-MM-DD.');
+    if (!isValidProfileBirthday(nextProfile.birthday)) {
+      setError('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
+      return;
+    }
+
+    if (!isProfileBirthdayOldEnough(nextProfile.birthday)) {
+      setError(MINIMUM_ACCOUNT_AGE_MESSAGE);
       return;
     }
 
@@ -3587,7 +3849,7 @@ export default function App() {
     );
   }
 
-  const isAuthEntryStep = step === 'invite' || step === 'existingLogin';
+  const isAuthEntryStep = step === 'invite' || step === 'existingLogin' || step === 'createClass';
 
   return (
     <View style={isAuthEntryStep ? styles.safeAreaWhite : styles.safeArea}>
@@ -3602,7 +3864,7 @@ export default function App() {
               error={error}
               inviteCode={inviteCode}
               loading={loading}
-              onChangeInviteCode={(value) => setInviteCode(value.toUpperCase())}
+              onChangeInviteCode={(value) => setInviteCode(inviteCodeWithPrefix(value))}
               onCreateClass={openCreateClassPage}
               onExistingLogin={showExistingLogin}
               onSubmit={submitInviteCode}
@@ -3624,6 +3886,22 @@ export default function App() {
                 }}
                 onChangeLogin={updateExistingLogin}
                 onLogin={loginExistingProfile}
+              />
+            )}
+
+            {step === 'createClass' && (
+              <CreateClassScreen
+                error={error}
+                form={createClassForm}
+                loading={loading}
+                onBack={() => {
+                  setStep('invite');
+                  setError('');
+                }}
+                onChangeForm={updateCreateClassForm}
+                onSubmit={submitCreateClass}
+                schools={schoolOptions}
+                schoolsLoading={schoolOptionsLoading}
               />
             )}
 
@@ -3729,10 +4007,28 @@ function InviteScreen({
   const { height } = useWindowDimensions();
   const shellPadding = Math.max(12, Math.min(height * 0.08, 38));
   const contentOffset = Math.max(42, Math.min(height * 0.12, 92));
+  const inviteCodeSuffix = inviteCodeSuffixFromInput(inviteCode);
+  const openTerms = () => {
+    Linking.openURL(STUDOS_TERMS_URL).catch(() => {});
+  };
+  const openPrivacy = () => {
+    Linking.openURL(STUDOS_PRIVACY_URL).catch(() => {});
+  };
+  const openDeleteAccount = () => {
+    Linking.openURL(STUDOS_DELETE_ACCOUNT_URL).catch(() => {});
+  };
 
   return (
     <View style={[styles.inviteShell, { height, paddingTop: shellPadding, paddingBottom: shellPadding }]}>
       <View style={[styles.inviteMain, { marginTop: contentOffset }]}>
+        <Pressable hitSlop={12} onPress={onCreateClass} style={styles.createClassLink}>
+          <Text style={styles.createClassText}>Mangler din klasse?</Text>
+          <View style={styles.createClassActionRow}>
+            <Text style={styles.createClassAction}>OPRET HURTIGT JERES KLASSE</Text>
+            <Ionicons name="arrow-forward-outline" size={16} color="#ef5b3f" />
+          </View>
+        </Pressable>
+
         <View style={styles.logoLockup}>
           <View style={styles.inviteLogoWrap}>
             <Image source={STUDOS_LOGO} style={styles.logoMark} />
@@ -3757,16 +4053,17 @@ function InviteScreen({
               <View style={styles.inviteInputIconWrap}>
                 <Ionicons name="key" size={18} color={STUDOS_THEME.red} />
               </View>
+              <Text style={styles.inviteInputPrefix}>STU-</Text>
               <TextInput
                 autoCapitalize="characters"
                 autoCorrect={false}
                 onChangeText={onChangeInviteCode}
                 onSubmitEditing={onSubmit}
-                placeholder="STU-DEMO26"
+                placeholder="DEMO26"
                 placeholderTextColor="#8b93a1"
                 returnKeyType="go"
                 style={styles.inviteInput}
-                value={inviteCode}
+                value={inviteCodeSuffix}
               />
             </View>
           </View>
@@ -3774,24 +4071,511 @@ function InviteScreen({
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <View style={styles.inviteActionRow}>
-            <Button label="Fortsæt til din klasse" loading={loading} onPress={onSubmit} />
+            <Button label="Join din klasse" loading={loading} onPress={onSubmit} />
           </View>
-
-          <Pressable hitSlop={12} onPress={onExistingLogin} style={[styles.topLoginButton, { marginTop: 8 }]}>
-            <Ionicons name="log-in-outline" size={14} color="#182446" />
-            <Text style={styles.topLoginText}>Jeg har allerede en profil</Text>
-          </Pressable>
         </View>
+
+        <Pressable hitSlop={12} onPress={onExistingLogin} style={styles.topLoginButton}>
+          <Ionicons name="log-in-outline" size={14} color="#FFFFFF" />
+          <Text style={styles.topLoginText}>Jeg har allerede en profil</Text>
+        </Pressable>
       </View>
 
       <View style={styles.createClassFooter}>
-        <Pressable hitSlop={12} onPress={onCreateClass} style={styles.createClassLink}>
-          <Text style={styles.createClassText}>Mangler din klasse?</Text>
-          <View style={styles.createClassActionRow}>
-            <Text style={styles.createClassAction}>Opret klassen her</Text>
-            <Ionicons name="arrow-forward-outline" size={16} color="#ef5b3f" />
+        <View style={styles.inviteLegalBlock}>
+          <Text style={styles.inviteLegalText}>
+            VED BRUG AF APPEN ACCEPTERER DU VORES VILKÅR
+          </Text>
+          <View style={styles.inviteLegalLinks}>
+            <Pressable hitSlop={8} onPress={openTerms}>
+              <Text style={styles.inviteLegalLinkText}>Brugervilkår</Text>
+            </Pressable>
+            <Text style={styles.inviteLegalSeparator}>·</Text>
+            <Pressable hitSlop={8} onPress={openPrivacy}>
+              <Text style={styles.inviteLegalLinkText}>Privatlivspolitik</Text>
+            </Pressable>
+            <Text style={styles.inviteLegalSeparator}>·</Text>
+            <Pressable hitSlop={8} onPress={openDeleteAccount}>
+              <Text style={styles.inviteLegalLinkText}>Slet konto</Text>
+            </Pressable>
           </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function CreateClassScreen({
+  error,
+  form,
+  loading,
+  onBack,
+  onChangeForm,
+  onSubmit,
+  schools,
+  schoolsLoading,
+}) {
+  const defaultOwnerBirthdayValue = useMemo(() => minimumAccountBirthdayValue(), []);
+  const [ownerBirthdayPickerOpen, setOwnerBirthdayPickerOpen] = useState(false);
+  const [ownerBirthdayVisibleMonth, setOwnerBirthdayVisibleMonth] = useState(() => dateFromInput(form.ownerBirthday || defaultOwnerBirthdayValue));
+  const visibleOwnerBirthdayDays = useMemo(
+    () => calendarDaysForMonth(ownerBirthdayVisibleMonth),
+    [ownerBirthdayVisibleMonth],
+  );
+  const ownerBirthdayDisplayValue = form.ownerBirthday
+    ? formatProfileDate(form.ownerBirthday)
+    : 'Vælg fødselsdag';
+  const ownerBirthdayVisibleMonthLabel = new Intl.DateTimeFormat('da-DK', { month: 'long' }).format(ownerBirthdayVisibleMonth);
+  const initialGraduationDate = form.graduationDate
+    || `${/^\d{4}$/.test(form.graduationYear) ? form.graduationYear : new Date().getFullYear()}-06-01`;
+  const [graduationDatePickerOpen, setGraduationDatePickerOpen] = useState(false);
+  const [graduationDateVisibleMonth, setGraduationDateVisibleMonth] = useState(() => dateFromInput(initialGraduationDate));
+  const visibleGraduationDateDays = useMemo(
+    () => calendarDaysForMonth(graduationDateVisibleMonth),
+    [graduationDateVisibleMonth],
+  );
+  const graduationDateDisplayValue = form.graduationDate
+    ? formatProfileDate(form.graduationDate)
+    : 'Vælg dimissionsdato';
+  const graduationDateVisibleMonthLabel = monthTitle(graduationDateVisibleMonth);
+
+  const selectGraduationDate = (value) => {
+    onChangeForm('graduationDate', value);
+    setGraduationDateVisibleMonth(dateFromInput(value));
+    setGraduationDatePickerOpen(false);
+  };
+  const toggleGraduationDatePicker = () => setGraduationDatePickerOpen((current) => {
+    if (!current) {
+      setGraduationDateVisibleMonth(dateFromInput(form.graduationDate || initialGraduationDate));
+    }
+
+    return !current;
+  });
+  const jumpGraduationDateYear = (years) => {
+    setGraduationDateVisibleMonth((current) => addCalendarYears(current, years));
+  };
+  const selectOwnerBirthday = (value) => {
+    if (!isProfileBirthdayOldEnough(value)) {
+      Alert.alert('Aldersgrænse', MINIMUM_ACCOUNT_AGE_MESSAGE);
+      return;
+    }
+
+    onChangeForm('ownerBirthday', value);
+    setOwnerBirthdayVisibleMonth(dateFromInput(value));
+    setOwnerBirthdayPickerOpen(false);
+  };
+  const toggleOwnerBirthdayPicker = () => setOwnerBirthdayPickerOpen((current) => {
+    if (!current) {
+      setOwnerBirthdayVisibleMonth(dateFromInput(form.ownerBirthday || defaultOwnerBirthdayValue));
+    }
+
+    return !current;
+  });
+  const jumpOwnerBirthdayYear = (years) => {
+    setOwnerBirthdayVisibleMonth((current) => addCalendarYears(current, years));
+  };
+  const openTerms = () => {
+    Linking.openURL(STUDOS_TERMS_URL).catch(() => {});
+  };
+  const openPrivacy = () => {
+    Linking.openURL(STUDOS_PRIVACY_URL).catch(() => {});
+  };
+
+  return (
+    <View style={styles.flowStack}>
+      <View style={styles.compactHeader}>
+        <Pressable hitSlop={12} onPress={onBack}>
+          <Text style={styles.backText}>Tilbage</Text>
         </Pressable>
+        <View>
+          <Text style={styles.kicker}>Ny klasse</Text>
+          <Text style={styles.compactTitle}>Opret klasse</Text>
+        </View>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Klasseoplysninger</Text>
+
+        <View style={styles.formGrid}>
+          <SchoolSelect
+            onChange={(value) => onChangeForm('schoolId', value)}
+            schools={schools}
+            value={form.schoolId}
+          />
+          {schoolsLoading ? (
+            <Text style={styles.createClassHelperText}>Henter skoler...</Text>
+          ) : null}
+          <Field
+            label="Klassenavn"
+            placeholder="3.B"
+            onChangeText={(value) => onChangeForm('className', value)}
+            value={form.className}
+          />
+          <Field
+            keyboardType="number-pad"
+            label="Årgang"
+            maxLength={4}
+            placeholder="2026"
+            onChangeText={(value) => onChangeForm('graduationYear', value.replace(/\D/g, '').slice(0, 4))}
+            value={form.graduationYear}
+          />
+          <View style={styles.field}>
+            <View style={styles.fieldLabelRow}>
+              <Text style={styles.label}>Dimissionsdato</Text>
+              <Text style={styles.labelMeta}>(valgfrit - kan ændres senere)</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={toggleGraduationDatePicker}
+              style={({ pressed }) => [
+                styles.calendarDateSelect,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.calendarDateSelectValue}>
+                <View style={styles.calendarDateSelectIcon}>
+                  <Ionicons name="calendar" size={16} color={STUDOS_THEME.ink} />
+                </View>
+                <Text numberOfLines={1} style={styles.calendarDateSelectText}>
+                  {graduationDateDisplayValue}
+                </Text>
+              </View>
+              <Ionicons
+                name={graduationDatePickerOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#65748b"
+              />
+            </Pressable>
+            {form.graduationDate ? (
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => onChangeForm('graduationDate', '')}
+                style={styles.createClassClearDateButton}
+              >
+                <Text style={styles.createClassClearDateText}>Ryd dato</Text>
+              </Pressable>
+            ) : null}
+            {graduationDatePickerOpen ? (
+              <View style={styles.calendarPickerBlock}>
+                <View style={styles.calendarPickerHeader}>
+                  <View style={styles.calendarYearControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige år"
+                      accessibilityRole="button"
+                      onPress={() => jumpGraduationDateYear(-1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {graduationDateVisibleMonth.getFullYear()}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste år"
+                      accessibilityRole="button"
+                      onPress={() => jumpGraduationDateYear(1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                  <View style={styles.calendarMonthControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige måned"
+                      accessibilityRole="button"
+                      onPress={() => setGraduationDateVisibleMonth((current) => addCalendarMonths(current, -1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {graduationDateVisibleMonthLabel}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste måned"
+                      accessibilityRole="button"
+                      onPress={() => setGraduationDateVisibleMonth((current) => addCalendarMonths(current, 1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.calendarWeekdayRow}>
+                  {CALENDAR_WEEKDAYS.map((weekday) => (
+                    <Text key={weekday} style={styles.calendarWeekdayText}>{weekday}</Text>
+                  ))}
+                </View>
+                <View style={styles.calendarDayGrid}>
+                  {visibleGraduationDateDays.map((day) => {
+                    if (day.empty) {
+                      return <View key={day.id} style={styles.calendarDayCell} />;
+                    }
+
+                    const active = form.graduationDate === day.value;
+
+                    return (
+                      <View key={day.id} style={styles.calendarDayCell}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => selectGraduationDate(day.value)}
+                          style={({ pressed }) => [
+                            styles.calendarDayButton,
+                            active ? styles.calendarDayButtonActive : null,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text style={[
+                            styles.calendarDayText,
+                            active ? styles.calendarDayTextActive : null,
+                          ]}>
+                            {day.day}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.adminClassJoinOptions}>
+          {CLASS_JOIN_POLICY_OPTIONS.map((option) => {
+            const active = form.joinPolicy === option.id;
+
+            return (
+              <Pressable
+                accessibilityRole="button"
+                key={option.id}
+                onPress={() => onChangeForm('joinPolicy', option.id)}
+                style={({ pressed }) => [
+                  styles.adminClassJoinOption,
+                  active ? styles.adminClassJoinOptionActive : null,
+                  pressed ? styles.footerItemPressed : null,
+                ]}
+              >
+                <View style={[
+                  styles.adminClassJoinRadio,
+                  active ? styles.adminClassJoinRadioActive : null,
+                ]}>
+                  {active ? <View style={styles.adminClassJoinRadioDot} /> : null}
+                </View>
+                <View style={styles.adminClassJoinCopy}>
+                  <Text style={[
+                    styles.adminClassJoinTitle,
+                    active ? styles.adminClassJoinTitleActive : null,
+                  ]}>
+                    {option.label}
+                  </Text>
+                  <Text style={styles.adminClassJoinDescription}>
+                    {option.description}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.sectionTitle}>Klasseejer</Text>
+        <View style={styles.formGrid}>
+          <Field
+            label="Fulde navn"
+            placeholder="Maja Jensen"
+            onChangeText={(value) => onChangeForm('ownerName', value)}
+            textContentType="name"
+            value={form.ownerName}
+          />
+          <Field
+            autoCapitalize="none"
+            keyboardType="email-address"
+            label="Email"
+            placeholder="din.email@eksempel.dk"
+            onChangeText={(value) => onChangeForm('ownerEmail', value)}
+            textContentType="emailAddress"
+            value={form.ownerEmail}
+          />
+          <View style={styles.field}>
+            <Text style={styles.label}>Fødselsdag</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={toggleOwnerBirthdayPicker}
+              style={({ pressed }) => [
+                styles.calendarDateSelect,
+                pressed ? styles.footerItemPressed : null,
+              ]}
+            >
+              <View style={styles.calendarDateSelectValue}>
+                <View style={styles.calendarDateSelectIcon}>
+                  <Ionicons name="calendar" size={16} color={STUDOS_THEME.ink} />
+                </View>
+                <Text numberOfLines={1} style={styles.calendarDateSelectText}>
+                  {ownerBirthdayDisplayValue}
+                </Text>
+              </View>
+              <Ionicons
+                name={ownerBirthdayPickerOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#65748b"
+              />
+            </Pressable>
+            <Text style={styles.createClassHelperText}>Du skal være mindst 16 år.</Text>
+            {ownerBirthdayPickerOpen ? (
+              <View style={styles.calendarPickerBlock}>
+                <View style={styles.calendarPickerHeader}>
+                  <View style={styles.calendarYearControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige år"
+                      accessibilityRole="button"
+                      onPress={() => jumpOwnerBirthdayYear(-1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {ownerBirthdayVisibleMonth.getFullYear()}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste år"
+                      accessibilityRole="button"
+                      onPress={() => jumpOwnerBirthdayYear(1)}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                  <View style={styles.calendarMonthControls}>
+                    <Pressable
+                      accessibilityLabel="Forrige måned"
+                      accessibilityRole="button"
+                      onPress={() => setOwnerBirthdayVisibleMonth((current) => addCalendarMonths(current, -1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                    <Text numberOfLines={1} style={styles.calendarMonthTitle}>
+                      {ownerBirthdayVisibleMonthLabel}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel="Næste måned"
+                      accessibilityRole="button"
+                      onPress={() => setOwnerBirthdayVisibleMonth((current) => addCalendarMonths(current, 1))}
+                      style={({ pressed }) => [
+                        styles.calendarMonthButton,
+                        pressed ? styles.footerItemPressed : null,
+                      ]}
+                    >
+                      <Ionicons name="chevron-forward" size={18} color={STUDOS_THEME.ink} />
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.calendarWeekdayRow}>
+                  {CALENDAR_WEEKDAYS.map((weekday) => (
+                    <Text key={weekday} style={styles.calendarWeekdayText}>{weekday}</Text>
+                  ))}
+                </View>
+                <View style={styles.calendarDayGrid}>
+                  {visibleOwnerBirthdayDays.map((day) => {
+                    if (day.empty) {
+                      return <View key={day.id} style={styles.calendarDayCell} />;
+                    }
+
+                    const active = form.ownerBirthday === day.value;
+
+                    return (
+                      <View key={day.id} style={styles.calendarDayCell}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => selectOwnerBirthday(day.value)}
+                          style={({ pressed }) => [
+                            styles.calendarDayButton,
+                            active ? styles.calendarDayButtonActive : null,
+                            pressed ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Text style={[
+                            styles.calendarDayText,
+                            active ? styles.calendarDayTextActive : null,
+                          ]}>
+                            {day.day}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+          </View>
+          <Field
+            autoCapitalize="none"
+            label="Adgangskode"
+            placeholder="Mindst 8 tegn"
+            onChangeText={(value) => onChangeForm('password', value)}
+            secureTextEntry
+            textContentType="newPassword"
+            value={form.password}
+          />
+          <Field
+            autoCapitalize="none"
+            label="Gentag adgangskode"
+            placeholder="••••••••"
+            onChangeText={(value) => onChangeForm('passwordConfirmation', value)}
+            secureTextEntry
+            textContentType="newPassword"
+            value={form.passwordConfirmation}
+          />
+        </View>
+
+        <View style={styles.consentList}>
+          <ConsentRow
+            active={form.termsAccepted}
+            onPress={() => onChangeForm('termsAccepted', !form.termsAccepted)}
+          >
+            Jeg accepterer{' '}
+            <Text style={styles.consentLinkText} onPress={openTerms}>
+              vilkårene
+            </Text>
+          </ConsentRow>
+          <ConsentRow
+            active={form.privacyAccepted}
+            onPress={() => onChangeForm('privacyAccepted', !form.privacyAccepted)}
+          >
+            Jeg accepterer{' '}
+            <Text style={styles.consentLinkText} onPress={openPrivacy}>
+              privatlivspolitikken
+            </Text>
+          </ConsentRow>
+        </View>
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <Button label="Opret klasse" loading={loading} onPress={onSubmit} />
       </View>
     </View>
   );
@@ -4126,6 +4910,8 @@ function ChatScreen({
   const [chatActionLoading, setChatActionLoading] = useState(false);
   const [chatMessageActionConfirm, setChatMessageActionConfirm] = useState(null);
   const [chatMessageActionLoading, setChatMessageActionLoading] = useState(false);
+  const [chatReactionPickerMessageId, setChatReactionPickerMessageId] = useState(null);
+  const [chatReactionLoadingId, setChatReactionLoadingId] = useState('');
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [groupAddMembersOpen, setGroupAddMembersOpen] = useState(false);
   const [groupAddMemberIds, setGroupAddMemberIds] = useState([]);
@@ -4137,6 +4923,7 @@ function ChatScreen({
   const [chatListHeaderScrolled, setChatListHeaderScrolled] = useState(false);
   const echoRef = useRef(null);
   const activeRealtimeChannelRef = useRef('');
+  const inboxRealtimeChannelRef = useRef('');
   const messagesScrollRef = useRef(null);
   const messageInputRef = useRef(null);
   const chatThreadDragX = useRef(new Animated.Value(0)).current;
@@ -4345,6 +5132,8 @@ function ChatScreen({
     chatThreadSwipeActiveRef.current = false;
     setChatMessageActionConfirm(null);
     setChatMessageActionLoading(false);
+    setChatReactionPickerMessageId(null);
+    setChatReactionLoadingId('');
     setChatActionConfirm(null);
     setChatActionLoading(false);
     setGroupInfoOpen(false);
@@ -4673,10 +5462,14 @@ function ChatScreen({
       if (activeRealtimeChannelRef.current && echoRef.current) {
         echoRef.current.leave(activeRealtimeChannelRef.current);
       }
+      if (inboxRealtimeChannelRef.current && echoRef.current) {
+        echoRef.current.leave(inboxRealtimeChannelRef.current);
+      }
 
       echoRef.current?.disconnect();
       echoRef.current = null;
       activeRealtimeChannelRef.current = '';
+      inboxRealtimeChannelRef.current = '';
     };
   }, [sessionToken]);
 
@@ -4691,13 +5484,21 @@ function ChatScreen({
 
     const channelName = `chat.${selectedConversation.id}`;
     activeRealtimeChannelRef.current = channelName;
+    const syncSelectedConversation = (event = {}) => {
+      if (event?.type === 'group_deleted') {
+        returnToChatList();
+        loadConversations();
+        return;
+      }
+
+      loadMessages(selectedConversation, { silent: true });
+      loadConversations();
+    };
 
     echoRef.current
       .private(channelName)
-      .listen('.chat.message.created', () => {
-        loadMessages(selectedConversation, { silent: true });
-        loadConversations();
-      });
+      .listen('.chat.message.created', syncSelectedConversation)
+      .listen('.chat.conversation.updated', syncSelectedConversation);
 
     return () => {
       if (echoRef.current) {
@@ -4708,7 +5509,45 @@ function ChatScreen({
         activeRealtimeChannelRef.current = '';
       }
     };
-  }, [realtimeReady, selectedConversation?.id, sessionToken]);
+  }, [realtimeReady, returnToChatList, selectedConversation?.id, sessionToken]);
+
+  useEffect(() => {
+    if (!realtimeReady || !echoRef.current || !activeMember?.id) {
+      return undefined;
+    }
+
+    if (inboxRealtimeChannelRef.current && inboxRealtimeChannelRef.current !== `chat.member.${activeMember.id}`) {
+      echoRef.current.leave(inboxRealtimeChannelRef.current);
+    }
+
+    const channelName = `chat.member.${activeMember.id}`;
+    inboxRealtimeChannelRef.current = channelName;
+
+    echoRef.current
+      .private(channelName)
+      .listen('.chat.inbox.updated', (event = {}) => {
+        loadConversations();
+
+        if (selectedConversation?.id && event?.conversationId === selectedConversation.id) {
+          if (event?.type === 'group_deleted') {
+            returnToChatList();
+            return;
+          }
+
+          loadMessages(selectedConversation, { silent: true });
+        }
+      });
+
+    return () => {
+      if (echoRef.current) {
+        echoRef.current.leave(channelName);
+      }
+
+      if (inboxRealtimeChannelRef.current === channelName) {
+        inboxRealtimeChannelRef.current = '';
+      }
+    };
+  }, [activeMember?.id, realtimeReady, returnToChatList, selectedConversation?.id, sessionToken]);
 
   useEffect(() => {
     if (realtimeReady || !selectedConversation?.id || !sessionToken) {
@@ -4933,6 +5772,34 @@ function ChatScreen({
       setChatError(apiError.message || 'Beskeden kunne ikke sendes.');
     } finally {
       setSendingMessage(false);
+    }
+  };
+
+  const reactToChatMessage = async (message, emoji) => {
+    if (!message?.id || message.isDeleted || message.isMine || !emoji) {
+      return;
+    }
+
+    const loadingId = `${message.id}:${emoji}`;
+    setChatReactionLoadingId(loadingId);
+    setChatError('');
+
+    try {
+      const data = await apiFetch(`/chat/messages/${encodeURIComponent(message.id)}/reactions`, {
+        authToken: sessionToken,
+        method: 'POST',
+        body: JSON.stringify({ emoji }),
+      });
+
+      if (data.message) {
+        setMessages((current) => mergeUniqueById(current, data.message));
+      }
+
+      setChatReactionPickerMessageId(null);
+    } catch (apiError) {
+      setChatError(apiError.message || 'Reaktionen kunne ikke gemmes.');
+    } finally {
+      setChatReactionLoadingId('');
     }
   };
 
@@ -6016,6 +6883,9 @@ function ChatScreen({
               : message.sender ?? selectedConversationMember;
             const messageProfileOnline = selectedConversation.type === 'direct'
               && (message.isMine || isMemberOnline(messageProfile));
+            const messageReactions = Array.isArray(message.reactions) ? message.reactions : [];
+            const reactionPickerOpen = chatReactionPickerMessageId === message.id;
+            const canReactToMessage = !message.isMine && !message.isDeleted;
 
             return (
               <View
@@ -6031,69 +6901,150 @@ function ChatScreen({
                     {messageProfileOnline ? <View style={styles.chatMessageOnlineDot} /> : null}
                   </View>
                 ) : null}
-                <View style={styles.chatBubbleStack}>
+                <View style={[styles.chatBubbleStack, message.isMine ? styles.chatBubbleStackMine : null]}>
                   {selectedConversation.type === 'group' && !message.isMine ? (
                     <Text numberOfLines={1} style={styles.chatSenderName}>
                       {messageProfile?.firstName || String(messageProfile?.displayName ?? '').trim().split(/\s+/)[0] || 'Ukendt'}
                     </Text>
                   ) : null}
-                  <Pressable
-                    accessibilityHint={message.isMine ? 'Hold nede for at slette beskeden' : 'Hold nede for at rapportere beskeden'}
-                    accessibilityRole="button"
-                    delayLongPress={280}
-                    disabled={message.isDeleted}
-                    hitSlop={4}
-                    onLongPress={() => openChatMessageActionConfirm(message)}
-                    style={({ pressed }) => [
-                      styles.chatBubble,
-                      message.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
-                      !message.isDeleted && pressed ? styles.chatBubbleHolding : null,
-                      message.isDeleted ? styles.chatBubbleDeleted : null,
-                    ]}
-                  >
-                    {({ pressed }) => (
-                      <>
-                        <View
-                          pointerEvents="none"
-                          style={[
-                            styles.chatBubbleTail,
-                            message.isMine ? styles.chatBubbleTailMine : styles.chatBubbleTailOther,
-                          ]}
-                        />
-                        <Text style={[styles.chatMessageText, message.isMine ? styles.chatMessageTextMine : null]}>
-                          {message.isDeleted ? 'Beskeden er slettet' : message.body}
-                        </Text>
-                        <View style={styles.chatBubbleMetaRow}>
-                          <Text style={[styles.chatBubbleMeta, message.isMine ? styles.chatBubbleMetaMine : null]}>
-                            {formatChatTime(message.createdAt)}
-                          </Text>
-                          {selectedConversation.type === 'direct' && message.isMine ? (
-                            <Ionicons
-                              name={message.readByOther ? 'checkmark-done' : 'checkmark'}
-                              size={14}
-                              color={message.readByOther ? STUDOS_THEME.blue : '#FFF4D8'}
-                              style={styles.chatBubbleStatusIcon}
-                            />
-                          ) : null}
-                        </View>
-                        {!message.isDeleted && pressed ? (
+                  <View style={[styles.chatBubbleFrame, message.isMine ? styles.chatBubbleFrameMine : null]}>
+                    <Pressable
+                      accessibilityHint={message.isMine ? 'Hold nede for at slette beskeden' : 'Hold nede for at rapportere beskeden'}
+                      accessibilityRole="button"
+                      delayLongPress={280}
+                      disabled={message.isDeleted}
+                      hitSlop={4}
+                      onLongPress={() => openChatMessageActionConfirm(message)}
+                      style={({ pressed }) => [
+                        styles.chatBubble,
+                        message.isMine ? styles.chatBubbleMine : styles.chatBubbleOther,
+                        !message.isDeleted && pressed ? styles.chatBubbleHolding : null,
+                        message.isDeleted ? styles.chatBubbleDeleted : null,
+                      ]}
+                    >
+                      {({ pressed }) => (
+                        <>
                           <View
                             pointerEvents="none"
                             style={[
-                              styles.chatBubbleHoldIndicator,
-                              message.isMine ? styles.chatBubbleHoldIndicatorMine : styles.chatBubbleHoldIndicatorOther,
+                              styles.chatBubbleTail,
+                              message.isMine ? styles.chatBubbleTailMine : styles.chatBubbleTailOther,
                             ]}
-                          >
-                            <Ionicons
-                              name={message.isMine ? 'trash' : 'flag'}
-                              size={11}
-                              color={message.isMine ? '#FFFFFF' : STUDOS_THEME.ink}
-                            />
+                          />
+                          <Text style={[styles.chatMessageText, message.isMine ? styles.chatMessageTextMine : null]}>
+                            {message.isDeleted ? 'Beskeden er slettet' : message.body}
+                          </Text>
+                          <View style={styles.chatBubbleMetaRow}>
+                            <Text style={[styles.chatBubbleMeta, message.isMine ? styles.chatBubbleMetaMine : null]}>
+                              {formatChatTime(message.createdAt)}
+                            </Text>
+                            {selectedConversation.type === 'direct' && message.isMine ? (
+                              <Ionicons
+                                name={message.readByOther ? 'checkmark-done' : 'checkmark'}
+                                size={14}
+                                color={message.readByOther ? STUDOS_THEME.blue : '#FFF4D8'}
+                                style={styles.chatBubbleStatusIcon}
+                              />
+                            ) : null}
+                          </View>
+                          {!message.isDeleted && pressed ? (
+                            <View
+                              pointerEvents="none"
+                              style={[
+                                styles.chatBubbleHoldIndicator,
+                                message.isMine ? styles.chatBubbleHoldIndicatorMine : styles.chatBubbleHoldIndicatorOther,
+                              ]}
+                            >
+                              <Ionicons
+                                name={message.isMine ? 'trash' : 'flag'}
+                                size={11}
+                                color={message.isMine ? '#FFFFFF' : STUDOS_THEME.ink}
+                              />
+                            </View>
+                          ) : null}
+                        </>
+                      )}
+                    </Pressable>
+                    {canReactToMessage ? (
+                      <>
+                        {reactionPickerOpen ? (
+                          <Pressable
+                            accessibilityLabel="Luk reaktionsvælger"
+                            accessibilityRole="button"
+                            onPress={() => setChatReactionPickerMessageId(null)}
+                            style={styles.chatReactionDismissLayer}
+                          />
+                        ) : null}
+                        {reactionPickerOpen ? (
+                          <View style={styles.chatReactionPicker}>
+                            {CHAT_REACTION_OPTIONS.map((emoji) => {
+                              const loading = chatReactionLoadingId === `${message.id}:${emoji}`;
+
+                              return (
+                                <Pressable
+                                  accessibilityLabel={`Vælg ${emoji}`}
+                                  accessibilityRole="button"
+                                  disabled={Boolean(chatReactionLoadingId)}
+                                  key={emoji}
+                                  onPress={() => reactToChatMessage(message, emoji)}
+                                  style={({ pressed }) => [
+                                    styles.chatReactionPickerButton,
+                                    pressed && !chatReactionLoadingId ? styles.footerItemPressed : null,
+                                  ]}
+                                >
+                                  {loading ? (
+                                    <ActivityIndicator color={STUDOS_THEME.ink} size="small" />
+                                  ) : (
+                                    <Text style={styles.chatReactionPickerEmoji}>{emoji}</Text>
+                                  )}
+                                </Pressable>
+                              );
+                            })}
                           </View>
                         ) : null}
+                        <Pressable
+                          accessibilityLabel="Tilføj reaktion"
+                          accessibilityRole="button"
+                          disabled={Boolean(chatReactionLoadingId)}
+                          hitSlop={8}
+                          onPress={() => setChatReactionPickerMessageId((current) => (current === message.id ? null : message.id))}
+                          style={({ pressed }) => [
+                            styles.chatReactionAddButton,
+                            styles.chatReactionAddButtonOnBubble,
+                            reactionPickerOpen ? styles.chatReactionAddButtonActive : null,
+                            pressed && !chatReactionLoadingId ? styles.footerItemPressed : null,
+                          ]}
+                        >
+                          <Ionicons name={reactionPickerOpen ? 'close' : 'add'} size={14} color={STUDOS_THEME.ink} />
+                        </Pressable>
                       </>
-                    )}
-                  </Pressable>
+                    ) : null}
+                  </View>
+                  {!message.isDeleted ? (
+                    <>
+                      {messageReactions.length ? (
+                        <View style={[styles.chatReactionRow, message.isMine ? styles.chatReactionRowMine : null]}>
+                          {messageReactions.map((reaction) => (
+                            <Pressable
+                              accessibilityLabel={`Reager med ${reaction.emoji}`}
+                              accessibilityRole="button"
+                              disabled={!canReactToMessage || Boolean(chatReactionLoadingId)}
+                              key={reaction.emoji}
+                              onPress={() => reactToChatMessage(message, reaction.emoji)}
+                              style={({ pressed }) => [
+                                styles.chatReactionChip,
+                                reaction.reactedByMe ? styles.chatReactionChipActive : null,
+                                pressed && canReactToMessage && !chatReactionLoadingId ? styles.footerItemPressed : null,
+                              ]}
+                            >
+                              <Text style={styles.chatReactionEmoji}>{reaction.emoji}</Text>
+                              <Text style={styles.chatReactionCount}>{reaction.count}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      ) : null}
+                    </>
+                  ) : null}
                 </View>
 
                 {message.isMine ? (
@@ -6118,7 +7069,10 @@ function ChatScreen({
             blurOnSubmit={false}
             multiline
             onChangeText={setMessageBody}
-            onFocus={() => setTimeout(() => scrollMessagesToEnd(true), 180)}
+            onFocus={() => {
+              setChatReactionPickerMessageId(null);
+              setTimeout(() => scrollMessagesToEnd(true), 180);
+            }}
             placeholder="Skriv en besked"
             placeholderTextColor="#8b93a1"
             ref={messageInputRef}
@@ -6187,9 +7141,9 @@ function ChatScreen({
                   pressed ? styles.footerItemPressed : null,
                 ]}
               >
-                <Ionicons name="people" size={27} color={STUDOS_THEME.ink} />
+                <Ionicons name="people" size={34} color={STUDOS_THEME.ink} />
                 <View style={[styles.chatTitleActionBadge, styles.chatTitleActionBadgeYellow]}>
-                  <Ionicons name="add" size={10} color={STUDOS_THEME.ink} />
+                  <Ionicons name="add" size={12} color={STUDOS_THEME.ink} />
                 </View>
               </Pressable>
               <Pressable
@@ -6205,9 +7159,9 @@ function ChatScreen({
                   pressed ? styles.footerItemPressed : null,
                 ]}
               >
-                <Ionicons name="chatbubble-ellipses" size={26} color={STUDOS_THEME.red} />
+                <Ionicons name="chatbubble-ellipses" size={33} color={STUDOS_THEME.red} />
                 <View style={[styles.chatTitleActionBadge, styles.chatTitleActionBadgeBlue]}>
-                  <Ionicons name="add" size={10} color="#FFFFFF" />
+                  <Ionicons name="add" size={12} color="#FFFFFF" />
                 </View>
               </Pressable>
             </View>
@@ -19107,6 +20061,7 @@ function AdminReportsScreen({ onPendingCountChange, sessionToken }) {
 
 const NOTIFICATION_CATEGORY_LABELS = {
   chat_message: { title: 'Chatbeskeder', description: 'Direkte og gruppe-beskeder.' },
+  chat_reaction: { title: 'Chatreaktioner', description: 'Når nogen reagerer på dine beskeder.' },
   group_chat_invite: { title: 'Gruppechat-invitationer', description: 'Når nogen tilføjer dig i en gruppe.' },
   duel_invite: { title: 'Dyst-invitationer', description: 'Når nogen udfordrer dig.' },
   duel_response: { title: 'Dyst accepteret/afvist', description: 'Når modparten reagerer på din dyst.' },
@@ -19128,6 +20083,7 @@ const NOTIFICATION_CATEGORY_LABELS = {
 
 const NOTIFICATION_CATEGORY_ORDER = [
   'chat_message',
+  'chat_reaction',
   'group_chat_invite',
   'duel_invite',
   'duel_response',
@@ -22318,13 +23274,19 @@ function ProfileScreen({
   onPickPhoto,
   onSubmit,
 }) {
+  const defaultBirthdayValue = minimumAccountBirthdayValue();
   const [birthdayPickerOpen, setBirthdayPickerOpen] = useState(false);
-  const [birthdayVisibleMonth, setBirthdayVisibleMonth] = useState(() => dateFromInput(profile.birthday || formatInputDate(new Date())));
+  const [birthdayVisibleMonth, setBirthdayVisibleMonth] = useState(() => dateFromInput(profile.birthday || defaultBirthdayValue));
   const visibleBirthdayDays = useMemo(() => calendarDaysForMonth(birthdayVisibleMonth), [birthdayVisibleMonth]);
   const birthdayDisplayValue = profile.birthday ? formatProfileDate(profile.birthday) : 'Vælg fødselsdag';
   const birthdayVisibleMonthLabel = new Intl.DateTimeFormat('da-DK', { month: 'long' }).format(birthdayVisibleMonth);
 
   const selectBirthday = (value) => {
+    if (!isProfileBirthdayOldEnough(value)) {
+      Alert.alert('Aldersgrænse', MINIMUM_ACCOUNT_AGE_MESSAGE);
+      return;
+    }
+
     onChangeProfile('birthday', value);
     setBirthdayVisibleMonth(dateFromInput(value));
     setBirthdayPickerOpen(false);
@@ -22332,7 +23294,7 @@ function ProfileScreen({
 
   const toggleBirthdayPicker = () => setBirthdayPickerOpen((current) => {
     if (!current) {
-      const nextVisibleMonth = dateFromInput(profile.birthday || formatInputDate(new Date()));
+      const nextVisibleMonth = dateFromInput(profile.birthday || defaultBirthdayValue);
 
       setBirthdayVisibleMonth(nextVisibleMonth);
     }
@@ -22444,6 +23406,7 @@ function ProfileScreen({
                 color="#65748b"
               />
             </Pressable>
+            <Text style={styles.createClassHelperText}>Du skal være mindst 16 år.</Text>
             {birthdayPickerOpen ? (
               <View style={styles.calendarPickerBlock}>
                 <View style={styles.calendarPickerHeader}>
@@ -22543,7 +23506,7 @@ function ProfileScreen({
           <Field
             autoCapitalize="none"
             label="Adgangskode"
-            placeholder="Mindst 6 tegn"
+            placeholder="Mindst 8 tegn"
             onChangeText={(value) => onChangeProfile('password', value)}
             secureTextEntry
             textContentType="newPassword"
@@ -22776,6 +23739,10 @@ function AccountProfileScreen({
 
       if (editingProfileField === 'birthday' && nextValue && !isValidProfileBirthday(nextValue)) {
         throw new Error('Skriv en gyldig fødselsdag i format YYYY-MM-DD.');
+      }
+
+      if (editingProfileField === 'birthday' && nextValue && !isProfileBirthdayOldEnough(nextValue)) {
+        throw new Error(MINIMUM_ACCOUNT_AGE_MESSAGE);
       }
 
       const updates = {
@@ -24196,9 +25163,9 @@ function OverviewScreen({
           <View style={[styles.chatModalPanel, styles.overviewClipModalPanel]}>
             <View style={styles.chatModalHeader}>
               <View>
-                <Text style={styles.chatModalKicker}>Klipstatus</Text>
+                <Text style={styles.chatModalKicker}>HUEKLIP</Text>
                 <Text style={styles.chatModalTitle}>
-                  {selectedClip ? `Klip ${selectedClipIndex + 1}` : 'Klip'}
+                  {selectedClip?.title ?? (selectedClip ? `Klip ${selectedClipIndex + 1}` : 'Klip')}
                 </Text>
               </View>
               <Pressable
@@ -24214,11 +25181,18 @@ function OverviewScreen({
                 <Ionicons name="close" size={22} color={STUDOS_THEME.ink} />
               </Pressable>
             </View>
-            <View style={styles.overviewClipModalIconWrap}>
-              {selectedClip?.id === 'wave' ? (
-                <MaterialCommunityIcons name="waves" size={28} color={STUDOS_THEME.ink} />
-              ) : selectedClip ? (
-                <Ionicons name={selectedClip.icon} size={28} color={STUDOS_THEME.ink} />
+            <View style={styles.overviewClipModalBodyRow}>
+              <View style={styles.overviewClipModalIconWrap}>
+                {selectedClip?.id === 'wave' ? (
+                  <MaterialCommunityIcons name="waves" size={16} color={STUDOS_THEME.ink} />
+                ) : selectedClip ? (
+                  <Ionicons name={selectedClip.icon} size={16} color={STUDOS_THEME.ink} />
+                ) : null}
+              </View>
+              {selectedClip?.body ? (
+                <Text style={styles.overviewClipModalBody}>
+                  {selectedClip.body}
+                </Text>
               ) : null}
             </View>
             <View style={styles.overviewClipModalOptions}>
@@ -24547,13 +25521,47 @@ function StudentCap() {
 
 function SchoolSelect({ onChange, schools, value }) {
   const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const selectedSchool = schools.find((school) => school.id === value);
+  const searchQueryVariants = useMemo(() => selectSearchTextVariants(searchQuery), [searchQuery]);
+  const filteredSchools = useMemo(() => {
+    if (!searchQueryVariants.length) {
+      return schools;
+    }
+
+    return schools.filter((school) => {
+      const searchableSchoolVariants = selectSearchTextVariants([
+        school.name,
+        school.city,
+        school.municipality,
+        school.postalCode,
+      ].filter(Boolean).join(' '));
+
+      return searchQueryVariants.some((queryVariant) => (
+        searchableSchoolVariants.some((schoolVariant) => schoolVariant.includes(queryVariant))
+      ));
+    });
+  }, [searchQueryVariants, schools]);
+  const visibleSchoolLimit = searchQueryVariants.length ? 80 : 24;
+  const visibleSchools = filteredSchools.slice(0, visibleSchoolLimit);
+  const hiddenSchoolCount = Math.max(0, filteredSchools.length - visibleSchools.length);
+  const toggleOpen = () => {
+    setOpen((current) => {
+      if (current) {
+        setSearchQuery('');
+      }
+
+      return !current;
+    });
+  };
 
   return (
     <View style={styles.field}>
       <Text style={styles.label}>Skole</Text>
       <Pressable
-        onPress={() => setOpen((current) => !current)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={toggleOpen}
         style={({ pressed }) => [
           styles.selectButton,
           pressed ? styles.selectButtonPressed : null,
@@ -24567,32 +25575,75 @@ function SchoolSelect({ onChange, schools, value }) {
 
       {open ? (
         <View style={styles.selectOptions}>
-          {schools.length ? (
-            schools.map((school) => {
-              const active = school.id === value;
+          <View style={styles.selectSearchBox}>
+            <Ionicons name="search" size={17} color="#65748b" />
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="never"
+              onChangeText={setSearchQuery}
+              placeholder="Søg efter skole"
+              placeholderTextColor="#8b93a1"
+              style={styles.selectSearchInput}
+              value={searchQuery}
+            />
+            {searchQuery ? (
+              <Pressable
+                accessibilityLabel="Ryd søgning"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => setSearchQuery('')}
+                style={({ pressed }) => [
+                  styles.selectSearchClear,
+                  pressed ? styles.selectButtonPressed : null,
+                ]}
+              >
+                <Ionicons name="close" size={15} color="#65748b" />
+              </Pressable>
+            ) : null}
+          </View>
+          {filteredSchools.length ? (
+            <>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                style={styles.selectOptionsScroll}
+              >
+                {visibleSchools.map((school) => {
+                  const active = school.id === value;
 
-              return (
-                <Pressable
-                  key={school.id}
-                  onPress={() => {
-                    onChange(school.id);
-                    setOpen(false);
-                  }}
-                  style={({ pressed }) => [
-                    styles.selectOption,
-                    active ? styles.selectOptionActive : null,
-                    pressed ? styles.selectButtonPressed : null,
-                  ]}
-                >
-                  <Text style={[styles.selectOptionText, active ? styles.selectOptionTextActive : null]}>
-                    {school.name}
-                  </Text>
-                  {active ? <Ionicons name="checkmark" size={17} color="#FF6F73" /> : null}
-                </Pressable>
-              );
-            })
+                  return (
+                    <Pressable
+                      key={school.id}
+                      onPress={() => {
+                        onChange(school.id);
+                        setOpen(false);
+                        setSearchQuery('');
+                      }}
+                      style={({ pressed }) => [
+                        styles.selectOption,
+                        active ? styles.selectOptionActive : null,
+                        pressed ? styles.selectButtonPressed : null,
+                      ]}
+                    >
+                      <Text style={[styles.selectOptionText, active ? styles.selectOptionTextActive : null]}>
+                        {school.name}
+                      </Text>
+                      {active ? <Ionicons name="checkmark" size={17} color="#FF6F73" /> : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              {hiddenSchoolCount ? (
+                <Text style={styles.selectSearchMeta}>
+                  Viser {visibleSchools.length} af {filteredSchools.length}. Skriv mere for at indsnævre.
+                </Text>
+              ) : null}
+            </>
           ) : (
-            <Text style={styles.selectEmptyText}>Ingen skoler fundet.</Text>
+            <Text style={styles.selectEmptyText}>
+              Ingen skoler matcher din søgning.
+            </Text>
           )}
         </View>
       ) : null}
@@ -25502,15 +26553,15 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 18,
     borderRadius: 999,
-    backgroundColor: 'rgba(255, 244, 216, 0.7)',
+    backgroundColor: STUDOS_THEME.ink,
     shadowColor: '#0f1629',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.16,
     shadowRadius: 10,
     elevation: 3,
   },
   topLoginText: {
-    color: '#182446',
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0.1,
@@ -25647,17 +26698,28 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: 'rgba(255, 111, 115, 0.14)',
   },
+  inviteInputPrefix: {
+    color: '#182446',
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginLeft: 10,
+  },
   inviteActionRow: {
     marginTop: 2,
   },
   createClassFooter: {
+    alignItems: 'center',
     alignSelf: 'center',
+    gap: 10,
     paddingBottom: 2,
   },
   createClassLink: {
     alignItems: 'center',
     alignSelf: 'center',
     gap: 0,
+    marginBottom: -6,
+    transform: [{ translateY: -16 }],
   },
   createClassText: {
     color: '#6F7684',
@@ -25675,6 +26737,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 4,
+  },
+  inviteLegalBlock: {
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+  },
+  inviteLegalText: {
+    color: '#8b93a1',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  inviteLegalLinks: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'center',
+  },
+  inviteLegalLinkText: {
+    color: '#65748b',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textDecorationLine: 'underline',
+  },
+  inviteLegalSeparator: {
+    color: '#b0b7c3',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   centeredFlow: {
     flex: 1,
@@ -29338,7 +30432,7 @@ const styles = StyleSheet.create({
   },
   overviewWallsActivityAction: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-end',
     flexDirection: 'row',
     gap: 4,
     minHeight: 34,
@@ -29847,16 +30941,29 @@ const styles = StyleSheet.create({
     gap: 14,
     maxWidth: 360,
   },
+  overviewClipModalBodyRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
   overviewClipModalIconWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
-    width: 58,
-    height: 58,
+    flexShrink: 0,
+    width: 34,
+    height: 34,
     borderColor: '#DDE8E5',
-    borderRadius: 29,
+    borderRadius: 17,
     borderWidth: 1,
     backgroundColor: '#FFF8E8',
+  },
+  overviewClipModalBody: {
+    color: '#65748b',
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   overviewClipModalOptions: {
     gap: 9,
@@ -35287,6 +36394,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
   },
+  fieldLabelRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  labelMeta: {
+    color: '#8b93a1',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
   inviteInput: {
     flex: 1,
     minHeight: 52,
@@ -35304,6 +36423,25 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: 6,
+  },
+  createClassHelperText: {
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    marginTop: -5,
+  },
+  createClassClearDateButton: {
+    alignSelf: 'flex-start',
+    minHeight: 28,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  createClassClearDateText: {
+    color: STUDOS_THEME.red,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   input: {
     minHeight: 48,
@@ -35359,6 +36497,36 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     backgroundColor: '#FFFFFF',
   },
+  selectSearchBox: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 46,
+    borderBottomColor: '#EEF0EA',
+    borderBottomWidth: 1,
+    backgroundColor: '#FBFAF6',
+    paddingHorizontal: 12,
+  },
+  selectSearchInput: {
+    flex: 1,
+    minHeight: 44,
+    color: '#172143',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0,
+    paddingVertical: 0,
+  },
+  selectSearchClear: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#EEF0EA',
+  },
+  selectOptionsScroll: {
+    maxHeight: 286,
+  },
   selectOption: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -35386,6 +36554,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     padding: 12,
+  },
+  selectSearchMeta: {
+    borderTopColor: '#EEF0EA',
+    borderTopWidth: 1,
+    color: '#65748b',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   photoPicker: {
     alignItems: 'center',
@@ -35648,7 +36826,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 8,
+    gap: 10,
     minWidth: 118,
     height: 51,
   },
@@ -35656,8 +36834,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    width: 34,
-    height: 34,
+    width: 42,
+    height: 42,
   },
   chatTitleGroupButton: {
   },
@@ -35667,11 +36845,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'absolute',
-    right: -2,
-    top: -2,
-    width: 15,
-    height: 15,
-    borderRadius: 8,
+    right: -1,
+    top: -1,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 1,
     borderColor: '#F1FBF8',
   },
@@ -37372,6 +38550,17 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     maxWidth: '74%',
   },
+  chatBubbleStackMine: {
+    alignItems: 'flex-end',
+  },
+  chatBubbleFrame: {
+    marginBottom: 3,
+    maxWidth: '100%',
+    position: 'relative',
+  },
+  chatBubbleFrameMine: {
+    alignItems: 'flex-end',
+  },
   chatMessageOnlineDot: {
     position: 'absolute',
     right: -1,
@@ -37501,6 +38690,108 @@ const styles = StyleSheet.create({
   },
   chatBubbleStatusIcon: {
     marginTop: 1,
+  },
+  chatReactionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: -1,
+    paddingLeft: 8,
+  },
+  chatReactionRowMine: {
+    justifyContent: 'flex-end',
+    paddingLeft: 0,
+    paddingRight: 8,
+  },
+  chatReactionChip: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    minHeight: 24,
+    borderColor: '#DDE8E5',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 7,
+  },
+  chatReactionChipActive: {
+    borderColor: STUDOS_THEME.yellow,
+    backgroundColor: '#FFF4D8',
+  },
+  chatReactionEmoji: {
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  chatReactionCount: {
+    color: STUDOS_THEME.ink,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  chatReactionAddButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderColor: '#DDE8E5',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  chatReactionAddButtonOnBubble: {
+    position: 'absolute',
+    bottom: -10,
+    right: 11,
+    zIndex: 8,
+    elevation: 8,
+    borderColor: 'rgba(23, 33, 67, 0.18)',
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 5,
+  },
+  chatReactionAddButtonActive: {
+    borderColor: STUDOS_THEME.ink,
+    backgroundColor: STUDOS_THEME.yellow,
+  },
+  chatReactionDismissLayer: {
+    position: 'absolute',
+    top: -1000,
+    right: -1000,
+    bottom: -1000,
+    left: -1000,
+    zIndex: 6,
+    elevation: 6,
+  },
+  chatReactionPicker: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+    position: 'absolute',
+    right: 40,
+    bottom: -12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0, 0, 0, 0.74)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    shadowColor: STUDOS_THEME.ink,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 7,
+    zIndex: 7,
+  },
+  chatReactionPickerButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  chatReactionPickerEmoji: {
+    fontSize: 19,
+    lineHeight: 23,
   },
   chatComposer: {
     alignItems: 'flex-end',
@@ -37674,14 +38965,32 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  chatConversationTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    minWidth: 0,
+  },
   chatConversationTitle: {
     color: STUDOS_THEME.ink,
+    flexShrink: 1,
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: 0,
   },
   chatConversationTitleUnread: {
     fontWeight: '900',
+  },
+  chatConversationMutedBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 24,
+    height: 24,
+    borderColor: 'rgba(23, 33, 67, 0.16)',
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: '#FFF4D8',
   },
   chatConversationPreviewRow: {
     alignItems: 'center',

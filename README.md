@@ -1,1060 +1,248 @@
 # Studos
 
-Studos er en privat klassehub til studenteraret: Laravel web/admin/API,
-Laravel Cloud drift og en Expo/React Native app til iOS/Android. Denne README
-er projektets aktuelle "start her igen"-note.
+Studos er en privat klasseapp til studenteraret. Selve produktet ligger i
+mobilappen, mens Laravel leverer API, realtime, scheduler, public web og de
+juridiske sider.
 
-Status er opdateret 2026-05-11 efter album-siderne, native gem-til-telefon,
-multi-select, billedviewer med swipe, upload-progress, bedre slet-status,
-klasseprofil, klasseejer/moderator-adgang, rapporteringer med strikes,
-klasse-notifikationer og opdaterede web-politikker for album/billeddeling.
+Status pr. 2026-05-12: appen er gjort klar til TestFlight/internal testing.
+Webdelen er nu en offentlig informationsside.
 
-Se ogsaa:
+## Kort Fortalt
 
-- `DETTE_MANGLER_VI.md` for korte produktnoter, der ikke maa glemmes.
-- `PUBLISH_CHECKLIST.md` for VIGTIG publish-/release-tjekliste.
-- `apps/mobile/README.md` for mobil-specifikke build- og pushnoter.
-- `docs/blueprint.md` og `docs/decisions.md` for tidlige produktbeslutninger.
-
-## Aktuel status
-
-- Web/API koerer i Laravel og bruges som kilde til sandhed.
-- Lokal web ligger paa `http://localhost/studenter-app/public/`.
-- Public index/landing page bruger hero, store-badges, feature-kort og
-  app-mockups fra `public/assets`.
-- Headeren bruger Studos-logo som forside-link, `Funktioner` dropdown,
-  `Om Studos`, `Moderation`, `FAQ` og CTA-knapper i hoejre side.
-- FAQ ligger som offentlig Laravel-side paa `/faq`.
-- Cloud ligger paa `https://studos.laravel.cloud`.
-- Cloud API ligger paa `https://studos.laravel.cloud/api`.
-- Mobilappen ligger i `apps/mobile` og bruger Expo SDK 55 / React Native 0.74.
-- Caps er nu en dynamisk backend-enhed via `members.caps_balance` og
-  `cap_transactions`.
-- Dyst vurderes v1-klar i kodebasen. Flowet mangler stadig fuld QA paa to
-  fysiske enheder og production/staging smoke-test foer publish.
-- Klassedyst bruger API-data og rangerer klasser efter Caps pr. aktiv elev.
-- Optjen Caps-siden samler weekly streak, ugens gode gerning, QR-check-in og
-  duel-indgange.
-- Ugens gode gerning er et simpelt claim: 25 Caps, direkte godkendt, maks en
-  gang pr. bruger pr. uge.
-- Weekly streak checker automatisk ind, naar appen aabnes, og giver 100 Caps
-  efter 7 dage i traek.
-- Native release-builds kan bygges med Cloud-env baked ind og kraever ikke
-  Metro.
-- Expo Go/dev-client bruger Metro til udvikling; release-builds maa ikke vaere
-  afhaengige af lokal dev-server.
-- Dyst-siden i mobilappen er koblet paa backend med oprettelse, accept/afvis,
-  Caps-escrow, resultatbekraeftelse, dommerflow, arkiv og 24 timers svarfrist.
-- Dyst opdaterer nu mere levende via Reverb realtime, polling fallback,
-  foreground-refresh og optimistisk action-feedback i knapperne.
-- Push er live i native flowet: iOS/APNs og Android/FCM credentials er sat via
-  EAS/Expo, token-registrering virker for `ios` og `android`, test-push er
-  verificeret paa fysisk iPhone, og chat-push er verificeret mod Cloud API.
-- Push-notifikationer er nu udvidet til 18 kategorier (chat, gruppechat-invite,
-  dyst-invite/response/action/result/expiring, event-invite/change/reminder,
-  RSVP-reminder, gallery-new/photos, klassebeskeder,
-  connection-request/accepted, good-deed-reminder, streak-reminder). Alle
-  koerer via `App\Support\PushNotifier` med per-kategori opt-out og dedup;
-  reminders koerer som artisan-jobs i `app/Support/NotificationScheduler.php`.
-  Detaljer i afsnittet "Notifikationer" laengere nede.
-- PWA-wrapperen er fjernet. Appdistribution sker via native iOS/Android builds.
-- Medlems-email er nu entydig paa tvaers af systemet; én email kan kun knyttes
-  til én klasse. Dette haandhaeves i backend-validering og database-indekset
-  `members.email`.
-- Walls/galleri er implementeret som klassealbums med synlighedsregler,
-  album-sider, 3-kolonne fotogrid, flerbillede-upload, upload-progress,
-  multi-select, vaelg-alle, gem/slet-handlinger, billedviewer med swipe,
-  uploader/dato-metadata, rapportering, kategori-tabs, soegning, sortering og
-  dynamisk cover-fallback. Backend bruger `galleries` og `gallery_photos`.
-- Native "gem paa telefon" bruger `expo-media-library`; iOS/Android builds skal
-  derfor indeholde ExpoMediaLibrary-modulet og de tilhoerende foto-permission
-  tekster fra `apps/mobile/app.json`.
-- Aktivitetsloggen er implementeret som et globalt klassefeed med
-  adgangsfiltrering: brugeren ser kun events, albums og uploads, som brugeren
-  faktisk har adgang til.
-- Overblik-kortet `Seneste aktivitet` henter nu de 3 nyeste aktiviteter fra
-  samme feed og fungerer som live-preview ind til aktivitetsloggen.
-- Device adaptation: top-bar og footer tilpasser sig automatisk alle iPhones
-  (SE, notch, Dynamic Island) og Android (gesture-nav vs. knap-nav) via
-  dimensionsbaseret inset-beregning. Sidebaren bruger nu `useSafeAreaInsets`
-  fra `react-native-safe-area-context` (App er wrapped i `SafeAreaProvider`
-  i `apps/mobile/index.js`), saa Indstillinger-knappen altid sidder klikbar
-  over Android nav-bar og iOS home indicator paa tvaers af enheder.
-- Android scroll-fix (2026-05-10): Pull-to-refresh blev tilfoejet i
-  `6f566a9` via en wrapper-komponent `<StudosRefreshControl>` rundt om
-  `<RefreshControl>`. Det fik Android's `SwipeRefreshLayout` til at
-  kollapse alle scroll views til 0x0 (alle skerme blev blanke).
-  `StudosRefreshControl` er nu konverteret til en factory-funktion der
-  returnerer `<RefreshControl>` direkte; pull-to-refresh fungerer paa
-  baade iOS og Android. iOS er urort.
-- Push-token registrering accepterer nu `android` og `ios`; iOS/APNs
-  credentials er oprettet i EAS for `dk.studenterapp.mobile`.
-- Rate limiting strammet: personlig kode-opslag (`/members/code/{code}`) er
-  nu throttlet 30/min.
-- Web-politikker er opdateret 2026-05-11: privatlivspolitik, brugervilkaar,
-  cookiepolitik og slet-konto-side daekker nu albummer, billeder af
-  genkendelige personer, native fototilladelser, gem-til-telefon,
-  viderdeling, rapportering, kontosletning og opbevaring.
-- Klasse-admin i appen er nu delt efter rolle: `owner` ser Klasseprofil og
-  Rapporteringer, `moderator` ser kun Rapporteringer, og `student` ser ingen
-  Admin-sektion i sidebaren.
-- Klasseprofil i appen har klasseindstillinger, join-policy, dimissionsdato,
-  medlemsadministration, godkendelse af pending medlemmer, rolleoverdragelse og
-  klasse-notifikation til aktive medlemmer.
-- Rapporteringer i appen viser indkomne rapporter, opdelt i afventer/behandlet/
-  udelukket, med kompakte kort, modalvisning, chatbesked-preview, strikes og
-  advarsels-popup til brugeren naeste gang appen aabnes.
+- Mobilappen er bygget i Expo/React Native.
+- Backend og public web er bygget i Laravel.
+- Production-domain: `https://studos.laravel.cloud`.
+- Production API: `https://studos.laravel.cloud/api`.
+- Klasseoprettelse, login, klasseadmin og moderation foregar i appen.
+- Public web bruges til forside, Om Studos, FAQ, politikker, cookievalg og
+  supportinfo.
+- Tidligere webbaserede appflows redirecter til forsiden.
 
 ## Struktur
 
 ```text
 studenter-app/
-  app/        Laravel controllers, models og supportkode
-  bootstrap/ Laravel bootstrap/cache
-  config/    Laravel konfiguration
-  database/  Migrations og seeders
-  public/    XAMPP/Apache webroot og web-assets
-  resources/ Blade views
-  routes/    Laravel web/API routes
-  storage/   Laravel cache/log/session storage
-  apps/
-    mobile/  Expo/React Native app
-  packages/
-    shared/  Plads til delte typer/helpers senere
-  docs/      Produktnoter og arkitektur
+  app/             Laravel controllers, models, events og supportkode
+  config/          Laravel konfiguration
+  database/        Migrations, seeders og factories
+  public/          Webroot, styles, JS og assets
+  resources/       Blade views og partials
+  routes/          Laravel web/API/console routes
+  tests/           Laravel feature tests
+  apps/mobile/     Expo/React Native app
+  docs/            Produkt- og tekniske noter
+  packages/shared/ Plads til delte helpers/typer senere
 ```
 
-## Hurtig Start
+## Public Web
 
-Installer dependencies fra projektroden:
+Aktuelle public sider:
+
+- `/`
+- `/om-studos`
+- `/faq`
+- `/brugervilkaar`
+- `/privatlivspolitik`
+- `/cookiepolitik`
+- `/slet-konto`
+
+Webdelen har global header, topbar, footer og cookie-consent partials.
+Cookievalget gemmes i browserens `localStorage`, og brugeren kan aendre valget
+igen fra footer eller cookiepolitikken.
+
+Alle produktflows, klasseflows og rollebaserede vaerktojer ligger i appen.
+
+## Mobilappen
+
+Appens hovedomrader:
+
+- Klassekode, eksisterende login og opret klasse i appen.
+- Profiloprettelse med skole, alder, samtykke, profilfoto og valgfri
+  nodkontakt.
+- Overblik med Mit Studos, QR/Studos-kode, hueklip, Caps, kommende kalender,
+  seneste aktivitet og Dyst-preview.
+- Kalender med events, covers, invitationer og RSVP.
+- Chat med direkte chats, gruppechats, reactions, unread, mute, report,
+  block, read-state og Reverb realtime med polling fallback.
+- Dyst/Challenges med Caps, accept/afvis, deadlines, dommerflow, arkiv og
+  resultater.
+- Galleri med albummer, private/faelles synligheder, multi-upload,
+  multi-select, swipe viewer, gem pa telefon, sletning og rapportering.
+- Aktiviteter som filtreret klassefeed.
+- Optjen Caps, Leaderboard, Arcade Hub, Mit crew, Nødkontakter og
+  Indstillinger.
+- Klasseprofil og Rapporteringer for relevante roller.
+
+Roller:
+
+- `owner`: klasseprofil, medlemmer, join-policy, events, rapporter og
+  moderation.
+- `moderator`: rapporteringer og moderation.
+- `student`: almindelig appadgang uden adminsektion.
+
+Datamodellen bruger `members` som appens rigtige klasseprofil. `users` kan
+senere bruges som platform-identitet til fx intern support pa tvaers af
+klasser.
+
+## Produktion Og Links
+
+Appens public policy-links skal pege pa:
+
+```text
+https://studos.laravel.cloud/privatlivspolitik
+https://studos.laravel.cloud/brugervilkaar
+https://studos.laravel.cloud/slet-konto
+```
+
+Relevante mobile env-vars:
+
+```env
+EXPO_PUBLIC_API_URL=https://studos.laravel.cloud/api
+EXPO_PUBLIC_WEBSITE_URL=https://studos.laravel.cloud
+EXPO_PUBLIC_TERMS_URL=https://studos.laravel.cloud/brugervilkaar
+EXPO_PUBLIC_PRIVACY_URL=https://studos.laravel.cloud/privatlivspolitik
+EXPO_PUBLIC_DELETE_ACCOUNT_URL=https://studos.laravel.cloud/slet-konto
+EXPO_PUBLIC_REVERB_APP_KEY=...
+EXPO_PUBLIC_REVERB_HOST=...
+EXPO_PUBLIC_REVERB_PORT=443
+EXPO_PUBLIC_REVERB_SCHEME=https
+EXPO_PUBLIC_SUPPORT_EMAIL=...
+```
+
+Production-builds ma ikke pege pa `localhost`, `192.168.*`, `.local` eller
+XAMPP-stier.
+
+## Lokal Start
+
+Installer dependencies:
 
 ```bash
 composer install
 npm install
 ```
 
-Klargor database lokalt:
+Klargor database:
 
 ```bash
 php artisan migrate
+php artisan db:seed --class=SchoolSeeder
 ```
 
-Start Laravel dev-server:
+Start Laravel lokalt:
 
 ```bash
 npm run web:dev
 ```
 
-Start Expo/Metro lokalt:
-
-```bash
-npm run mobile:start
-```
-
-Start Expo/Metro mod Laravel Cloud:
-
-```bash
-npm run mobile:start:cloud
-```
-
-Hvis en fysisk telefon ikke kan naa Metro paa samme netvaerk:
-
-```bash
-npm run mobile:start:cloud:tunnel
-```
-
-Start Reverb lokalt til chat realtime:
+Start Reverb lokalt, hvis realtime skal testes:
 
 ```bash
 npm run reverb:start
 ```
 
-Bemærk til platformforskelle (Windows vs. Mac):
-
-Nogle scripts sætter miljøvariabler før kommandoerne (fx `EXPO_PUBLIC_*`). Det
-gøres med `cross-env`, så de virker på både MacOS og Windows uden at skrive to
-forskellige varianter af samme kommando.
-
-## Vigtige Scripts
+Start appen:
 
 ```bash
-npm run mobile:ios:release
-npm run mobile:ios:release:cloud
-npm run mobile:build:android:cloud
-npm run mobile:push:check
-php artisan test
-php artisan optimize:clear
+npm run mobile:start
 ```
 
-Brug denne export som hurtig JS/build-sanity for iOS:
+Udvikling med native dev-client:
+
+```bash
+npm run mobile:start:dev-client
+```
+
+## Skoler Og Klasseoprettelse
+
+Appens `Opret klasse` flow bruger `schools` som obligatorisk valgliste.
+Efter en frisk lokal database skal skoler derfor seedes, foer klasseoprettelse
+kan bruges:
+
+```bash
+php artisan db:seed --class=SchoolSeeder
+```
+
+`SchoolSeeder` indeholder pt. 30 danske gymnasier, inkl.
+`Herningsholm Gymnasium, HHX og HTX Herning`.
+
+Ved klasseoprettelse gemmes dimissionsdatoen kun som metadata på klassen
+(`classes.graduation_date`). Den opretter ikke længere et automatisk
+`Dimission` event i kalenderen.
+
+## TestFlight / Release
+
+Foer TestFlight:
+
+- Laravel Cloud er deployet og migrations er koert.
+- `schools` er seedet/opdateret i production.
+- Scheduler/cron kører `php artisan schedule:run` hvert minut.
+- Reverb kører over HTTPS/TLS.
+- Production env-vars er sat i EAS/Laravel Cloud.
+- APNs/FCM credentials er sat i EAS.
+- Policy-links og support-email peger pa production.
+- App version/build number er opdateret ved behov.
+
+iOS build til intern test/TestFlight:
+
+```bash
+npm run mobile:build:ios
+```
+
+Production submit, nar buildet er klar:
+
+```bash
+npx eas-cli submit --platform ios --profile production
+```
+
+Android preview build:
+
+```bash
+npm run mobile:build:android
+```
+
+Android production build:
+
+```bash
+npx eas-cli build --platform android --profile production
+```
+
+## Verifikation
+
+Backend:
+
+```bash
+php artisan test
+php artisan view:cache
+```
+
+Mobil JS:
+
+```bash
+node --check apps/mobile/App.js
+```
+
+Push/Firebase config:
+
+```bash
+npm run mobile:push:check
+```
+
+Expo export sanity:
 
 ```bash
 npm --workspace @studenter-app/mobile exec expo export -- --platform ios --output-dir /private/tmp/studos-ios-export --clear
 ```
 
-## Laravel/API
-
-Kernen er:
-
-- Klasser, skoler, medlemmer, roller og klassekode.
-- Medlemslogin med email/adgangskode og bearer-token.
-- Eksisterende profil kan nu logges ind uden klassekode (hvis emailen kun findes i
-  én klasse).
-- Profilbilleder, eventcovers og gruppechat-billeder via Laravel `Storage`.
-- Events med dato/tid, cover, invitationer, RSVP, rediger/slet og rapportering.
-- Chat med direkte samtaler, gruppechats, Reverb/polling, mute, hide, leave,
-  delete, report, block, gruppeinfo, tilfoej medlemmer og aendring af
-  gruppechatnavn.
-- Connections via personlig Studos-kode.
-- Caps-wallet via `caps_balance`, transaktionslog i `cap_transactions`,
-  Klassedyst, ugens gode gerning og weekly check-in.
-- iOS/Android push-token registrering, test-push og fuld notifikations-suite
-  via Expo Push Service. Backend sender alt via `App\Support\PushNotifier` til
-  Expo, som leverer videre via APNs eller FCM. Per-kategori opt-out gemmes i
-  `member_notification_preferences`; dedup via `notification_dispatch_log`.
-- Walls: gallerier og fotoupload via `galleries` og `gallery_photos` med
-  synlighedsregler (`private`/`class`/`public`), soft-delete, rapportering og
-  album-previewdata til dynamiske cover-collager.
-- Aktiviteter: samlet klassefeed med adgangsfiltrering for events, albums,
-  uploads, foedselsdage, nye klassemedlemmer og Dyst/Challenge-resultater.
-- Klasse-admin endpoints til klasseprofil, medlemsroller, join-policy,
-  godkendelse af pending medlemmer, klasse-notifikationer, rapporteringer,
-  strikes og strike-advarsler.
-
-Roller pr. 2026-05-11:
-
-- `owner`: kan styre klasseindstillinger, invite/join-policy, medlemmer,
-  roller, klasse-notifikationer, events og moderation.
-- `moderator`: kan behandle rapporteringer og moderation i appen, men kan ikke
-  aendre klasseprofil, klasseindstillinger, medlemmer eller roller.
-- `student`: kan bruge appen, chatten, events, galleri og Dyst, men har ikke
-  adgang til admin-funktioner.
-
-I mobilappens sidebar betyder det:
-
-- `owner`: ser `Klasseprofil` og `Rapporteringer`.
-- `moderator`: ser kun `Rapporteringer`.
-- `student`: ser ingen `Admin`-sektion.
-
-Web-admin aabner fortsat kun direkte for `owner` og `moderator`. En bruger, der
-er aktiv `student` i en klasse, bliver ikke sendt ind i admin og kan ikke
-oprette en ekstra klasse fra samme web-login.
-
-Platform-admin/global moderation er stadig naeste store manglende brik foer
-store-submit: webdelen skal have et platform-CMS med global adgang til klasser,
-brugere, brugerdata relevant for moderation, rapporteringer, blocks, strikes,
-moderation violations og fallback-regler, hvis klasseejer/moderator ikke
-handler rettidigt.
-
-Vigtige API-endpoints:
-
-```text
-GET  /api/health
-POST /api/classes/join
-POST /api/session/login
-POST /api/session/request-code
-POST /api/session/verify-code
-GET  /api/session/me
-POST /api/profile/photo
-GET  /api/class-battle
-GET  /api/overview/stats
-GET  /api/activities
-GET  /api/good-deeds/current
-POST /api/good-deeds/claims
-GET  /api/check-ins/weekly
-POST /api/check-ins/weekly
-GET  /api/duels
-POST /api/duels
-POST /api/duels/{duel}/accept
-POST /api/duels/{duel}/decline
-POST /api/duels/{duel}/cancel
-POST /api/duels/{duel}/confirm
-POST /api/duels/{duel}/complete
-POST /api/duels/{duel}/forfeit
-POST /api/duels/{duel}/approve
-POST /api/duels/{duel}/reject
-POST /api/events
-POST /api/events/{event}/update
-POST /api/events/{event}/delete
-POST /api/events/{event}/report
-POST /api/events/{event}/rsvp
-GET  /api/chat/conversations
-POST /api/chat/conversations/direct
-POST /api/chat/conversations/group
-POST /api/chat/conversations/{conversation}/messages
-POST /api/chat/conversations/{conversation}/participants
-PATCH /api/chat/conversations/{conversation}
-POST /api/chat/conversations/{conversation}/report
-POST /api/chat/conversations/{conversation}/block
-POST /api/chat/conversations/{conversation}/leave
-DELETE /api/chat/conversations/{conversation}
-POST /api/chat/messages/{message}/report
-DELETE /api/chat/messages/{message}
-DELETE /api/members/me
-POST /api/notifications/push-token
-POST /api/notifications/push-token/disable
-POST /api/notifications/test
-GET  /api/notifications/preferences
-PUT  /api/notifications/preferences
-PATCH /api/classes/{class}/settings
-POST /api/classes/{class}/announcements
-POST /api/classes/{class}/members/invite
-POST /api/classes/{class}/members/{member}/access
-GET  /api/admin/reports
-POST /api/admin/reports/{report}/dismiss
-POST /api/admin/reports/{report}/strike
-POST /api/members/me/strikes/{strike}/acknowledge
-POST /api/connections/request
-POST /api/connections/{connection}/respond
-GET  /api/galleries
-POST /api/galleries
-PUT  /api/galleries/{gallery}
-DELETE /api/galleries/{gallery}
-POST /api/galleries/{gallery}/report
-GET  /api/galleries/{gallery}/photos
-POST /api/galleries/{gallery}/photos
-DELETE /api/gallery-photos/{photo}
-POST /api/gallery-photos/{photo}/report
-```
-
-`GET /api/galleries` understotter paginering og server-side filtrering via
-`page`, `perPage`, `visibility`, `sort` og `q`. Svaret indeholder
-`pagination` samt `previewPhotos` med op til fire nyeste albumfotos pr.
-galleri. Mobilappen bruger dem til automatisk cover-fallback, hvis brugeren
-ikke har valgt et specifikt cover.
-
-`GET /api/activities` returnerer et kort, filtreret klassefeed med seneste
-relevante aktiviteter. Feedet inkluderer foedselsdage, nye klassemedlemmer,
-oprettede events, oprettede albums, uploadede billeder, vundne `Mod hinanden`
-dyster og gennemfoerte challenges. Endpointet sender kun noedvendige felter
-til mobilappen, filtrerer blokerede/slettede profiler vaek, udelader private
-events/albums brugeren ikke er en del af, og undgaar challenge-detaljer.
-
-## Notifikationer
-
-Push-notifikationer leveres via Expo Push Service og koeres centralt gennem
-`App\Support\PushNotifier::send($category, $memberIds, $options)`. Servicen
-respekterer per-kategori opt-out, deduplikerer pushes via
-`notification_dispatch_log`, deaktiverer ugyldige tokens automatisk, og
-afkorter titler til 80 tegn og bodyer til 240 tegn (Apple/Google grænser).
-
-Reminders koerer som artisan-jobs i `App\Support\NotificationScheduler` og er
-schedulet i `routes/console.php`.
-
-Komplet kategorioversigt med praecise titler og bodyer findes i
-`docs/Studos_Notifikationer.md`.
-
-### Kategorier (18 stk.)
-
-| Kategori | Udloeses ved |
-| --- | --- |
-| `chat_message` | Ny besked i samtalen (mute respekteres). |
-| `group_chat_invite` | Tilfoejet til gruppechat (create + addParticipants). |
-| `duel_invite` | Modparten udfordres med en ny dyst/challenge. |
-| `duel_response` | Modparten accepterer eller afviser. |
-| `duel_action_required` | Modpart skal bekraefte resultat eller dommer skal afgoere. |
-| `duel_result` | Dyst er afsluttet (begge parter notificeres). |
-| `duel_expiring` | Cron: deadline_at falder inden for ~2 timer. |
-| `event_invite` | Event oprettet eller nye medlemmer tilfoejet til invite. |
-| `event_change` | Dato, tidspunkt eller sted aendret paa et event. |
-| `event_reminder` | Cron: 24t og 2t foer event starts_at/event_date. |
-| `rsvp_reminder` | Cron: 2-4 dage foer event hvis bruger ikke har svaret RSVP. |
-| `gallery_new` | Nyt offentligt galleri oprettet (audience: everyone/specific). |
-| `gallery_photos` | Nye billeder i offentligt galleri (30-min anti-spam dedup). |
-| `class_announcement` | Klasseejer sender en vigtig klasse-notifikation fra Klasseprofil. |
-| `connection_request` | Connection-request modtaget. |
-| `connection_accepted` | Tidligere request er accepteret (inkl. mutual-pending shortcut). |
-| `good_deed_reminder` | Cron: fredag kl. 17:00 hvis ugens gode gerning ikke er claimet. |
-| `streak_reminder` | Cron: dagligt kl. 19:00 hvis streak er paa spil. |
-
-### Cron-schedule
-
-| Kommando | Cadence |
-| --- | --- |
-| `notifications:duels-expiring` | hver time |
-| `notifications:event-reminders` | hver time |
-| `notifications:rsvp-reminders` | dagligt 17:00 |
-| `notifications:good-deed-reminders` | fredag 17:00 |
-| `notifications:streak-reminders` | dagligt 19:00 |
-
-Schedulering kraever at `php artisan schedule:run` koerer hvert minut paa
-serveren (samme krav som dyst-expiry).
-
-### Brugerstyring
-
-Brugere kan slaa hver kategori til/fra under
-**Indstillinger -> "Hvad vil du have notifikation om?"** i mobilappen.
-
-- `GET /api/notifications/preferences` returnerer `{ category: bool }` med
-  defaults (alle `true` hvis ikke gemt).
-- `PUT /api/notifications/preferences` accepterer `{ "preferences": { ... } }`
-  og opdaterer kun de medsendte kategorier.
-- Alle scheduler-jobs respekterer disse opt-outs.
-- Ud over per-kategori er der to overordnede afbrydere bevaret fra tidligere:
-  system-niveau push-permission (iOS/Android indstillinger) og
-  `POST /api/notifications/push-token/disable` (deaktiverer token i DB).
-
-### Tabeller
-
-| Tabel | Formaal |
-| --- | --- |
-| `member_push_tokens` | Eksisterende — Expo-tokens pr. enhed. |
-| `member_notification_preferences` | Per-kategori opt-out (`member_id`, `category`, `enabled`). Unique key paa `(member_id, category)`. |
-| `notification_dispatch_log` | Dedup-historik (`member_id`, `category`, `dedup_key`, `source_type`, `source_id`). Unique key paa `(member_id, dedup_key)` forhindrer duplikat-pushes. |
-
-### Compliance-noter
-
-- **GDPR / dansk lov:** Per-kategori opt-out i UI, alle 18 kategorier er
-  transaktionelle (ingen marketing). Markedsfoeringsloven §10 gaelder ikke.
-- **Apple App Store:** APNs-permission haandteres allerede i Expo-flowet;
-  hver kategori har transaktionel kontekst (ikke marketing).
-- **Google Play:** Android leverer alle pushes via channel `studos-default`.
-  Kanaler kan splittes per kategori senere hvis vi vil eksponere
-  per-kategori System-toggles.
-
-## Public Landing Page
-
-Indexsiden (`resources/views/home.blade.php`) er den aktuelle offentlige
-landing page.
-
-Hero:
-
-- Bruger `public/assets/landing-hero.png` som fuld hero-baggrund.
-- Viser Studos-wordmark og download-badges oven paa hero-billedet.
-- Download-badges ligger direkte under hero-teksten og matcher officielle
-  store-badge-stile.
-- Den interaktive mockup-carousel ligger oven paa hero-billedet i samme
-  placering som det tidligere iPhone-mockup og kan skiftes med pile.
-- Har en bloed bund-fade i CSS, saa overgangen til feature-sektionen ikke bliver
-  haard.
-
-Feature-sektionen:
-
-- Overskriften er `Det der holder vognen i gang` med kort introbroedtekst under.
-- Layoutet har app-mockup-karussel i venstre kolonne og 8 UI-kort i hoejre
-  kolonne.
-- Kortene er SEO-laesbar HTML med `h3` og tekst, mens screenshots kun er visuel
-  understoettelse.
-- Aktivt kort styrer titel, highlight og farvet shadow paa mockuppen via
-  `public/app.js`.
-- Footer/sidebar-ikoner genbruges hvor de findes:
-  `footer-calendar.png`, `footer-chat.png` og `footer-walls.png`.
-- Nye lokale screenshots ligger i `public/assets/index-mockups/`:
-  `Kalender.png`, `Chats.png`, `Dyst.png`, `Walls.png`, `Overblik.png`,
-  `Spil.png` og `Klassedyst.png`.
-
-Header/footer pr. 2026-05-01:
-
-- Header-nav viser ikke laengere `Forside` eller `Admin`; forside ligger paa
-  logoet, og CMS-handlinger ligger i CTA/header-slot.
-- Landing-headeren bruger samme cremebase og mint/coral gradientretning som
-  footeren, men mere afdaempet, saa heroen stadig er hovedfokus.
-- Landing-siden viser en midlertidig topbar, der forklarer at appen er under
-  udvikling, og at download-knapperne kun er design-preview.
-- `Funktioner` er en CSS-only hover/focus-dropdown med links til
-  feature-sektionen.
-- Klasse-CMS viser `Log ud` i header-slot; invitekopiering ligger stadig inde i
-  klassevisningen.
-- Footer er cremefarvet med mint/coral gradients, fire lige fordelte kolonner og
-  diskret topskygge.
-- Footerens brandkolonne viser Studos-logo, kontaktoplysninger for
-  PlateDigital, og `En del af` + PlateDigital-logo fra
-  `public/assets/PlateDigital-logo-saas.svg`.
-- Footer-navigationen har `Navigation`, `Det med smaat` og `Hold kontakten`.
-  `Hold kontakten` bruger kompakte store-badges og store originale Instagram /
-  Facebook ikoner.
-
-FAQ:
-
-- Route: `GET /faq` (`route('faq')`).
-- View: `resources/views/faq.blade.php`.
-- Siden bruger native `details/summary` accordion-spoergsmaal om Studos,
-  klasseoprettelse, CMS, elever, moderation og support.
-
-## Mobilappen Lige Nu
-
-Footer-navigation:
-
-- `Kalender`
-- `Chat`
-- `Overblik`
-- `Dyst`
-- `Galleri`
-
-Sidebar:
-
-- `Din klasse`: Optjen Caps, Leaderboard, Arcade Hub og Aktiviteter.
-- `Admin`: vises kun efter rolle. Klasseejer ser `Klasseprofil` og
-  `Rapporteringer`; moderator ser kun `Rapporteringer`; elev ser ikke
-  Admin-sektionen.
-- Toppen viser profil og `Mit crew`; Noedkontakter og Indstillinger ligger
-  som faste genveje i menuen.
-
-`Min profil` findes i sidebaren. Profilen viser elevoplysninger, QR/Studos-kode,
-profilfoto, samt handlinger til at ændre avatar, logge ud og slette konto.
-Sletning sker via `DELETE /api/members/me` med irreversibel flow, hvor brugeren
-bliver advaret tydeligt i UI.
-
-Overblik:
-
-- Headeren clampler ved scroll.
-- Main-content scroller under headeren.
-- Kortene faar scroll-effekt og bliver mindre paa vej under headeren.
-- `Mit Studos` viser profil, QR, hueklip og klasseinfo.
-- Hueklip-gennemfoert gemmes lokalt pr. bruger, indtil brugeren selv aendrer
-  det igen.
-- Caps-container viser brugerens rigtige `DINE CAPS`, capcoin-logo og knap til
-  Optjen Caps.
-- `Min kommende kalender` viser alle dagens events og maks 3 kommende events.
-- Klik paa et event i Overblik aabner Kalender paa den rigtige dag/eventkort.
-- `Seneste aktivitet` henter dynamisk de 3 nyeste aktiviteter fra
-  aktivitetsloggen og viser kompakte preview-raekker.
-- Der er nederste kort til `Dine dyste`.
-
-Aktiviteter:
-
-- Siden bruger samme faste header/under-scroll som Overblik.
-- Feedet er globalt for klassen, men ikke offentligt: events, albums og uploads
-  vises kun, hvis brugeren er en del af dem eller har adgang til dem.
-- Viser foedselsdage, nye klassemedlemmer, oprettede events, faelles/private
-  album-oprettelser, billeduploads, vundne `Mod hinanden` dyster og
-  gennemfoerte challenges.
-- Event-oprettelser og nye klassemedlemmer bruger profilbillede/initialer som
-  log-ikon. `Mod hinanden` bruger lyseblaa pile, og Challenge bruger tre
-  stjerner.
-- Kun nyeste aktivitet fremhaeves med fed tekst; resten er roligere for hurtig
-  scanning.
-- Info-knappen forklarer, at loggen kun viser relevante klasseaktiviteter og
-  filtrerer aktivitet, brugeren ikke er en del af, af hensyn til GDPR.
-
-Kalender:
-
-- Events sorteres efter lokal dansk dato/tid.
-- Et event bliver tidligere, naar dets starttidspunkt er passeret.
-- Tidligere events ligger bag en fuldbredde knap nederst paa kalendersiden.
-- Afholdte kort viser `Deltog` og `Deltog ikke`.
-- Eventkort har titel paa coverbilledet, dato-container, avatar-stack, RSVP,
-  cover-upload og stock-covervalg.
-- Rediger/slet bruger stabile `POST /update` og `POST /delete` endpoints.
-
-Chat:
-
-- Direkte chats, gruppechats, gruppebillede og unread-count.
-- Long-press paa samtaler/beskeder giver handlinger.
-- Gruppechats har delt avatar-fallback med op til tre medlemmer, klikbar
-  gruppeheader, medlemsliste, ejer-pill, tilfoej medlemmer og aendring af
-  chatnavn for ejeren.
-- Gruppechat-beskeder viser afsenderens fornavn diskret over boblen paa andres
-  beskeder, saa stock-avatar/initialer ikke er eneste identifikation.
-- Rapportering, direkte blokering og moderation logs er startet.
-- Realtime bruger Laravel Reverb, med polling fallback.
-
-Klasseprofil:
-
-- Siden findes under Admin for `owner`.
-- Har klasse-tab med foldbare containere for klasse-notifikation, klassenavn,
-  join-policy og dimissionsdato.
-- Klasse-notifikation sender en kort notifikation til aktive medlemmer via
-  `class_announcement`.
-- Join-policy kan saettes til aaben, kraever godkendelse eller lukket.
-- Hvis join-policy kraever godkendelse, vises pending anmodninger med badge i
-  sidebaren og kan godkendes/afvises i modal.
-- Medlemmer-tabben har inline scroll, rolle-dropdown og fjern/godkend-handlinger.
-- Kun én klasseejer kan vaere aktiv ad gangen; overdragelse af klasseejer
-  kraever bekraeftelse og demoter den tidligere klasseejer til moderator.
-
-Rapporteringer:
-
-- Siden findes under Admin for `owner` og `moderator`.
-- Sidebar badge viser antal afventende rapporteringer.
-- Rapporteringer er opdelt i tabs: afventer, behandlet og udelukket.
-- Listekort er kompakte previews; detaljerne aabnes i modal.
-- Chatbesked-rapporter viser selve anmeldte besked baade i kort og modal.
-- Klasseadmin kan afvise rapporten eller give strike.
-- Ved 3 aktive strikes udelukkes brugeren fra klassen.
-- Strike-advarsler vises for brugeren naeste gang appen aabnes og kan
-  kvitteres.
-
-Klassedyst:
-
-- Siden henter dynamisk rangliste fra `GET /api/class-battle`.
-- Klasser rangeres efter Caps pr. aktiv elev, saa store og smaa klasser kan
-  sammenlignes mere fair.
-- Ranglisten viser total Caps, Caps pr. elev, medaljefarver til top 3 og
-  markerer brugerens egen klasse.
-- Topkort viser klassens placering, brugerens Caps og brugerens klasseandel.
-- Ugens gode gerning kan claimes direkte paa kortet og opdaterer Caps.
-
-Dyst:
-
-- Dyst er produktnavnet for det tidligere Duel-flow.
-- Opret dyst aabner som overlay oven paa Dyst-siden og kan swipes tilbage paa
-  samme maade som chat-overlayet.
-- Der kan oprettes to typer: `Mod hinanden` til 1:1-konkurrencer og `Challenge`
-  til envejs-udfordringer.
-- Opret-flowet er poleret til v1: `Vaelg din dyst`, tydelige type-ikoner,
-  dynamisk `Vaelg modstander`/`Vaelg person`, native dato- og tidsvaelger,
-  Caps-indsats/beloenning med capcoin, deadline og valgfri dommer.
-- Dommer kan kun vaelges paa `Mod hinanden`. Naar togglen slaas til, aabner en
-  centreret dommermodal med soegefelt; lukker man uden valg, slaas dommer fra
-  igen.
-- `Mod hinanden` er gensidig indsats: begge parter laaser samme antal Caps i
-  escrow, og vinderen faar puljen.
-- `Challenge` er envejs-bounty: opretteren laaser beloenningen i escrow,
-  modtageren betaler ingen Caps, og opretteren faar beloenningen retur ved
-  afvisning, annullering eller udloeb.
-- Challenge har ingen dommer og kan ikke give Caps begge veje. Modtageren faar
-  kun beloenningen, hvis opretteren godkender gennemfoerslen.
-- Afventende dystanmodninger viser en 24 timers svarfrist i status-pill i stedet
-  for en statisk `Afventer svar` tekst.
-- Afventende dystkort bruger lyseblaa container, mens svarfrist-pill kan vaere
-  gul eller roed, naar fristen er taet paa at udloebe.
-- Sendte dyster vises adskilt fra indkommende afventede dyster. Brugeren ser
-  modtagerens navn/billede, en groenne pil-retning, annuller-knap og svarfrist.
-- Aktive `Mod hinanden`-dyster bruger `Vaelg vinder`. Uden dommer skal begge
-  parter bekraefte resultatet, foer Caps udbetales.
-- Aktive `Challenge`-dyster kan kun markeres gennemfoert af modtageren og har
-  ikke dommer. Resultatet kraever opretterens bekraeftelse, foer beloenningen
-  udbetales.
-- Modtageren kan bruge `Giv op` paa en aktiv `Challenge`; challengen lukkes som
-  tabt for modtageren, og opretteren faar beloenningen retur med det samme.
-- Top-right status-pills er forenklet: `I GANG`, `GENNEMFOERT` og, naar det er
-  brugerens tur til sidste godkendelse, `BEKRAEFT VINDER`.
-- Foreslaaet vinder vises som groent meta-element. De nederste action/info-felter
-  fortaeller, om resultatet ligger hos modpart, opretter eller dommer.
-- Alle Dyst- og Challenge-resultater skal vaere godkendt foer deadline. Hvis
-  deadline passerer, mens en dyst stadig er aktiv eller afventer godkendelse,
-  udloeber den, og escrow-Caps returneres.
-- Hvis der er dommer paa en `Mod hinanden`-dyst, sendes resultatet til
-  dommergodkendelse, og dommeren kan godkende eller afvise via en separat
-  dommermodal.
-- Dommeropgaver vises kun, naar brugeren faktisk har afventende
-  dommergodkendelser, med lille badge/tal paa Dyst-siden.
-- Dyst-ikonet i footeren viser en lille badge med antal handlinger, der kraever
-  brugerens input: indkommende dyster og dommergodkendelser.
-- Afventede og aktive hovedsektioner kan foldes ind/ud. Afventede er som
-  udgangspunkt lukket, aktive er aaben, naar der er aktive dyster.
-- Afsluttede, afviste, annullerede og udloebne dyster ligger i arkivmodalen.
-- Backend gemmer dyster i `point_duels`, validerer Caps-balance, laaser
-  indsats/beloenning i escrow og skriver bevaegelser i `cap_transactions`.
-- Udlober en aktiv dyst, eller udlober en anmodning efter 24 timer uden accept,
-  arkiveres den som udloebet og escrow-Caps refunderes.
-- Dyst-udloeb koeres via `php artisan duels:expire`, som er registreret i
-  Laravel Scheduler hvert minut. Ved publish skal scheduler/cron vaere aktiv,
-  ellers koerer udloeb kun, naar en involveret bruger rammer duel-endpoints.
-- Realtime bruger private Reverb-kanaler pr. medlem, med polling fallback og
-  foreground-refresh, saa Dyst-siden opdaterer uden at brugeren skal forlade
-  siden.
-- Dyst-notifikationer er koblet paa `PushNotifier` for invitationer,
-  accept/afvis, handling kraeves, resultat og deadline-reminders.
-
-Walls:
-
-- Walls er klassens billedgalleri, opdelt i navngivne albums (gallerier).
-- Gallerioversigten viser albumkort med cover, navn, antal fotos og
-  synligheds-pill (`Privat`/`Faelles`).
-- Oversigten har kategori-tabs (`Alle`, `Faelles`, `Private`), soegefelt og
-  sortering via filterknappen (`Seneste`, `Flest billeder`, `A-Z`).
-- Sorteringsvalget i filtermodalen er midlertidigt, indtil brugeren trykker
-  `Anvend`; en lille `x`-knap nulstiller sortering direkte fra oversigten.
-- Naar Galleri forlades og aabnes igen, resettes oversigten til `Alle`,
-  `Seneste` og tom soegning.
-- Et galleri kan oprettes med navn og synlighed; synlighedsregler styrer hvem
-  der kan se albummet.
-- Hvis flere album har samme navn, advarer appen, men blokerer ikke gem.
-- Hvis brugeren har valgt et specifikt cover, bruges det altid. Uden specifikt
-  cover viser tomme album et grafisk Studos-cover; album med billeder bruger
-  automatisk de nyeste billeder som cover: 1 foto i fuld bredde, 2-3 fotos som
-  lodrette felter og 4+ fotos som 2x2-collage.
-- Album-skærmen viser alle fotos i et grid og har upload-knap.
-- Album-skærmen er delt i header og main-content, saa toppen ikke ligger under
-  notch/Dynamic Island.
-- Tilfoej-knappen ligger i headeren som groent cirkelikon.
-- Album-skærmen har toggle til valg-mode. Naar valg-mode er aktivt, vises en
-  bundlinje med `Gem`, `Slet` og `Vaelg alle`; handlingerne kraever mindst ét
-  valgt billede.
-- Billeder vises i 3 kolonner pr. raekke med mindre previews.
-- Upload kan vaelge flere billeder i samme native picker, viser progress som
-  fx `Uploader 3/10`, og opdaterer albummet efter upload.
-- Slet flere giver bedre status, saa delvise fejl ikke skjules.
-- Long-press paa et billede starter valg-mode direkte og vaelger billedet.
-- Long-press paa et album viser `Om albummet`; brugere med adgang ser ogsaa
-  `Upload billede`, som aabner albummet og starter billedvaelgeren automatisk.
-- Fotoupload bruger `expo-image-picker` og sender til
-  `POST /api/galleries/{gallery}/photos`.
-- Enkeltfotovisning aabner i en fullscreen viewer med swipe mellem billeder,
-  gem/slet/rapport-actions og metadata for uploader og uploadtidspunkt.
-- Rigtig "Gem paa telefon" bruger `expo-media-library`, saa billedet gemmes i
-  kamerarullen/fotobiblioteket i native iOS/Android builds.
-- Viewer-billedet er rykket ned, saa hoeje billeder ikke gaar op under notch.
-- Rapportering og sletning er tilgaengelig for uploader og klasse-admin.
-- Backend soft-deleter gallerier og fotos og gemmer `deleted_by_member_id`.
-
-Optjen Caps:
-
-- Siden bruger samme headerstil som de andre app-sider.
-- Weekly streak registreres automatisk ved app-aabning.
-- Dag 7 giver 100 Caps, viser reward-modal og starter derefter en ny streak.
-- Andre maader at optjene Caps ligger i en intern scroll-container:
-  Ugens gode gerning, Check-in med `Scan QR`, og dyster med point paa hoejkant.
-- Ugens gode gerning giver 25 Caps og kan kun claimes en gang pr. uge.
-
-## Build-/Store-Konfiguration
-
-iOS:
-
-- Bundle id: `dk.studenterapp.mobile`.
-- App-navn: `Studos`.
-- Produktbuild fjerner lokal netvaerkspermission automatisk.
-- Development variant kan bruge lokal netvaerkspermission til dev-server.
-- Photo Library permission forklarer profilbillede og eventcover.
-- Photo Library Add permission og `expo-media-library` forklarer, at Studos kan
-  gemme valgte album-billeder i brugerens kamerarulle.
-- iOS push bruger `expo-notifications`, `aps-environment` entitlement og Expo
-  Push Service. APNs push key er oprettet i EAS credentials for
-  `dk.studenterapp.mobile`.
-
-Android:
-
-- Package: `dk.studenterapp.mobile`.
-- Development package: `dk.studenterapp.mobile.dev`.
-- Firebase config findes for begge varianter.
-- Android Firebase config auto-vaelges til Android builds; lokal config-check
-  kan stadig koeres med `STUDOS_ENABLE_ANDROID_NOTIFICATIONS=1`.
-- `android.permission.RECORD_AUDIO` er blokeret, fordi appen ikke har en reel
-  mikrofonfeature lige nu.
-
-## Oprydning
-
-2026-05-01:
-
-- Fjernet den gamle PWA-wrapper under `public/pwa/`.
-- Fjernet PWA-manifestet, Expo web-bundlet under `public/_expo/` og PWA-only
-  assets under `public/assets/assets/`.
-- Beholder kun `public/sw.js` som midlertidig cleanup-worker, der afregistrerer
-  gamle service workers og sletter `studos-pwa-*` caches.
-- Gamle `/pwa`-links redirecter til forsiden.
-- Web/login/opret klasse/admin/CMS ligger fortsat i Laravel.
-
-2026-04-29:
-
-Ryddet op:
-
-- Fjernet tom root-`app.json`, som kunne forvirre Expo config.
-- Fjernet gamle ubrugte `footer-duel` PNG-assets. Duel-ikonet tegnes nu stabilt
-  i React Native.
-- Fjernet gamle ubrugte JS-bundles.
-- Fjernet tom `public/favicon.ico` og peget web paa Studos SVG-marken som
-  favicon.
-- Blokeret Android mikrofonpermission.
-
-## App Store / Google Play Status
-
-Det der ser godt ud:
-
-- Appen har ikke lokal dev-server/netvaerkspermission i produktions-iOS config.
-- Photo permissions er konkrete og knyttet til brugerens egen handling:
-  vaelge profil/event/album-billeder og gemme valgte album-billeder paa
-  telefonen.
-- Chat/events har filtering, rapportering, blokering og throttling.
-- Albummer har lukkede maalgrupper, rapportering af album/enkeltbilleder,
-  sletning for berettigede brugere, multi-select-handlinger og metadata i
-  billedviewer.
-- Klassemoderation er nu flyttet ind i appen: klasseejer kan administrere
-  klasseprofil/medlemmer og se rapporteringer; moderator kan se og behandle
-  rapporteringer; elever ser ingen admin-funktioner.
-- Rapporteringer har statusflow, chatbesked-preview, handling via dismiss/
-  strike, 3-strike udelukkelse og strike-advarsel til brugeren ved naeste
-  app-aabning.
-- Klasseejer kan sende korte klasse-notifikationer til aktive medlemmer via
-  Klasseprofil. Kategorien kan slaas fra i notifikationsindstillinger.
-- Aktivitetsloggen minimerer data, filtrerer synlighed pr. bruger og viser ikke
-  private challenge-detaljer i feedet.
-- Push er native-only og klar til baade iOS og Android. iOS test-push og
-  chat-push er verificeret paa fysisk iPhone mod Cloud API.
-- Android mikrofonpermission er nu fjernet/blokeret.
-- Backend koerer paa HTTPS i Cloud.
-- Caps har ingen pengevaerdi, kan ikke koebes, saelges, veksles eller bruges til
-  praemier. Dette er skrevet ind i vilkaar/politik, saa Dyst ikke skal
-  misforstaas som gambling eller real-money contest.
-- Dyst/Caps er socialt og internt til Studos, men review notes boer forklare
-  kort, hvordan Caps, Dyst, Challenge og escrow virker.
-- Privacy/terms/cookies/delete-account er live som offentlige Laravel-sider og
-  opdateret til album/billeddeling. De boer stadig juridisk gennemlaeses foer
-  endelig App Store / Google Play-submit.
-
-Release-blokkere foer Apple/Google:
-
-- Kontosletning er implementeret i appen (`DELETE /api/members/me`) med
-  tydelig irreversibel advarsel og anonymiseringsflow.
-- Chat er funktionelt TestFlight-klar, men production-builds skal tvinges til
-  HTTPS-only backend/Reverb via EAS env (`EXPO_PUBLIC_API_URL`,
-  `EXPO_PUBLIC_REVERB_HOST`, `EXPO_PUBLIC_REVERB_PORT=443`,
-  `EXPO_PUBLIC_REVERB_SCHEME=https`). Release-builds maa ikke falde tilbage til
-  lokale `http://localhost`, `.local`, `10.*` eller `192.168.*` endpoints.
-- Privatlivspolitik, vilkaar/EULA, cookiepolitik og slet-konto-side skal
-  linkes korrekt fra appen/store listings og matche App Store Privacy / Google
-  Play Data Safety.
-- App Privacy / Data Safety skal udfyldes med email, navn, bruger-ID,
-  profilbilleder/uploads, aktivitetslog, chatindhold, events, push-token og
-  supportdata.
-- Platform-CMS/global moderation mangler stadig: webdelen skal give platform-
-  admins overblik over alle klasser, brugere, brugerdata relevant for
-  moderation, rapporter, blocks, strikes og moderation violations.
-- Der skal vaere fallback-regler paa platformniveau, saa rapporteringer kan
-  eskaleres eller overtages, hvis klasseejer/moderator ikke handler rettidigt.
-- Foer App Store-release boer gruppechat-medlemslisten have ekstra tydelige
-  medlemshandlinger til `Rapporter medlem` og `Bloker medlem`, selvom chat og
-  beskeder allerede kan rapporteres/blokeres via de eksisterende flows.
-- UGC-vilkaar forbyder nu chikane, diskrimination, trusler, seksuelt indhold,
-  ulovligt indhold og misbrug af billeder/chat; reviewer-notes boer forklare,
-  hvor rapportering/blokering findes i appen.
-- Review-notes skal have demo-login, forklaring af klassekode og hvor reviewer
-  finder rapporter/blokering.
-- Placeholder/laaste features skal ikke markedsfoeres som faerdige features.
-- Privacy manifest/required reason APIs skal kontrolleres i Xcode archive foer
-  App Store Connect upload.
-- Google Play target API skal kontrolleres ved EAS production AAB. Nye apps og
-  updates skal ramme aktuel Play target API-krav.
-
-## Ikke Lavet Endnu
-
-- Wallet.
-- Blaa bog.
-- Backend-persistens for hueklip.
-- Platform-CMS/global moderation til alle klasser, brugere, rapporteringer,
-  blocks, strikes og moderation violations.
-- Platform-fallback for rapporteringer, hvis klasseejer/moderator ikke handler
-  rettidigt.
-- Drifts-/platform-notifikationer fra platform-admin er parkeret til
-  platform-CMS findes.
-- Caps-optjent push (digest-version er parkeret indtil aktivitetsmoenster
-  er stoerre).
-- Admin/moderation-pushes for rapport-resultat og fjernet indhold er parkeret,
-  mens strike-advarsel i appen er implementeret.
-- Glemt adgangskode/email reset.
-- QR-invite/QR-scan flow.
-- Juridisk gennemgang af privacy/terms/cookies/delete-account foer store
-  review.
-- Data-export flow.
-
-## Testdata
-
-Mobile test-login:
-
-```text
-Klassekode: STU-DEMO26
-Email: chris@skole.dk
-Password: studos123
-```
-
-Web test-login:
-
-```text
-URL: http://localhost/studenter-app/public/login
-Email: chris@skole.dk
-Password: studos123
-```
-
-## Seneste Verificering
-
-Senest koert 2026-05-11 efter album-mediehandlinger og policy-opdatering:
-
-```bash
-php artisan view:cache
-git diff --check
-php artisan test --filter=test_app_can_resolve_invite_code_and_create_profile
-php artisan test --filter=RetentionServiceTest
-php artisan test
-```
-
-Resultat:
-
-- Blade templates cacher OK.
-- `git diff --check`: OK.
-- `php artisan test`: **68 tests passer, 706 assertions**.
-- Privatlivsversion for nye accepter opdateret til `2026-05-11`.
-- `resources/views/legal/privacy.blade.php`,
-  `resources/views/legal/terms.blade.php`,
-  `resources/views/legal/cookies.blade.php` og
-  `resources/views/legal/delete-account.blade.php` er opdateret til albummer,
-  billeder, fototilladelser, gem-til-telefon, rapportering og kontosletning.
-
-Senest koert 2026-05-10 efter Android scroll-collapse fix og safe-area
-sidebar:
-
-```bash
-node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
-git diff --stat
-```
-
-Resultat:
-
-- `App.js parse ok`.
-- 14 call sites til `<StudosRefreshControl>` konverteret til
-  `studosRefreshControl({...})` factory-kald saa
-  `refreshControl`-prop'en faar et rent `<RefreshControl>`-element
-  (ikke en function-komponent wrapper). Loeser Android-bug hvor alle
-  scroll views kollapsede til 0x0.
-- `apps/mobile/index.js` wrapper App i
-  `<SafeAreaProvider initialMetrics={initialWindowMetrics}>` (bruger
-  `react-native-safe-area-context` 5.6.2 som allerede var installeret).
-- `AppSidebar` bruger nu `useSafeAreaInsets().bottom` (med min 10px
-  fallback) som `paddingBottom` paa scroll-content; Indstillinger er
-  klikbar paa baade iOS (home indicator), Android (3-knaps nav) og
-  Android (gesture nav).
-- Manuel test paa Android (Expo Go): alle skerme loader indhold
-  korrekt, pull-to-refresh fungerer, sidebar Indstillinger er klikbar.
-- iOS: urort, ingen visuelle aendringer.
-- Kendt begraensning: TopBar, FooterNav og ChatScreen bruger fortsat
-  module-level heuristik for insets (`IOS_TOP_INSET`, `IOS_BOTTOM_INSET`,
-  `ANDROID_NAV_BAR_HEIGHT`). Fungerer paa almindelige enheder, men er
-  ikke endegyldigt robust paa rotation/foldables/edge-to-edge. Migration
-  til `useSafeAreaInsets` overalt parkeret som senere refactor.
-
-Tidligere koert 2026-05-09 efter notifikations-suiten (17 kategorier):
-
-```bash
-php -l app/Support/PushNotifier.php
-php -l app/Support/NotificationScheduler.php
-php -l app/Http/Controllers/StudosController.php
-php -l app/Http/Controllers/ChatController.php
-php -l routes/console.php
-node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
-./vendor/bin/phpunit
-```
-
-Resultat:
-
-- PHP lint: OK paa alle aendrede filer.
-- `App.js parse ok`.
-- `php artisan test`: **68 tests passer, 706 assertions** (inkl. 7 nye
-  `PushNotifierTest`).
-- Chat-push refaktoreret til at bruge `PushNotifier`; eksisterende mute-
-  adfaerd bevaret og daekket af integration.
-- Migration `2026_05_09_020000_create_notification_preferences_and_dispatch_log`
-  opretter `member_notification_preferences` og `notification_dispatch_log`.
-
-Tidligere koert 2026-05-08 efter aktivitetslog og dynamisk Overblik-preview:
-
-```bash
-node -e "require('@babel/parser').parse(require('fs').readFileSync('apps/mobile/App.js','utf8'),{sourceType:'module',plugins:['jsx']}); console.log('App.js babel ok')"
-git diff --check
-php artisan test
-```
-
-Resultat:
-
-- `App.js babel ok`.
-- `git diff --check`: OK.
-- `php artisan test`: 44 tests passer, 599 assertions.
-- `GET /api/activities` er testet for synlighedsfiltrering, blokeringer og
-  minimalt payload.
-- Overblik henter `GET /api/activities?limit=3` til aktivitetskortets preview.
-
-Tidligere koert 2026-05-07 efter Walls cover-fallback, sortering og long-press
-upload:
-
-```bash
-php -l app/Http/Controllers/StudosController.php
-npm --workspace @studenter-app/mobile exec -- expo export --platform web --output-dir /private/tmp/studos-mobile-export-refresh-all
-php artisan test
-```
-
-Resultat:
-
-- `StudosController.php` lint OK.
-- Expo web-export for mobilappen bygger OK.
-- Walls `/api/galleries` returnerer nu paginerede album med server-side
-  kategori, sortering, sogning og `previewPhotos` til cover fallback.
-- Mobilappen bruger nu Studos-farvet pull-to-refresh paa de primaere
-  server-drevne sider.
-
-Tidligere koert 2026-05-06 efter Walls v1, UX og device adaptation:
-
-```bash
-node --check apps/mobile/App.js
-php -l app/Http/Controllers/StudosController.php
-```
-
-Resultat:
-
-- `apps/mobile/App.js` parser OK.
-- `StudosController.php` lint OK.
-- Walls-endpoints og gallery-migrationer verificeret i kodebasen.
-- Push-token platform-validering accepterer nu Android og iOS.
-- Rate limit tilfojet paa `/members/code/{code}` (30/min).
-- Device adaptation verificeret: top-bar og footer bruger nu dimensionsbaserede
-  insets uden externe native biblioteker.
-
-Tidligere koert 2026-05-03 efter login/ email-regel/ Caps/Klassedyst/Optjen Caps-arbejdet:
-
-```bash
-php -l app/Http/Controllers/StudosController.php
-php -l database/migrations/2026_05_02_010000_create_good_deed_and_cap_transaction_tables.php
-php -l database/migrations/2026_05_02_030000_simplify_good_deed_claims.php
-php -l tests/Feature/ExampleTest.php
-node -e "const fs=require('fs'); const parser=require('@babel/parser'); const code=fs.readFileSync('apps/mobile/App.js','utf8'); parser.parse(code,{sourceType:'module',plugins:['jsx','optionalChaining','nullishCoalescingOperator','objectRestSpread']}); console.log('App.js parse ok');"
-php artisan migrate
-php artisan test --filter test_class_battle_ranks_classes_by_caps_per_active_member
-php artisan test --filter test_weekly_good_deed_claim_awards_caps_once_without_buddy_or_photo
-php artisan test --filter test_weekly_check_in_awards_caps_after_seven_days
-php artisan test --filter test_existing_member_can_login_without_invite_code_when_email_is_unique
-php artisan test --filter test_join_rejects_email_already_used_in_another_class
-```
-
-Resultat:
-
-- PHP lint: OK.
-- `App.js parse ok`.
-- Migration koert lokalt.
-- 5 maalrettede feature-tests passer.
-
-## VIGTIG Publish-Tjekliste
-
-- VIGTIGT: Laravel Scheduler skal vaere aktiv i produktion/cloud. Dyst bruger
-  `php artisan duels:expire` hvert minut til at udloebe gamle dyster og
-  refundere escrow-Caps, og notifikations-reminders bruger
-  `notifications:duels-expiring`, `notifications:event-reminders`,
-  `notifications:rsvp-reminders`, `notifications:good-deed-reminders` og
-  `notifications:streak-reminders` (se `routes/console.php`). Lokalt kan det
-  testes med `php artisan schedule:work`; paa server/cloud skal en
-  scheduler/cron kalde `php artisan schedule:run` hvert minut.
-- VIGTIGT: Koer `php artisan migrate` ved deploy for at oprette
-  `member_notification_preferences` og `notification_dispatch_log`. Uden disse
-  tabeller fungerer chat-push stadig, men per-kategori opt-out og dedup
-  springes over (`Schema::hasTable` guard i `PushNotifier`).
-- Reverb skal koere med production-host/keys, saa chat og Dyst realtime virker.
-- `APP_URL`, `EXPO_PUBLIC_API_URL`, Reverb env og storage/public upload-setup
-  skal pege paa production-domainer.
-- iOS/TestFlight production builds skal bruge EAS environment secrets til
-  HTTPS-only API/Reverb. Kontroller at appen ikke proever lokale HTTP endpoints
-  i archive/review-builds.
-
-## Naeste Gode Skridt
-
-1. QA Albummer/Walls paa to brugere/enheder: opret galleri, filter/sortering/
-   soegning, dynamisk cover-fallback ved 0/1/2/3/4 billeder, flerbillede-upload,
-   upload-progress, long-press valg-mode, multi-select, gem paa telefon, slet,
-   rapporter, swipe-viewer og synlighedsregler.
-2. QA Aktiviteter paa to brugere/enheder: events med/uden invitation,
-   faelles/private albums, billeduploads, medlem-tilfoejelse, foedselsdag,
-   `Mod hinanden`, Challenge og blokering/synlighedsfiltrering.
-3. QA Dyst paa to brugere/enheder: opret, accept, afvis, vinderbekraeftelse,
-   Challenge-gennemfoert, Challenge-giv-op, dommergodkendelse, udloeb,
-   realtime/polling og Caps-refundering.
-4. Koer to-enheds QA af chat, gruppechat-info, kalender, uploads,
-   blocking/reporting og login.
-5. Faa production drift paa plads: scheduler, Reverb, storage/uploads, mail,
-   backups og production env.
-6. Faa privacy policy, terms/EULA, cookiepolitik, slet-konto-side og Caps/Dyst-
-   forklaring juridisk gennemlaest.
-7. Faa account deletion/support-flow helt review-klar.
-8. Lav platform-CMS/global moderation i webdelen: global klasse-/brugeroversigt,
-   rapporter, blocks, strikes, moderation violations, suspendering/frysning og
-   fallback-regler naar klasseadmin ikke handler rettidigt.
-9. Goer gruppechat-medlemshandlinger ekstra tydelige for rapporter/bloker.
-10. Goer hueklip rigtige i backend.
-11. Lav App Store Connect metadata, screenshots, privacy labels, Data Safety og
-   review notes.
-12. Lav production iOS/TestFlight build og Android production AAB.
+## Driftsting Der Ikke Ma Glemmes
+
+- Scheduler er paakraevet for Dyst-udlob og reminder-notifikationer.
+- Reverb skal restarte automatisk ved deploy/crash.
+- Upload/storage skal virke for profilbilleder, eventcovers, chatbilleder og
+  galleri.
+- App Review skal have demo-login eller tydelig testvej via klassekode.
+- Privacy labels/Data Safety skal matche appens faktiske data.
+- Rapportering, blokering, strikes og kontosletning skal smoke-testes pa en
+  production-lignende build.
+
+Se ogsa `PUBLISH_CHECKLIST.md` for den lange release-checkliste og
+`apps/mobile/README.md` for app-specifikke noter.

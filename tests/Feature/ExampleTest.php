@@ -2,14 +2,12 @@
 
 namespace Tests\Feature;
 
-use App\Mail\MemberInvitationMail;
 use App\Models\User;
 use App\Support\PushNotifier;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -65,19 +63,23 @@ class ExampleTest extends TestCase
         $response
             ->assertStatus(200)
             ->assertSee('Studos')
-            ->assertSee('Studos er under udvikling.')
+            ->assertSee('Studos er i testfase.')
+            ->assertSee('Appen er kun tilgængelig pr. invitation')
             ->assertSee('download-knapperne vises kun som design-preview')
             ->assertSee('HELT GRATIS')
-            ->assertSee('Opret')
-            ->assertSee('Login')
+            ->assertSee('Se appen')
+            ->assertSee('FAQ')
+            ->assertDontSee('/opret-klasse')
+            ->assertDontSee('CMS-login')
             ->assertSee('Google Play')
             ->assertSee('App Store')
             ->assertSee('landing-feature-preview-hero')
             ->assertSee('Forrige mockup')
             ->assertSee('Næste mockup')
-            ->assertSee('Kalender og events')
-            ->assertSee('Mini games')
-            ->assertSee('Klassedyst')
+            ->assertSee('Kalender og RSVP')
+            ->assertSee('Arcade Hub')
+            ->assertSee('Leaderboard')
+            ->assertSee('Nødkontakter')
             ->assertSee('assets/index-mockups/Kalender.png')
             ->assertSee('assets/index-mockups/Klassedyst.png')
             ->assertDontSee('Klassewards')
@@ -1768,21 +1770,39 @@ class ExampleTest extends TestCase
 
         $conversationId = $conversationResponse->json('conversation.id');
         $majaPushToken = 'ExpoPushToken['.Str::random(32).']';
+        $ownerPushToken = 'ExpoPushToken['.Str::random(32).']';
 
         DB::table('member_push_tokens')->insert([
-            'id' => (string) Str::uuid(),
-            'member_id' => 'chat-maja',
-            'expo_push_token' => $majaPushToken,
-            'platform' => 'android',
-            'device_name' => 'Pixel Chat',
-            'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
-            'app_variant' => 'development',
-            'native_application_version' => '0.0.1',
-            'native_build_version' => '1',
-            'last_registered_at' => now(),
-            'disabled_at' => null,
-            'created_at' => now(),
-            'updated_at' => now(),
+            [
+                'id' => (string) Str::uuid(),
+                'member_id' => 'chat-maja',
+                'expo_push_token' => $majaPushToken,
+                'platform' => 'android',
+                'device_name' => 'Pixel Chat',
+                'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+                'app_variant' => 'development',
+                'native_application_version' => '0.0.1',
+                'native_build_version' => '1',
+                'last_registered_at' => now(),
+                'disabled_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'id' => (string) Str::uuid(),
+                'member_id' => 'demo-owner',
+                'expo_push_token' => $ownerPushToken,
+                'platform' => 'android',
+                'device_name' => 'Pixel Owner',
+                'project_id' => 'b4da2c62-b9cd-442c-b8da-facc8e6dc689',
+                'app_variant' => 'development',
+                'native_application_version' => '0.0.1',
+                'native_build_version' => '1',
+                'last_registered_at' => now(),
+                'disabled_at' => null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
         ]);
         Http::fake([
             'https://exp.host/--/api/v2/push/send' => Http::response([
@@ -1817,6 +1837,56 @@ class ExampleTest extends TestCase
             && $request[0]['data']['conversationId'] === $conversationId);
 
         $messageId = $messageResponse->json('message.id');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/messages/'.$messageId.'/reactions', [
+                'emoji' => '😂',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du kan ikke reagere på din egen besked.');
+
+        $this->assertDatabaseMissing('chat_message_reactions', [
+            'message_id' => $messageId,
+            'member_id' => 'demo-owner',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$majaToken)
+            ->postJson('/api/chat/messages/'.$messageId.'/reactions', [
+                'emoji' => '😂',
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('message.reactions.0.emoji', '😂')
+            ->assertJsonPath('message.reactions.0.count', 1)
+            ->assertJsonPath('message.reactions.0.reactedByMe', true);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://exp.host/--/api/v2/push/send'
+            && $request[0]['to'] === $ownerPushToken
+            && $request[0]['channelId'] === 'studos-default'
+            && $request[0]['title'] === 'Ny reaktion'
+            && $request[0]['body'] === 'Maja Chat reagerede på din besked 😂'
+            && $request[0]['data']['type'] === 'chat_reaction'
+            && $request[0]['data']['screen'] === 'chat'
+            && $request[0]['data']['conversationId'] === $conversationId
+            && $request[0]['data']['messageId'] === $messageId
+            && $request[0]['data']['reactorMemberId'] === 'chat-maja'
+            && $request[0]['data']['emoji'] === '😂');
+
+        $this->assertDatabaseHas('chat_message_reactions', [
+            'message_id' => $messageId,
+            'member_id' => 'chat-maja',
+            'emoji' => '😂',
+        ]);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->getJson('/api/chat/conversations/'.$conversationId.'/messages')
+            ->assertStatus(200)
+            ->assertJsonPath('messages.0.reactions.0.emoji', '😂')
+            ->assertJsonPath('messages.0.reactions.0.count', 1)
+            ->assertJsonPath('messages.0.reactions.0.reactedByMe', false);
 
         $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
@@ -2201,6 +2271,26 @@ class ExampleTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('auth', 'test-key:'.$expectedSignature);
 
+        $inboxChannelName = 'private-chat.member.demo-owner';
+        $expectedInboxSignature = hash_hmac('sha256', $socketId.':'.$inboxChannelName, 'test-secret');
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$ownerToken)
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => $inboxChannelName,
+            ])
+            ->assertStatus(200)
+            ->assertJsonPath('auth', 'test-key:'.$expectedInboxSignature);
+
+        $this
+            ->withHeader('Authorization', 'Bearer '.$tobiasToken)
+            ->postJson('/api/chat/realtime/auth', [
+                'socket_id' => $socketId,
+                'channel_name' => $inboxChannelName,
+            ])
+            ->assertStatus(403);
+
         $this
             ->withHeader('Authorization', 'Bearer '.$ownerToken)
             ->postJson('/api/chat/realtime/auth', [
@@ -2570,6 +2660,135 @@ class ExampleTest extends TestCase
             ->assertJsonPath('message', 'Denne email er allerede knyttet til en anden klasse.');
     }
 
+    public function test_app_can_create_class_and_owner_session(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+
+        $response = $this->postJson('/api/classes', [
+            'schoolId' => $schoolId,
+            'className' => '3.E',
+            'graduationYear' => '2026',
+            'graduationDate' => '2026-06-29',
+            'ownerName' => 'Maja Eier',
+            'ownerEmail' => 'maja.owner@example.test',
+            'ownerBirthday' => '2007-05-14',
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+            'joinPolicy' => 'approval',
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('session.member.displayName', 'Maja Eier')
+            ->assertJsonPath('session.member.email', 'maja.owner@example.test')
+            ->assertJsonPath('session.member.role', 'owner')
+            ->assertJsonPath('session.member.status', 'active')
+            ->assertJsonStructure(['session' => ['token', 'tokenType', 'expiresAt', 'member' => ['personalCode']]])
+            ->assertJsonPath('class.className', '3.E')
+            ->assertJsonPath('class.settings.joinPolicy', 'approval');
+
+        $token = $response->json('session.token');
+        $classId = $response->json('class.id');
+
+        $this->assertDatabaseHas('members', [
+            'class_id' => $classId,
+            'school_id' => $schoolId,
+            'email' => 'maja.owner@example.test',
+            'birthday' => '2007-05-14',
+            'role' => 'owner',
+            'status' => 'active',
+            'privacy_version' => '2026-05-11',
+        ]);
+        $this->assertDatabaseHas('classes', [
+            'id' => $classId,
+            'graduation_date' => '2026-06-29',
+        ]);
+        $this->assertDatabaseMissing('events', [
+            'class_id' => $classId,
+            'title' => 'Dimission',
+            'event_date' => '2026-06-29',
+        ]);
+        $this->assertDatabaseHas('member_auth_tokens', [
+            'token_hash' => hash('sha256', $token),
+        ]);
+
+        $passwordHash = DB::table('members')->where('email', 'maja.owner@example.test')->value('password_hash');
+        $this->assertTrue(Hash::check('hemmeligt123', $passwordHash));
+    }
+
+    public function test_app_class_creation_rejects_owner_under_16(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+        $underageBirthday = now()->subYears(16)->addDay()->format('Y-m-d');
+
+        $this->postJson('/api/classes', [
+            'schoolId' => $schoolId,
+            'className' => '3.U',
+            'graduationYear' => '2026',
+            'graduationDate' => '2026-06-29',
+            'ownerName' => 'Ung Eier',
+            'ownerEmail' => 'ung.owner@example.test',
+            'ownerBirthday' => $underageBirthday,
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+            'joinPolicy' => 'approval',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du skal være mindst 16 år for at oprette en konto.');
+
+        $this->assertDatabaseMissing('members', [
+            'email' => 'ung.owner@example.test',
+        ]);
+    }
+
+    public function test_join_rejects_member_under_16(): void
+    {
+        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
+        $underageBirthday = now()->subYears(16)->addDay()->format('Y-m-d');
+
+        $this->postJson('/api/classes/join', [
+            'inviteCode' => 'STU-DEMO26',
+            'schoolId' => $schoolId,
+            'firstName' => 'Ung',
+            'lastName' => 'Elev',
+            'email' => 'ung.elev@example.test',
+            'birthday' => $underageBirthday,
+            'password' => 'hemmeligt123',
+            'passwordConfirmation' => 'hemmeligt123',
+            'termsAccepted' => true,
+            'privacyAccepted' => true,
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du skal være mindst 16 år for at oprette en konto.');
+
+        $this->assertDatabaseMissing('members', [
+            'email' => 'ung.elev@example.test',
+        ]);
+    }
+
+    public function test_member_profile_update_rejects_birthday_under_16(): void
+    {
+        $token = $this->issueTestMemberToken('demo-owner');
+        $previousBirthday = DB::table('members')->where('id', 'demo-owner')->value('birthday');
+        $underageBirthday = now()->subYears(16)->addDay()->format('Y-m-d');
+
+        $this->withHeader('Authorization', 'Bearer '.$token)
+            ->postJson('/api/members/me/profile', [
+                'birthday' => $underageBirthday,
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Du skal være mindst 16 år for at oprette en konto.');
+
+        $this->assertSame(
+            $previousBirthday,
+            DB::table('members')->where('id', 'demo-owner')->value('birthday'),
+        );
+    }
+
     public function test_join_rejects_school_that_does_not_match_invite_class(): void
     {
         DB::table('schools')->insert([
@@ -2680,373 +2899,63 @@ class ExampleTest extends TestCase
             ->assertJsonPath('class.id', 'demo-class');
     }
 
-    public function test_admin_requires_login(): void
+    public function test_legacy_web_login_and_admin_routes_redirect_home(): void
     {
-        $this->get('/admin')->assertRedirect('/login');
-        $this->get('/admin/classes/demo-class')->assertRedirect('/login');
-    }
-
-    public function test_login_page_uses_cms_marketing_layout(): void
-    {
-        $this->get('/login')
-            ->assertStatus(200)
-            ->assertSee('login-screen', false)
-            ->assertSee('CMS til studentertiden')
-            ->assertSee('Åbn Studos admin')
-            ->assertDontSee('app-header', false);
-    }
-
-    public function test_demo_class_dashboard_returns_admin_modules_after_login(): void
-    {
+        $this->get('/login')->assertRedirect('/');
         $this->post('/login', [
             'email' => 'chris@skole.dk',
             'password' => 'studos123',
-        ])->assertRedirect('/admin');
+        ])->assertRedirect('/');
+        $this->assertGuest();
 
-        $this->get('/admin')->assertRedirect('/admin/classes/demo-class');
-
-        $response = $this->get('/admin/classes/demo-class');
-
-        $response
-            ->assertStatus(200)
-            ->assertSee('Overblik')
-            ->assertSee('Medlemmer')
-            ->assertSee('CMS')
-            ->assertSee('Begivenheder');
-    }
-
-    public function test_class_identity_fields_are_readonly_in_cms_settings(): void
-    {
-        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
-
-        $response = $this->get('/admin/classes/demo-class');
-        $html = $response->getContent();
-
-        $response->assertStatus(200);
-        $this->assertStringNotContainsString('name="schoolName"', $html);
-        $this->assertStringNotContainsString('name="inviteCode"', $html);
-        $this->assertStringNotContainsString('overview-identity-pills', $html);
-        $this->assertStringContainsString('STU-DEMO26', $html);
-        $this->assertStringNotContainsString('KlasseID', $html);
-
-        $this->from('/admin/classes/demo-class')
-            ->patch('/admin/classes/demo-class/settings', [
-                'schoolName' => 'Manipuleret Gymnasium',
-                'className' => '3.Z',
-                'graduationYear' => '2027',
-                'graduationDate' => '2027-06-25',
-                'inviteCode' => 'HACK-CODE',
-                'joinPolicy' => 'closed',
-            ])
-            ->assertRedirect('/admin/classes/demo-class');
+        $this->get('/admin')->assertRedirect('/');
+        $this->get('/admin/classes/demo-class')->assertRedirect('/');
+        $this->patch('/admin/classes/demo-class/settings', [
+            'className' => '3.Z',
+            'joinPolicy' => 'closed',
+        ])->assertRedirect('/');
+        $this->delete('/admin/classes/demo-class/members/demo-owner')->assertRedirect('/');
+        $this->get('/classes/demo-class')->assertRedirect('/');
 
         $this->assertDatabaseHas('classes', [
             'id' => 'demo-class',
-            'school_name' => 'Midtby Gymnasium',
-            'class_name' => '3.Z',
-            'graduation_year' => '2027',
-            'graduation_date' => '2027-06-25',
-            'invite_code' => 'STU-DEMO26',
-            'join_policy' => 'closed',
-        ]);
-    }
-
-    public function test_cms_member_creation_defaults_to_pending_account_status_without_status_controls(): void
-    {
-        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
-
-        $response = $this->get('/admin/classes/demo-class');
-
-        $response
-            ->assertStatus(200)
-            ->assertSee('account-status', false)
-            ->assertDontSee('status-toggle', false)
-            ->assertDontSee('<select name="status"', false)
-            ->assertDontSee('value="removed"', false);
-
-        $html = $response->getContent();
-        $this->assertStringContainsString('data-dialog-open="add-member-dialog"', $html);
-        $this->assertStringContainsString('id="add-member-dialog"', $html);
-        $this->assertStringContainsString('class="modal-form"', $html);
-        $this->assertStringNotContainsString('add-member-form', $html);
-        $this->assertStringNotContainsString('href="#add-member-form"', $html);
-        $this->assertStringNotContainsString('id="add-member-form" class="inline-create"', $html);
-
-        Mail::fake();
-
-        $this->from('/admin/classes/demo-class')
-            ->post('/admin/classes/demo-class/members', [
-                'displayName' => 'Cms Uden Email',
-                'role' => 'student',
-            ])
-            ->assertRedirect('/admin/classes/demo-class')
-            ->assertSessionHasErrors('email');
-
-        Mail::assertNothingSent();
-
-        $this->from('/admin/classes/demo-class')
-            ->post('/admin/classes/demo-class/members', [
-                'displayName' => 'Cms Nybruger',
-                'email' => 'cms.nybruger@example.test',
-                'role' => 'student',
-                'status' => 'removed',
-            ])
-            ->assertRedirect('/admin/classes/demo-class');
-
-        $this->assertDatabaseHas('members', [
-            'class_id' => 'demo-class',
-            'display_name' => 'Cms Nybruger',
-            'email' => 'cms.nybruger@example.test',
-            'role' => 'student',
-            'status' => 'pending',
-        ]);
-
-        $schoolClass = DB::table('classes')->where('id', 'demo-class')->first();
-
-        Mail::assertSent(MemberInvitationMail::class, function (MemberInvitationMail $mail) use ($schoolClass): bool {
-            return $mail->hasTo('cms.nybruger@example.test')
-                && $mail->displayName === 'Cms Nybruger'
-                && $mail->className === $schoolClass->class_name
-                && $mail->schoolName === $schoolClass->school_name
-                && $mail->inviteCode === $schoolClass->invite_code
-                && str_contains($mail->inviteUrl, 'invite='.$schoolClass->invite_code);
-        });
-
-        $this->assertNull(DB::table('members')->where('email', 'cms.nybruger@example.test')->value('password_hash'));
-
-        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
-
-        $this->postJson('/api/classes/join', [
-            'inviteCode' => 'STU-DEMO26',
-            'schoolId' => $schoolId,
-            'firstName' => 'Cms',
-            'lastName' => 'Nybruger',
-            'email' => 'cms.nybruger@example.test',
-            'birthday' => '2007-05-14',
-            'password' => 'hemmeligt123',
-            'passwordConfirmation' => 'hemmeligt123',
-            'termsAccepted' => true,
-            'privacyAccepted' => true,
-        ])
-            ->assertStatus(200)
-            ->assertJsonPath('session.member.status', 'active');
-
-        $this->assertDatabaseHas('members', [
-            'class_id' => 'demo-class',
-            'display_name' => 'Cms Nybruger',
-            'email' => 'cms.nybruger@example.test',
-            'role' => 'student',
-            'status' => 'active',
-        ]);
-        $this->assertNotEmpty(DB::table('members')->where('email', 'cms.nybruger@example.test')->value('password_hash'));
-    }
-
-    public function test_cms_member_creation_rejects_email_used_in_another_class(): void
-    {
-        $schoolId = DB::table('classes')->where('id', 'demo-class')->value('school_id');
-
-        $this->createActiveDemoMember('cms-existing', 'Cms Konflikt', 'cms.conflict@example.test');
-        User::factory()->create([
-            'name' => 'CMS Eier',
-            'email' => 'cms.eier@example.test',
-        ]);
-
-        DB::table('classes')->insert([
-            'id' => 'cms-conflict-class',
-            'public_id' => 'HG-3B-26',
-            'school_id' => $schoolId,
-            'school_name' => 'Midtby Gymnasium',
-            'class_name' => '3.Z',
-            'graduation_year' => '2026',
-            'graduation_date' => '2026-06-28',
-            'owner_name' => 'CMS Eier',
-            'owner_email' => 'cms.owner@example.test',
-            'invite_code' => 'CMS-CMS26',
+            'class_name' => '3.B',
             'join_policy' => 'approval',
-            'allow_member_posts' => true,
-            'require_approval_for_photos' => false,
-            'created_at' => now(),
-            'updated_at' => now(),
         ]);
-
-        DB::table('members')->insert([
-            'id' => 'cms-class-owner',
-            'class_id' => 'cms-conflict-class',
-            'school_id' => $schoolId,
-            'display_name' => 'CMS Eier',
-            'first_name' => 'CMS',
-            'last_name' => 'Eier',
-            'email' => 'cms.eier@example.test',
-            'role' => 'owner',
-            'status' => 'active',
-            'joined_at' => now(),
-            'personal_code' => 'CMSZ-OK',
-        ]);
-
-        $this->actingAs(User::where('email', 'cms.eier@example.test')->firstOrFail());
-
-        $this->from('/admin/classes/cms-conflict-class')
-            ->post('/admin/classes/cms-conflict-class/members', [
-                'displayName' => 'Cms Nybruger 2',
-                'email' => 'cms.conflict@example.test',
-                'role' => 'student',
-            ])
-            ->assertRedirect('/admin/classes/cms-conflict-class')
-            ->assertSessionHasErrors('email');
-
-        $this->assertDatabaseMissing('members', [
-            'class_id' => 'cms-conflict-class',
-            'display_name' => 'Cms Nybruger 2',
-            'email' => 'cms.conflict@example.test',
-        ]);
-    }
-
-    public function test_removed_members_are_archived_separately_in_cms(): void
-    {
-        $this->createActiveDemoMember('cms-removed-member', 'Slettet Cmsbruger', 'slettet.cms@example.test');
-        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
-
-        $this->from('/admin/classes/demo-class')
-            ->delete('/admin/classes/demo-class/members/cms-removed-member')
-            ->assertRedirect('/admin/classes/demo-class');
-
-        $this->assertDatabaseHas('members', [
-            'id' => 'cms-removed-member',
-            'status' => 'removed',
-        ]);
-
-        $response = $this->get('/admin/classes/demo-class');
-        $response
-            ->assertStatus(200)
-            ->assertSee('Se fjernede medlemmer (1)')
-            ->assertSee('Fjernede medlemmer')
-            ->assertSee('Slettet Cmsbruger')
-            ->assertSee('Gendan');
-
-        $this->assertFalse($response->viewData('members')->contains('id', 'cms-removed-member'));
-        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-removed-member'));
-
-        $this->from('/admin/classes/demo-class')
-            ->patch('/admin/classes/demo-class/members/cms-removed-member', [
-                'role' => 'student',
-                'status' => 'active',
-            ])->assertRedirect('/admin/classes/demo-class');
-
-        $this->assertDatabaseHas('members', [
-            'id' => 'cms-removed-member',
-            'status' => 'active',
-        ]);
-
-        $response = $this->get('/admin/classes/demo-class');
-        $this->assertTrue($response->viewData('members')->contains('id', 'cms-removed-member'));
-        $this->assertFalse($response->viewData('removedMembers')->contains('id', 'cms-removed-member'));
-    }
-
-    public function test_owner_can_bulk_archive_selected_members_in_cms(): void
-    {
-        $this->createActiveDemoMember('cms-bulk-alma', 'Alma Bulk', 'alma.bulk@example.test');
-        $this->createActiveDemoMember('cms-bulk-bertil', 'Bertil Bulk', 'bertil.bulk@example.test');
-        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
-
-        $this->from('/admin/classes/demo-class')
-            ->delete('/admin/classes/demo-class/members', [
-                'memberIds' => ['cms-bulk-alma', 'cms-bulk-bertil'],
-            ])
-            ->assertRedirect('/admin/classes/demo-class');
-
-        $this->assertDatabaseHas('members', [
-            'id' => 'cms-bulk-alma',
-            'status' => 'removed',
-        ]);
-        $this->assertDatabaseHas('members', [
-            'id' => 'cms-bulk-bertil',
-            'status' => 'removed',
-        ]);
-
-        $response = $this->get('/admin/classes/demo-class');
-        $this->assertFalse($response->viewData('members')->contains('id', 'cms-bulk-alma'));
-        $this->assertFalse($response->viewData('members')->contains('id', 'cms-bulk-bertil'));
-        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-bulk-alma'));
-        $this->assertTrue($response->viewData('removedMembers')->contains('id', 'cms-bulk-bertil'));
-        $response
-            ->assertSee('Fjern valgte')
-            ->assertDontSee('member-remove-form', false)
-            ->assertDontSee('>Fjern</button>', false);
-
-        $this->from('/admin/classes/demo-class')
-            ->delete('/admin/classes/demo-class/members', [
-                'memberIds' => ['demo-owner'],
-            ])
-            ->assertRedirect('/admin/classes/demo-class')
-            ->assertSessionHasErrors('member');
-
         $this->assertDatabaseHas('members', [
             'id' => 'demo-owner',
             'status' => 'active',
         ]);
     }
 
-    public function test_student_cannot_access_web_admin_dashboard(): void
+    public function test_legacy_web_create_class_route_redirects_home_without_creating_data(): void
     {
-        $user = User::factory()->create([
-            'name' => 'Student User',
-            'email' => 'student-web@example.test',
+        DB::table('schools')->insert([
+            'id' => 'test-school',
+            'name' => 'Test Gymnasium',
+            'name_key' => 'test-gymnasium',
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
-        $this->createActiveDemoMember('student-web', 'Student Web', 'student-web@example.test');
 
-        $this->actingAs($user);
+        $this->get('/opret-klasse')->assertRedirect('/');
 
-        $this->get('/admin')
-            ->assertStatus(200)
-            ->assertSee('Du er allerede medlem af 3.B')
-            ->assertSee('Ingen admin-adgang');
-        $this->get('/admin/classes/demo-class')->assertForbidden();
-
-        $this->post('/admin/classes', [
-            'schoolId' => DB::table('classes')->where('id', 'demo-class')->value('school_id'),
-            'className' => '3.S',
+        $this->post('/opret-klasse', [
+            'ownerName' => 'Maja Test',
+            'ownerEmail' => 'maja@example.test',
+            'password' => 'hemmeligt123',
+            'password_confirmation' => 'hemmeligt123',
+            'schoolId' => 'test-school',
+            'className' => '3.C',
             'graduationYear' => '2026',
-            'graduationDate' => '2026-06-24',
+            'graduationDate' => '2026-06-25',
             'joinPolicy' => 'approval',
-        ])
-            ->assertRedirect('/admin')
-            ->assertSessionHasErrors('class');
-    }
+        ])->assertRedirect('/');
 
-    public function test_moderator_can_manage_cms_but_not_member_access(): void
-    {
-        $user = User::factory()->create([
-            'name' => 'Moderator User',
-            'email' => 'moderator-web@example.test',
-        ]);
-        $this->createActiveDemoMember('moderator-web', 'Moderator Web', 'moderator-web@example.test');
-        DB::table('members')->where('id', 'moderator-web')->update(['role' => 'moderator']);
-
-        $this->actingAs($user);
-
-        $this->get('/admin')->assertRedirect('/admin/classes/demo-class');
-        $this->get('/admin/classes/demo-class')
-            ->assertStatus(200)
-            ->assertSee('CMS')
-            ->assertSee('Begivenheder')
-            ->assertSee('Klasseindstillinger og medlemmer kræver ejeradgang');
-
-        $this->post('/admin/classes/demo-class/content', [
-            'type' => 'info',
-            'title' => 'Moderator info',
-            'body' => 'Husk fælles besked.',
-            'sortOrder' => 10,
-        ])->assertRedirect('/admin/classes/demo-class');
-
-        $this->assertDatabaseHas('class_content_blocks', [
-            'class_id' => 'demo-class',
-            'title' => 'Moderator info',
-        ]);
-
-        $this->patch('/admin/classes/demo-class/members/demo-owner', [
-            'role' => 'moderator',
-            'status' => 'active',
-        ])->assertForbidden();
+        $this->assertGuest();
+        $this->assertDatabaseMissing('users', ['email' => 'maja@example.test']);
+        $this->assertDatabaseMissing('classes', ['class_name' => '3.C']);
+        $this->assertDatabaseMissing('members', ['email' => 'maja@example.test']);
     }
 
     public function test_api_member_access_can_only_be_changed_by_owner(): void
@@ -3334,108 +3243,4 @@ class ExampleTest extends TestCase
         ]);
     }
 
-    public function test_public_create_class_creates_user_and_owner(): void
-    {
-        DB::table('schools')->insert([
-            'id' => 'test-school',
-            'name' => 'Test Gymnasium',
-            'name_key' => 'test-gymnasium',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        $response = $this->post('/opret-klasse', [
-            'ownerName' => 'Maja Test',
-            'ownerEmail' => 'maja@example.test',
-            'password' => 'hemmeligt123',
-            'password_confirmation' => 'hemmeligt123',
-            'schoolId' => 'test-school',
-            'className' => '3.C',
-            'graduationYear' => '2026',
-            'graduationDate' => '2026-06-25',
-            'joinPolicy' => 'approval',
-        ]);
-
-        $response->assertRedirect();
-        $this->assertAuthenticated();
-        $this->assertStringContainsString('/admin/classes/', $response->headers->get('Location'));
-        $this->assertDatabaseHas('users', ['email' => 'maja@example.test']);
-
-        $schoolClass = DB::table('classes')->where('class_name', '3.C')->first();
-        $this->assertNotNull($schoolClass);
-        $this->assertSame('TG-3C-26', $schoolClass->public_id);
-
-        $this->assertDatabaseHas('members', [
-            'class_id' => $schoolClass->id,
-            'school_id' => 'test-school',
-            'email' => 'maja@example.test',
-            'role' => 'owner',
-            'status' => 'active',
-        ]);
-    }
-
-    public function test_authenticated_user_with_class_cannot_create_another_class(): void
-    {
-        $this->actingAs(User::where('email', 'chris@skole.dk')->firstOrFail());
-        $demoSchoolId = DB::table('schools')->where('name', 'Midtby Gymnasium')->value('id');
-
-        $response = $this->post('/admin/classes', [
-            'schoolId' => $demoSchoolId,
-            'className' => '3.D',
-            'graduationYear' => '2026',
-            'graduationDate' => '2026-06-24',
-            'joinPolicy' => 'approval',
-        ]);
-
-        $response
-            ->assertRedirect('/admin/classes/demo-class')
-            ->assertSessionHasErrors('class');
-
-        $schoolClass = DB::table('classes')->where('class_name', '3.D')->first();
-        $this->assertNull($schoolClass);
-    }
-
-    public function test_authenticated_user_without_class_can_create_one_from_admin(): void
-    {
-        $user = User::factory()->create([
-            'name' => 'No Class',
-            'email' => 'noclass@example.test',
-        ]);
-        DB::table('schools')->insert([
-            'id' => 'admin-school',
-            'name' => 'Admin Gymnasium',
-            'name_key' => 'admin-gymnasium',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        $this->actingAs($user);
-
-        $this->get('/admin')
-            ->assertStatus(200)
-            ->assertSee('Opret din klasse')
-            ->assertSee('Vælg skole')
-            ->assertSee('Ingen klasse endnu');
-
-        $response = $this->post('/admin/classes', [
-            'schoolId' => 'admin-school',
-            'className' => '3.D',
-            'graduationYear' => '2026',
-            'graduationDate' => '2026-06-24',
-            'joinPolicy' => 'approval',
-        ]);
-
-        $response->assertRedirect();
-        $this->assertStringContainsString('/admin/classes/', $response->headers->get('Location'));
-
-        $schoolClass = DB::table('classes')->where('class_name', '3.D')->first();
-        $this->assertNotNull($schoolClass);
-        $this->assertSame('AG-3D-26', $schoolClass->public_id);
-        $this->assertDatabaseHas('members', [
-            'class_id' => $schoolClass->id,
-            'school_id' => 'admin-school',
-            'email' => 'noclass@example.test',
-            'role' => 'owner',
-        ]);
-    }
 }

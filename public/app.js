@@ -110,6 +110,79 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+  const banner = document.querySelector('[data-cookie-consent]');
+
+  if (!banner) {
+    return;
+  }
+
+  const storageKey = 'studos.cookieConsent.v2';
+  const acceptButton = banner.querySelector('[data-cookie-consent-accept]');
+  const rejectButton = banner.querySelector('[data-cookie-consent-reject]');
+  const openButtons = [...document.querySelectorAll('[data-cookie-consent-open]')];
+
+  const getSavedChoice = () => {
+    try {
+      const savedChoice = window.localStorage.getItem(storageKey);
+
+      return savedChoice ? JSON.parse(savedChoice) : null;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const saveChoice = (choice) => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify({
+        choice,
+        version: 2,
+        savedAt: new Date().toISOString(),
+        categories: {
+          necessary: true,
+          statistics: false,
+          marketing: false,
+        },
+      }));
+    } catch (error) {
+      // If localStorage is unavailable, still hide the banner for this page view.
+    }
+
+    banner.hidden = true;
+    window.dispatchEvent(new CustomEvent('studos:cookie-consent-changed', {
+      detail: { choice },
+    }));
+  };
+
+  const openBanner = ({ focus = false } = {}) => {
+    banner.hidden = false;
+
+    if (focus && typeof banner.focus === 'function') {
+      banner.focus({ preventScroll: false });
+    }
+  };
+
+  window.StudosCookieConsent = {
+    getChoice: getSavedChoice,
+    hasAcceptedAll: () => getSavedChoice()?.choice === 'accepted',
+    open: () => openBanner({ focus: true }),
+  };
+
+  openButtons.forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      openBanner({ focus: true });
+    });
+  });
+
+  if (!getSavedChoice()) {
+    openBanner();
+  }
+
+  acceptButton?.addEventListener('click', () => saveChoice('accepted'));
+  rejectButton?.addEventListener('click', () => saveChoice('essential'));
+});
+
+document.addEventListener('DOMContentLoaded', () => {
   const browser = document.querySelector('[data-feature-browser]');
 
   if (!browser) {

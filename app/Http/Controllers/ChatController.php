@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\ChatConversationUpdated;
+use App\Events\ChatInboxUpdated;
 use App\Events\ChatMessageCreated;
 use App\Support\ContentModeration;
 use App\Support\PushNotifier;
@@ -16,6 +18,8 @@ use Illuminate\Validation\Rule;
 
 class ChatController extends Controller
 {
+    private const MESSAGE_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '👏', '🔥'];
+
     public function conversations(Request $request): JsonResponse
     {
         $member = $this->authenticatedMemberFromRequest($request);
@@ -92,6 +96,7 @@ class ChatController extends Controller
 
             $conversation = DB::table('chat_conversations')->where('id', $conversationId)->first();
             $statusCode = 201;
+            $this->broadcastChatInboxUpdated($conversationId, 'conversation_created', $member->id, [$member->id, $target->id]);
         } else {
             abort_if($conversation->status !== 'active', 410, 'Chatten er ikke laengere aktiv.');
             DB::table('chat_participants')
@@ -102,6 +107,7 @@ class ChatController extends Controller
                     'hidden_at' => null,
                     'updated_at' => now()->format('Y-m-d H:i:s'),
                 ]);
+            $this->broadcastChatInboxUpdated($conversation->id, 'conversation_opened', $member->id, [$member->id]);
         }
 
         return response()->json([
@@ -184,6 +190,12 @@ class ChatController extends Controller
             $member,
             $memberIds->all(),
         );
+        $this->broadcastChatInboxUpdated(
+            $conversationId,
+            'group_created',
+            $member->id,
+            $memberIds->push($member->id)->all(),
+        );
 
         return response()->json([
             'conversation' => $this->serializeConversationForMember($conversationId, $member),
@@ -222,6 +234,8 @@ class ChatController extends Controller
 
             $this->logChatEvent($chat->id, null, $member->id, null, 'group_renamed', $title);
         });
+        $this->broadcastChatConversationUpdated($chat->id, 'group_renamed', null, $member->id);
+        $this->broadcastChatInboxUpdated($chat->id, 'group_renamed', $member->id);
 
         return response()->json([
             'ok' => true,
@@ -329,6 +343,7 @@ class ChatController extends Controller
         });
 
         broadcast(new ChatMessageCreated($chat->id, $messageId))->toOthers();
+        $this->broadcastChatInboxUpdated($chat->id, 'message_created', $member->id);
         $this->sendChatPushNotifications($chat, $member, $messageId, $body);
 
         $message = DB::table('chat_messages')->where('id', $messageId)->first();
@@ -342,6 +357,65 @@ class ChatController extends Controller
             'conversation' => $this->serializeConversation($freshChat, $member, $participantRows, $memberPreviews),
             'message' => $this->serializeMessage($message, $freshChat, $member, $participantRows, $memberPreviews),
         ], 201);
+    }
+
+    public function reactToMessage(Request $request, string $message): JsonResponse
+    {
+        $member = $this->authenticatedMemberFromRequest($request);
+        $data = $request->validate([
+            'emoji' => ['required', 'string', Rule::in(self::MESSAGE_REACTION_EMOJIS)],
+        ]);
+        $chatMessage = DB::table('chat_messages')->where('id', $message)->first();
+
+        abort_unless($chatMessage, 404);
+        abort_if(! blank($chatMessage->deleted_at), 410, 'Beskeden er slettet.');
+        abort_if($chatMessage->sender_member_id === $member->id, 422, 'Du kan ikke reagere på din egen besked.');
+        abort_unless(Schema::hasTable('chat_message_reactions'), 503, 'Reaktioner er ikke klar endnu.');
+
+        $chat = $this->conversationForMember($chatMessage->conversation_id, $member);
+        $emoji = $data['emoji'];
+        $now = now()->format('Y-m-d H:i:s');
+        $existingReaction = DB::table('chat_message_reactions')
+            ->where('message_id', $chatMessage->id)
+            ->where('member_id', $member->id)
+            ->first();
+        $shouldSendReactionPush = false;
+
+        if ($existingReaction && $existingReaction->emoji === $emoji) {
+            DB::table('chat_message_reactions')->where('id', $existingReaction->id)->delete();
+        } elseif ($existingReaction) {
+            DB::table('chat_message_reactions')->where('id', $existingReaction->id)->update([
+                'emoji' => $emoji,
+                'updated_at' => $now,
+            ]);
+            $shouldSendReactionPush = true;
+        } else {
+            DB::table('chat_message_reactions')->insert([
+                'id' => (string) Str::uuid(),
+                'message_id' => $chatMessage->id,
+                'member_id' => $member->id,
+                'emoji' => $emoji,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $shouldSendReactionPush = true;
+        }
+        $this->broadcastChatConversationUpdated($chat->id, 'message_reaction_updated', $chatMessage->id, $member->id);
+
+        if ($shouldSendReactionPush) {
+            $this->sendChatReactionPush($chat, $chatMessage, $member, $emoji);
+        }
+
+        $freshMessage = DB::table('chat_messages')->where('id', $message)->first();
+        $participantRows = $this->participantsForConversations(collect([$chat->id]));
+        $memberPreviews = $this->memberPreviews(
+            $participantRows->pluck('member_id')->merge([$freshMessage->sender_member_id, $member->id]),
+        );
+
+        return response()->json([
+            'ok' => true,
+            'message' => $this->serializeMessage($freshMessage, $chat, $member, $participantRows, $memberPreviews),
+        ]);
     }
 
     public function markRead(Request $request, string $conversation): JsonResponse
@@ -376,6 +450,8 @@ class ChatController extends Controller
                 'last_read_at' => now()->format('Y-m-d H:i:s'),
                 'updated_at' => now()->format('Y-m-d H:i:s'),
             ]);
+        $this->broadcastChatConversationUpdated($chat->id, 'conversation_read', $message->id, $member->id);
+        $this->broadcastChatInboxUpdated($chat->id, 'conversation_read', $member->id, [$member->id]);
 
         return response()->json([
             'ok' => true,
@@ -474,6 +550,13 @@ class ChatController extends Controller
             $member,
             $newMemberIds->all(),
         );
+        $this->broadcastChatConversationUpdated($chat->id, 'participants_added', null, $member->id);
+        $this->broadcastChatInboxUpdated(
+            $chat->id,
+            'participants_added',
+            $member->id,
+            collect($this->activeChatParticipantMemberIds($chat->id))->merge($newMemberIds)->all(),
+        );
 
         return response()->json([
             'ok' => true,
@@ -495,6 +578,7 @@ class ChatController extends Controller
                 'hidden_at' => now()->format('Y-m-d H:i:s'),
                 'updated_at' => now()->format('Y-m-d H:i:s'),
             ]);
+        $this->broadcastChatInboxUpdated($chat->id, 'conversation_hidden', $member->id, [$member->id]);
 
         return response()->json(['ok' => true]);
     }
@@ -518,6 +602,7 @@ class ChatController extends Controller
             ]);
 
         $this->logChatEvent($chat->id, null, $member->id, null, $data['muted'] ? 'conversation_muted' : 'conversation_unmuted');
+        $this->broadcastChatInboxUpdated($chat->id, $data['muted'] ? 'conversation_muted' : 'conversation_unmuted', $member->id, [$member->id]);
 
         return response()->json([
             'ok' => true,
@@ -634,6 +719,13 @@ class ChatController extends Controller
 
             $this->logChatEvent($chat->id, null, $member->id, $member->id, 'participant_left');
         });
+        $this->broadcastChatConversationUpdated($chat->id, 'participant_left', null, $member->id);
+        $this->broadcastChatInboxUpdated(
+            $chat->id,
+            'participant_left',
+            $member->id,
+            collect($this->activeChatParticipantMemberIds($chat->id))->push($member->id)->all(),
+        );
 
         return response()->json(['ok' => true]);
     }
@@ -658,6 +750,8 @@ class ChatController extends Controller
 
             $this->logChatEvent($chat->id, null, $member->id, null, 'group_deleted');
         });
+        $this->broadcastChatConversationUpdated($chat->id, 'group_deleted', null, $member->id);
+        $this->broadcastChatInboxUpdated($chat->id, 'group_deleted', $member->id);
 
         return response()->json(['ok' => true]);
     }
@@ -726,6 +820,8 @@ class ChatController extends Controller
 
             $this->logChatEvent($chat->id, $chatMessage->id, $member->id, $chatMessage->sender_member_id, 'message_deleted');
         });
+        $this->broadcastChatConversationUpdated($chat->id, 'message_deleted', $chatMessage->id, $member->id);
+        $this->broadcastChatInboxUpdated($chat->id, 'message_deleted', $member->id);
 
         return response()->json(['ok' => true]);
     }
@@ -741,7 +837,13 @@ class ChatController extends Controller
 
         if (Str::startsWith($channelName, 'private-chat.')) {
             $conversationId = Str::after($channelName, 'private-chat.');
-            $this->conversationForMember($conversationId, $member);
+            if (Str::startsWith($conversationId, 'member.')) {
+                $memberId = Str::after($conversationId, 'member.');
+
+                abort_unless((string) $memberId === (string) $member->id, 403, 'Ugyldig realtime-kanal.');
+            } else {
+                $this->conversationForMember($conversationId, $member);
+            }
         } elseif (Str::startsWith($channelName, 'private-duels.member.')) {
             $memberId = Str::after($channelName, 'private-duels.member.');
 
@@ -901,11 +1003,35 @@ class ChatController extends Controller
             'isDeleted' => $isDeleted,
             'isMine' => $message->sender_member_id === $viewer->id,
             'readByOther' => $readByOther,
+            'reactions' => $isDeleted ? [] : $this->messageReactionSummaries($message->id, $viewer->id),
             'createdAt' => $this->apiDateTime($message->created_at),
             'updatedAt' => $this->apiDateTime($message->updated_at ?? null),
             'deletedAt' => $this->apiDateTime($message->deleted_at ?? null),
             'sender' => $sender ? $this->serializeMemberPreview($sender) : null,
         ];
+    }
+
+    private function messageReactionSummaries(string $messageId, string $viewerMemberId): array
+    {
+        if (! Schema::hasTable('chat_message_reactions')) {
+            return [];
+        }
+
+        return DB::table('chat_message_reactions')
+            ->where('message_id', $messageId)
+            ->selectRaw('emoji, COUNT(*) as reaction_count, MAX(CASE WHEN member_id = ? THEN 1 ELSE 0 END) as reacted_by_me', [$viewerMemberId])
+            ->groupBy('emoji')
+            ->orderByDesc('reacted_by_me')
+            ->orderByDesc('reaction_count')
+            ->orderBy('emoji')
+            ->get()
+            ->map(fn (object $reaction): array => [
+                'emoji' => $reaction->emoji,
+                'count' => (int) $reaction->reaction_count,
+                'reactedByMe' => (bool) $reaction->reacted_by_me,
+            ])
+            ->values()
+            ->all();
     }
 
     private function serializeParticipant(object $participant, $memberPreviews): array
@@ -948,6 +1074,39 @@ class ChatController extends Controller
         abort_if($chat->participantStatus !== 'active', 403, 'Du er ikke aktiv deltager i chatten.');
 
         return $chat;
+    }
+
+    private function broadcastChatConversationUpdated(string $conversationId, string $type, ?string $messageId = null, ?string $actorMemberId = null): void
+    {
+        broadcast(new ChatConversationUpdated($conversationId, $type, $messageId, $actorMemberId))->toOthers();
+    }
+
+    /**
+     * @param array<int, string>|null $memberIds
+     */
+    private function broadcastChatInboxUpdated(string $conversationId, string $type, ?string $actorMemberId = null, ?array $memberIds = null): void
+    {
+        $memberIds ??= $this->activeChatParticipantMemberIds($conversationId);
+
+        if (empty($memberIds)) {
+            return;
+        }
+
+        broadcast(new ChatInboxUpdated($conversationId, $type, $memberIds, $actorMemberId))->toOthers();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function activeChatParticipantMemberIds(string $conversationId): array
+    {
+        return DB::table('chat_participants')
+            ->where('conversation_id', $conversationId)
+            ->where('status', 'active')
+            ->pluck('member_id')
+            ->map(fn ($memberId): string => (string) $memberId)
+            ->values()
+            ->all();
     }
 
     private function participantsForConversations($conversationIds)
@@ -1187,6 +1346,46 @@ class ChatController extends Controller
             ],
             'sourceType' => 'chat_message',
             'sourceId' => $messageId,
+        ]);
+    }
+
+    private function sendChatReactionPush(object $chat, object $message, object $reactor, string $emoji): void
+    {
+        $recipientId = (string) ($message->sender_member_id ?? '');
+
+        if ($recipientId === '' || $recipientId === (string) $reactor->id) {
+            return;
+        }
+
+        $now = now()->format('Y-m-d H:i:s');
+        $canReceive = DB::table('chat_participants')
+            ->where('conversation_id', $chat->id)
+            ->where('member_id', $recipientId)
+            ->where('status', 'active')
+            ->where(function ($query) use ($now): void {
+                $query
+                    ->whereNull('muted_until')
+                    ->orWhere('muted_until', '<=', $now);
+            })
+            ->exists();
+
+        if (! $canReceive) {
+            return;
+        }
+
+        $reactorName = $reactor->display_name ?? 'En fra chatten';
+
+        PushNotifier::send(PushNotifier::CAT_CHAT_REACTION, [$recipientId], [
+            'title' => 'Ny reaktion',
+            'body' => $reactorName.' reagerede på din besked '.$emoji,
+            'data' => [
+                'conversationId' => $chat->id,
+                'messageId' => $message->id,
+                'reactorMemberId' => $reactor->id,
+                'emoji' => $emoji,
+            ],
+            'sourceType' => 'chat_message_reaction',
+            'sourceId' => $message->id,
         ]);
     }
 

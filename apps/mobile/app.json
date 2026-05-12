@@ -39,6 +39,9 @@
     "android": {
       "package": "dk.studenterapp.mobile",
       "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ],

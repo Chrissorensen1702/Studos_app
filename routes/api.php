@@ -102,5 +102,6 @@ Route::post('/chat/conversations/{conversation}/block', [ChatController::class, 
 Route::post('/chat/conversations/{conversation}/hide', [ChatController::class, 'hideConversation']);
 Route::post('/chat/conversations/{conversation}/leave', [ChatController::class, 'leaveConversation']);
 Route::delete('/chat/conversations/{conversation}', [ChatController::class, 'deleteConversation']);
+Route::post('/chat/messages/{message}/reactions', [ChatController::class, 'reactToMessage'])->middleware($chatMessageThrottle);
 Route::post('/chat/messages/{message}/report', [ChatController::class, 'reportMessage'])->middleware($reportThrottle);
 Route::delete('/chat/messages/{message}', [ChatController::class, 'deleteMessage']);

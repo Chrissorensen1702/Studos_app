@@ -4,12 +4,8 @@
 @section('bodyClass', 'landing-body')
 
 @section('headerActions')
-  @auth
-    <a class="button primary" href="{{ route('admin') }}">Gå til admin</a>
-  @else
-    <a class="button primary" href="{{ route('classes.create') }}">Opret klasse</a>
-    <a class="button subtle" href="{{ route('login') }}">Login</a>
-  @endauth
+  <a class="button primary" href="#landing-features-title">Se appen</a>
+  <a class="button subtle" href="{{ route('faq') }}">FAQ</a>
 @endsection
 
 @section('content')
@@ -88,24 +84,47 @@
               <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Chats.png') }}" alt="Chat i Studos appen">
             </div>
 
-            <div class="landing-mockup-slide" data-feature-slide="duel" data-feature-title="Udfordr dine klassekammerater" aria-hidden="true">
+            <div class="landing-mockup-slide" data-feature-slide="duel" data-feature-title="Dyst og challenges" aria-hidden="true">
               <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Dyst.png') }}" alt="Dyst i Studos appen">
             </div>
 
-            <div class="landing-mockup-slide" data-feature-slide="walls" data-feature-title="Walls" aria-hidden="true">
-              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Walls.png') }}" alt="Walls i Studos appen">
+            <div class="landing-mockup-slide" data-feature-slide="walls" data-feature-title="Galleri" aria-hidden="true">
+              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Walls.png') }}" alt="Galleri i Studos appen">
             </div>
 
             <div class="landing-mockup-slide" data-feature-slide="caps" data-feature-title="Overblik" aria-hidden="true">
               <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Overblik.png') }}" alt="Overblik i Studos appen">
             </div>
 
-            <div class="landing-mockup-slide" data-feature-slide="games" data-feature-title="Mini games" aria-hidden="true">
-              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Spil.png') }}" alt="Mini games i Studos appen">
+            <div class="landing-mockup-slide" data-feature-slide="games" data-feature-title="Arcade Hub" aria-hidden="true">
+              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Spil.png') }}" alt="Arcade Hub i Studos appen">
             </div>
 
-            <div class="landing-mockup-slide" data-feature-slide="battle" data-feature-title="Klassedyst" aria-hidden="true">
-              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Klassedyst.png') }}" alt="Klassedyst i Studos appen">
+            <div class="landing-mockup-slide" data-feature-slide="battle" data-feature-title="Leaderboard" aria-hidden="true">
+              <img class="landing-mockup-image" src="{{ asset('assets/index-mockups/Klassedyst.png') }}" alt="Klassedyst og leaderboard i Studos appen">
+            </div>
+
+            <div class="landing-mockup-slide" data-feature-slide="emergency" data-feature-title="Nødkontakter" aria-hidden="true">
+              <div class="emergency-mockup-screen" aria-hidden="true">
+                <div class="emergency-mockup-top">
+                  <span class="emergency-mockup-title">Nødkontakter</span>
+                  <span class="emergency-mockup-action">Ret</span>
+                </div>
+                <div class="emergency-mockup-own">
+                  <span>Min nødkontakt</span>
+                  <strong>Mor · +45 20 12 34 56</strong>
+                </div>
+                <div class="emergency-mockup-tabs">
+                  <span class="is-active">Klasse</span>
+                  <span>Venner</span>
+                </div>
+                <div class="emergency-mockup-list">
+                  <span><strong>Emma</strong><small>Far · +45 22 45 18 90</small></span>
+                  <span><strong>Noah</strong><small>Mor · +45 31 77 42 11</small></span>
+                  <span><strong>Alma</strong><small>Nødkontakt synlig</small></span>
+                  <span><strong>Oliver</strong><small>Kun for udvalgte</small></span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -119,8 +138,8 @@
         <h2 id="landing-features-title">Features der holder festen og vognen i gang 🚌🍻</h2>
         <p class="landing-feature-intro">
           <span>
-            Planlæg events, hold chatten samlet, dyst med klassen og gem
-            minderne fra studenteråret ét sted.
+            Kalender, chat, overblik, Dyst, Galleri, Arcade Hub,
+            leaderboard og Nødkontakter samlet i appen.
           </span>
           <span class="landing-feature-hint">
             Vælg et kort herunder for at skifte previewet og se, hvordan
@@ -136,11 +155,11 @@
             <span class="landing-feature-icon" aria-hidden="true">
               <img class="landing-feature-raster-icon" src="{{ asset('assets/footer-calendar.png') }}" alt="">
             </span>
-            <span class="landing-feature-label">Plan</span>
+            <span class="landing-feature-label">Kalender</span>
           </div>
-          <h3>Kalender og events</h3>
-          <p>Saml klassens events, aftaler og vigtige datoer i én kalender, så ingen misser hvad der sker. Fra vognture og fester til mødetider, adresser og spontane planer.
-            <br><br>Fælles overblik, hurtige opdateringer og styr på hvem der kommer. Resten kan klassen tage, når dagen rammer.</p>
+          <h3>Kalender og RSVP</h3>
+          <p>Opret events med tid, sted og cover. Klassen kan svare, om de kommer, se deltagerlisten og få påmindelser, når noget nærmer sig.
+            <br><br>Alt ligger i appen, så aftaler, adresser og spontane planer er samlet der, hvor klassen allerede følger med.</p>
         </article>
 
         <article class="landing-feature-card accent-coral" data-feature-card="chat" role="button" tabindex="0" aria-pressed="false">
@@ -148,27 +167,25 @@
             <span class="landing-feature-icon" aria-hidden="true">
               <img class="landing-feature-raster-icon" src="{{ asset('assets/footer-chat.png') }}" alt="">
             </span>
-            <span class="landing-feature-label">Live</span>
+            <span class="landing-feature-label">Chat</span>
           </div>
-          <h3>Chat og beskeder</h3>
-          <p>Hold klassens samtaler samlet, så planer, aftaler og jokes ikke forsvinder i gamle tråde. Direkte chats, gruppechats og fælles beskeder gør det nemt at få fat i dem, der skal med.
-            <br><br>Fra hurtige beskeder før et event til de små ting, der sker undervejs. Klassen har ét sted at skrive, spørge og følge med.</p>
+          <h3>Direkte chat og grupper</h3>
+          <p>Skriv 1:1 eller i gruppechats, se ulæste beskeder og reager hurtigt på det, der bliver sendt. Samtalerne opdateres løbende i appen.
+            <br><br>Det gør det nemmere at samle planer, spørgsmål og små beskeder uden at de forsvinder i tilfældige tråde.</p>
         </article>
 
         <article class="landing-feature-card accent-gold" data-feature-card="duel" role="button" tabindex="0" aria-pressed="false">
           <div class="landing-feature-card-head">
             <span class="landing-feature-icon" aria-hidden="true">
-              <span class="landing-app-icon app-icon-duel">
-                <span class="app-icon-duel-shield app-icon-duel-shield-outline"></span>
-                <span class="app-icon-duel-shield app-icon-duel-shield-fill"></span>
-                <span class="app-icon-duel-swords"></span>
+              <span class="landing-app-icon app-icon-flash">
+                <span></span>
               </span>
             </span>
             <span class="landing-feature-label">Dyst</span>
           </div>
-          <h3>Udfordr dine klassekammerater</h3>
-          <p>Lav challenges til klassen, sæt Caps på højkant, og følg dramaet på leaderboardet. Hvem tager føringen, når klassen dyster i sjove missioner, interne jokes og små kaotiske klassikere?
-            <br><br>Outfit-check, fællessang eller flest mobilnumre på en uge. Det er klassen, der bestemmer udfordringen.</p>
+          <h3>Dyst og challenges</h3>
+          <p>Udfordr en klassekammerat, sæt Caps på højkant og lad appen holde styr på invitationer, svar, deadlines og resultat.
+            <br><br>Det kan være alt fra små interne missioner til dyster, der kræver dommer eller fælles godkendelse.</p>
         </article>
 
         <article class="landing-feature-card accent-blue" data-feature-card="walls" role="button" tabindex="0" aria-pressed="false">
@@ -176,11 +193,11 @@
             <span class="landing-feature-icon" aria-hidden="true">
               <img class="landing-feature-raster-icon" src="{{ asset('assets/footer-walls.png') }}" alt="">
             </span>
-            <span class="landing-feature-label">Wall</span>
+            <span class="landing-feature-label">Galleri</span>
           </div>
-          <h3>Minder og walls</h3>
-          <p>Gem billeder, opslag og øjeblikke på klassens egne walls, så minderne ikke drukner i kamerarullen eller tilfældige chats. Fra vognture og fester til interne jokes og de billeder, alle skal se igen.
-            <br><br>Klassen kan bygge sin egen billedvæg løbende. Det bliver lidt sjovere at kigge tilbage, når alt ligger samlet.</p>
+          <h3>Galleri og albummer</h3>
+          <p>Lav fælles eller private albummer, upload flere billeder ad gangen, swipe gennem minderne og gem udvalgte billeder på telefonen.
+            <br><br>Klassen får ét sted til de billeder, der skal huskes, og indhold kan rapporteres direkte i appen.</p>
         </article>
 
         <article class="landing-feature-card accent-ink" data-feature-card="caps" role="button" tabindex="0" aria-pressed="false">
@@ -188,11 +205,11 @@
             <span class="landing-feature-icon" aria-hidden="true">
               <img class="landing-feature-raster-icon landing-feature-coin-icon" src="{{ asset('assets/caps-coin.png') }}" alt="">
             </span>
-            <span class="landing-feature-label">Caps</span>
+            <span class="landing-feature-label">Overblik</span>
           </div>
-          <h3>Cap-coins</h3>
-          <p>Alle starter med 1000 caps, og så er det ellers op til klassen at finde på, hvordan de skal bruges. Sæt dem på højkant i challanges, giv dem som belønning for gode gerninger, eller lav jeres helt egne regler for hvad de skal bruges til.
-            <br><br>Følg klassens leaderboard og aktivitet. Jo mere klassen bruger Studos, jo mere sker der i overblikket.</p>
+          <h3>Overblik og Caps</h3>
+          <p>Se profil, Studos-kode, kommende events, seneste aktivitet og din Caps-balance. Overblikket samler det vigtigste for dig.
+            <br><br>Caps kan optjenes gennem weekly streak, ugens gode gerning, QR-check-in og de dyster, klassen selv sætter i gang.</p>
         </article>
 
         <article class="landing-feature-card accent-games" data-feature-card="games" role="button" tabindex="0" aria-pressed="false">
@@ -206,11 +223,11 @@
                 <span></span>
               </span>
             </span>
-            <span class="landing-feature-label">Spil</span>
+            <span class="landing-feature-label">Arcade</span>
           </div>
-          <h3>Mini games</h3>
-          <p>Små spil, randomizer og hurtige challenges giver klassen noget at samles om mellem de store events. Perfekt til pauser, vognture og de øjeblikke, hvor nogen skal sætte gang i stemningen.
-            <br><br>Træk en mission, start en leg eller lad appen vælge næste move. Det skal være nemt at få lidt kaos i gang.</p>
+          <h3>Arcade Hub</h3>
+          <p>Brug små spil, randomizer og hurtige missioner, når klassen mangler et startskud. Det er bygget til pauser, vognture og spontane indslag.
+            <br><br>Træk en mission, start en leg eller lad appen vælge næste move direkte fra appens menu.</p>
         </article>
 
         <article class="landing-feature-card accent-battle" data-feature-card="battle" role="button" tabindex="0" aria-pressed="false">
@@ -222,160 +239,75 @@
                 <span></span>
               </span>
             </span>
-            <span class="landing-feature-label">Battle</span>
+            <span class="landing-feature-label">Leaderboard</span>
           </div>
-          <h3>Klassedyst</h3>
-          <p>Lad klasser dyste mod hinanden med point, placeringer og små mål, der kan mærkes i hverdagen. Det giver lidt ekstra energi, når parallelklassen pludselig ligger foran.
-            <br><br>Følg stillingen, jagt næste placering og gør hverdagen til en venlig kamp om håneretten.</p>
+          <h3>Leaderboard</h3>
+          <p>Følg klassens placering mod andre klasser og se, hvem der ligger stærkest internt. Ranglisten bruger Caps pr. aktiv elev.
+            <br><br>Det gør det fair for både små og store klasser, og giver lidt ekstra grund til at åbne appen igen.</p>
+        </article>
+
+        <article class="landing-feature-card accent-emergency" data-feature-card="emergency" role="button" tabindex="0" aria-pressed="false">
+          <div class="landing-feature-card-head">
+            <span class="landing-feature-icon" aria-hidden="true">
+              <span class="landing-app-icon app-icon-phone">
+                <span></span>
+              </span>
+            </span>
+            <span class="landing-feature-label">Nødkontakt</span>
+          </div>
+          <h3>Nødkontakter</h3>
+          <p>Gem din egen nødkontakt og vælg, hvem der må se den. Det kan være hele klassen, venner eller kun udvalgte personer.
+            <br><br>Når der er brug for det, kan klassen hurtigt finde de relevante kontaktoplysninger direkte i appen.</p>
         </article>
         </div>
       </div>
 
-      <section class="landing-early-access" aria-labelledby="landing-early-access-title">
-        <div class="landing-early-access-copy">
-          <p class="landing-early-access-kicker">EARLY ACCESS</p>
-          <h2 id="landing-early-access-title">
-            Skal din klasse være blandt de første på
+      <section class="landing-how" aria-labelledby="landing-how-title">
+        <div class="landing-how-copy">
+          <p class="landing-how-kicker">Sådan gør du</p>
+          <h2 id="landing-how-title">
+            Kom i gang med
             <span class="landing-inline-wordmark" aria-label="Studos">
               <span class="landing-inline-wordmark-row" aria-hidden="true">
                 <span class="landing-inline-wordmark-light">Stu</span><span>dos</span>
               </span>
               <span class="landing-inline-wordmark-underline" aria-hidden="true"></span>
-            </span>?
+            </span>
           </h2>
           <p>
-            Gør jer klar til studenteråret med kalender, chat, Caps, challenges,
-            gallerier og klassedyster samlet ét sted. Nye klasser kan allerede
-            oprette sig og komme tidligt med.
+            Hele klassen samles i appen. Opret, invitér og begynd at bruge
+            Studos på få minutter.
           </p>
         </div>
-        <a class="landing-early-access-button" href="{{ route('classes.create') }}">
-          Opret din klasse nu
-        </a>
-        <img
-          class="landing-early-access-student"
-          src="{{ asset('assets/landing-early-access-student-v2.png') }}"
-          alt=""
-          aria-hidden="true"
-        >
+
+        <div class="landing-how-steps" aria-label="Sådan kommer du i gang">
+          <article class="landing-how-step">
+            <span class="landing-how-number">01</span>
+            <h3>Hent appen</h3>
+            <p>Download Studos, når appen åbner i App Store og Google Play.</p>
+          </article>
+
+          <article class="landing-how-step">
+            <span class="landing-how-number">02</span>
+            <h3>Opret klassen</h3>
+            <p>Klasseejer opretter klassen direkte i appen med skole og årgang.</p>
+          </article>
+
+          <article class="landing-how-step">
+            <span class="landing-how-number">03</span>
+            <h3>Invitér alle</h3>
+            <p>Del klassekoden, og lad eleverne joine fra deres egen telefon.</p>
+          </article>
+
+          <article class="landing-how-step">
+            <span class="landing-how-number">04</span>
+            <h3>Brug Studos</h3>
+            <p>Planlæg events, chat, optjen Caps, lav Dyst og find nødkontakter.</p>
+          </article>
+        </div>
       </section>
+
     </div>
   </section>
   </div>
-
-  <footer class="landing-footer" aria-label="Studos footer">
-    <div class="landing-footer-surface">
-      <div class="landing-footer-inner">
-        <section class="landing-footer-section landing-footer-section-brand">
-          <a class="landing-footer-brand" href="{{ route('home') }}" aria-label="Studos forside">
-            <img class="landing-footer-mark" src="{{ asset('assets/studos-mark.svg') }}" alt="">
-            <span class="landing-footer-wordmark" aria-hidden="true">
-              <span class="landing-footer-wordmark-row">
-                <span class="landing-footer-wordmark-light">Stu</span><span>dos</span>
-              </span>
-              <span class="landing-footer-wordmark-underline"></span>
-            </span>
-          </a>
-
-          <div class="landing-footer-brand-panel">
-            <p class="landing-footer-mini-heading">Kontakt</p>
-            <div class="landing-footer-contact">
-              <strong>PlateDigital EMV</strong>
-              <span>CVR: 42456187</span>
-              <span>Kærmindevej 12, 7441 Bording</span>
-              <a href="mailto:hej@studos.dk">hej@studos.dk</a>
-              <a href="tel:+4520631299">+45 20 63 12 99</a>
-            </div>
-          </div>
-
-          <div class="landing-footer-powered-brand">
-            <p class="landing-footer-powered-by">En del af</p>
-            <img
-              class="landing-footer-powered-logo"
-              src="{{ asset('assets/PlateDigital-logo-saas.svg') }}"
-              alt="PlateDigital"
-            >
-          </div>
-        </section>
-
-        <section id="det-med-smaat" class="landing-footer-section">
-          <div class="landing-footer-section-header">
-            <h2 class="landing-footer-section-title">Navigation</h2>
-          </div>
-
-          <nav class="landing-footer-nav" aria-label="Footer navigation">
-            <a href="{{ route('home') }}">Forside</a>
-            <a href="#landing-title">Om Studos</a>
-            <a href="#landing-features-title">Funktioner i appen</a>
-            <a href="{{ route('login') }}">CMS-login</a>
-            <a href="{{ route('classes.create') }}">Opret din klasse</a>
-          </nav>
-        </section>
-
-        <section class="landing-footer-section">
-          <div class="landing-footer-section-header">
-            <h2 class="landing-footer-section-title">Det med småt</h2>
-          </div>
-
-          <nav class="landing-footer-nav" aria-label="Betingelser og privatliv">
-            <a href="{{ route('legal.privacy') }}">Privatlivspolitik</a>
-            <a href="{{ route('legal.terms') }}">Brugervilkår</a>
-            <a href="{{ route('legal.cookies') }}">Cookiepolitik</a>
-            <a href="{{ route('legal.delete-account') }}">Slet konto</a>
-            <a href="mailto:hej@studos.dk">Support</a>
-          </nav>
-        </section>
-
-        <section class="landing-footer-section landing-footer-section-contact">
-          <div class="landing-footer-section-header">
-            <h2 class="landing-footer-section-title">Hold kontakten</h2>
-          </div>
-
-          <div class="landing-footer-download">
-            <p class="landing-footer-mini-heading">Hent appen</p>
-
-            <div class="landing-footer-store-links" aria-label="Download Studos appen">
-              <a class="store-badge" href="#download-app" aria-label="Hent Studos på Google Play">
-                <span class="store-badge-mark google-play-mark" aria-hidden="true">
-                  <svg viewBox="0 0 42 46" focusable="false">
-                    <path d="M4 2L26 23L4 44Z" fill="#29c45a" />
-                    <path d="M26 23L34 15L39 18C42 20 42 26 39 28L34 31Z" fill="#ffd23f" />
-                    <path d="M4 2L34 15L26 23Z" fill="#24b6f2" />
-                    <path d="M4 44L26 23L34 31Z" fill="#f35b5f" />
-                  </svg>
-                </span>
-                <span class="store-badge-copy">
-                  <span class="store-badge-kicker">GET IT ON</span>
-                  <span class="store-badge-name">Google Play</span>
-                </span>
-              </a>
-              <a class="store-badge" href="#download-app" aria-label="Hent Studos i App Store">
-                <span class="store-badge-mark apple-mark" aria-hidden="true"></span>
-                <span class="store-badge-copy">
-                  <span class="store-badge-kicker">Download on the</span>
-                  <span class="store-badge-name">App Store</span>
-                </span>
-              </a>
-            </div>
-          </div>
-
-          <div class="landing-footer-social" aria-label="Studos på sociale medier">
-            <p class="landing-footer-mini-heading">Sociale medier</p>
-
-            <div class="landing-footer-social-links">
-              <span class="landing-footer-social-icon social-icon-instagram" role="img" aria-label="Instagram"></span>
-              <span class="landing-footer-social-icon social-icon-facebook" role="img" aria-label="Facebook"></span>
-            </div>
-          </div>
-        </section>
-      </div>
-    </div>
-
-    <div class="landing-footer-subbar">
-      <div class="landing-footer-subbar-inner">
-        <span>&copy; {{ now()->year }} Studos</span>
-        <span>Privat klassehub til studenteråret</span>
-      </div>
-    </div>
-  </footer>
 @endsection

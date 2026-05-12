@@ -18,7 +18,9 @@ ikke bliver glemt.
   `localhost`, Mac `.local` eller XAMPP-stier.
 - [ ] `APP_URL` peger på production-domain.
 - [ ] `EXPO_PUBLIC_API_URL` peger på production API.
-- [ ] `EXPO_PUBLIC_CREATE_CLASS_URL` peger på production opret-klasse.
+- [ ] `EXPO_PUBLIC_WEBSITE_URL` peger på production-domain.
+- [ ] Policy-links (`EXPO_PUBLIC_TERMS_URL`, `EXPO_PUBLIC_PRIVACY_URL` og
+  `EXPO_PUBLIC_DELETE_ACCOUNT_URL`) peger på production.
 - [ ] `EXPO_PUBLIC_REVERB_*` peger på production Reverb.
 - [ ] Laravel Cloud/server env er sat, ikke kun lokale `.env` filer.
 - [ ] Database migrations er kørt i production.

@@ -5,146 +5,131 @@
 @section('content')
   <section class="page legal-page">
     <header class="legal-hero">
-      <p class="eyebrow">Slet din konto</p>
-      <h1>Anmod om sletning af din Studos-konto</h1>
+      <h1>Slet din Studos-konto</h1>
       <p>
-        Du kan altid slette din Studos-konto. Den hurtigste måde er direkte i appens
-        indstillinger — det sletter kontoen øjeblikkeligt og pseudonymiserer dine
-        personoplysninger. Hvis du ikke har adgang til appen, kan du anmode om
-        sletning her.
+        Du kan slette din konto direkte i appen. Hvis du ikke har adgang til appen,
+        kan du anmode om sletning via e-mail.
       </p>
       <div class="legal-meta">
-        <span><strong>Effektiv:</strong> straks (i app) / op til 7 dage (via formular)</span>
-        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
+        <span><strong>Effekt:</strong> straks i appen / normalt inden for 7 arbejdsdage via e-mail</span>
+        <span><strong>Senest opdateret:</strong> 12. maj 2026</span>
       </div>
     </header>
 
     <div class="legal-content">
       <article class="legal-section">
-        <h2>1. Slet i appen (anbefalet)</h2>
+        <h2>1. Slet i appen</h2>
         <ol>
           <li>Åbn Studos-appen og log ind.</li>
-          <li>Gå til <strong>Indstillinger</strong> i menuen.</li>
-          <li>Rul ned til sektionen <strong>Konto</strong>.</li>
-          <li>Tryk på <strong>Slet konto permanent</strong> og bekræft.</li>
+          <li>Gå til <strong>Indstillinger</strong>.</li>
+          <li>Find <strong>Slet konto</strong>.</li>
+          <li>Læs advarslen og bekræft, hvis du vil slette kontoen permanent.</li>
         </ol>
         <p>
-          Sletningen sker øjeblikkeligt: din profil markeres som slettet,
-          personoplysninger fjernes/pseudonymiseres, login-tokens og adgangskode
-          slettes, og push-tokens deaktiveres.
+          Når du bekræfter, lukkes kontoen, og du kan ikke længere logge ind.
+          Aktive login-sessioner og push-tokens slettes, og direkte personoplysninger
+          fjernes eller pseudonymiseres.
         </p>
       </article>
 
       <article class="legal-section">
-        <h2>2. Hvad bliver slettet</h2>
+        <h2>2. Det bliver fjernet eller pseudonymiseret</h2>
         <ul>
-          <li>For-/efternavn, e-mail, telefon, fødselsdag, profilbillede.</li>
-          <li>Adgangskode (hash) og alle aktive login-sessioner.</li>
-          <li>Push-tokens og enhedsnavne.</li>
+          <li>Navn, e-mail, telefonnummer og fødselsdato.</li>
+          <li>Profilbillede og private profiloplysninger.</li>
+          <li>Adgangskode-hash og aktive login-sessioner.</li>
+          <li>Push-tokens, enhedsnavn og push-registreringer.</li>
           <li>Personlig Studos-kode.</li>
           <li>Nødkontaktoplysninger.</li>
-          <li>Private mediefiler, der kun er knyttet til din profil, fx profilbillede.</li>
+          <li>Direkte koblinger til rapporter, strikes og moderationsposter, hvor det er muligt.</li>
         </ul>
       </article>
 
       <article class="legal-section">
-        <h2>3. Hvad kan blive bevaret midlertidigt</h2>
+        <h2>3. Det kan blive bevaret</h2>
         <p>
-          Visse oplysninger kan opbevares i en kortere periode af lovgivnings-
-          eller sikkerhedsmæssige grunde. De er ikke længere knyttet til din
-          identitet via direkte identifikatorer, men kan i juridisk forstand
-          betragtes som <em>pseudonymiseret</em> snarere end fuldt anonymiseret —
-          se vores <a href="{{ route('legal.privacy') }}">privatlivspolitik</a> pkt. 7.
+          Noget fælles historik kan blive bevaret, fordi den tilhører klassens fælles
+          forløb eller er nødvendig af sikkerheds- eller dokumentationshensyn. I de
+          tilfælde fjernes direkte identifikatorer normalt, og dit navn vises som
+          "Slettet bruger".
         </p>
         <ul>
-          <li><strong>Aggregerede aktivitetsdata:</strong> Caps-saldo, dyste-historik og lignende afkobles fra din identitet, så klassens historik bevares.</li>
-          <li><strong>Beskeder i fælles chats:</strong> Beskeder, du har sendt i fælles chats eller på opslagstavler, fjernes ikke automatisk, men dit afsendernavn vises som "Slettet bruger". Du kan slette enkelte beskeder før kontosletning.</li>
-          <li><strong>Billeder i fælles albummer:</strong> Billeder, du har uploadet til et fælles album, fjernes ikke altid automatisk, hvis de indgår i klassens fælles historik. Du kan slette egne billeder før kontosletning eller bede os vurdere konkrete billeder til fjernelse. Efter sletning pseudonymiseres uploader-oplysninger.</li>
-          <li><strong>Moderationsdata:</strong> Eventuelle rapporter, du har indsendt eller været genstand for, opbevares i op til 24 måneder af hensyn til misbrugsforebyggelse og DSA-dokumentationspligt.</li>
-          <li><strong>Server-logs:</strong> Op til 30 dage.</li>
-          <li><strong>Support-korrespondance:</strong> Op til 24 måneder, medmindre længere opbevaring kræves af lov.</li>
+          <li><strong>Fælles chats og beskeder:</strong> Beskeder slettes ikke altid automatisk fra fælles tråde.</li>
+          <li><strong>Events, dyster og Caps-historik:</strong> Kan bevares, så klassens historik ikke brydes.</li>
+          <li><strong>Albummer og billeder:</strong> Fælles billeder kan blive liggende for den oprindelige målgruppe. Du kan slette egne billeder før kontosletning eller bede os vurdere konkrete billeder.</li>
+          <li><strong>Rapporter og moderation:</strong> Kan bevares, hvis det er nødvendigt for sikkerhed, klagebehandling, misbrugsforebyggelse eller dokumentation.</li>
+          <li><strong>Strikes og udelukkelse:</strong> Direkte medlemskoblinger fjernes ved kontosletning, hvor det er muligt, men dokumentation kan bevares, hvis den er nødvendig for at beskytte andre brugere eller håndtere en konkret sag.</li>
+          <li><strong>Server-logs:</strong> Kan ligge i kort tid efter sletning, normalt op til 30 dage.</li>
+          <li><strong>Support-korrespondance:</strong> Kan gemmes i en rimelig periode, normalt op til 24 måneder.</li>
         </ul>
       </article>
 
       <article class="legal-section">
-        <h2>4. Er du klasse-ejer (owner)?</h2>
+        <h2>4. Hvis du er klasseejer</h2>
         <p>
-          Hvis du er den eneste aktive ejer (owner) af en klasse, skal du først
-          overdrage ejerskabet til en anden i klassen, før du kan slette din
-          konto. Det sikrer, at klassen ikke står uden administrator. Du kan
-          overdrage ejerskab i appens klasse-indstillinger.
-        </p>
-        <p>
-          Har du brug for hjælp til at overdrage ejerskabet, eller er klassen
-          tom for andre aktive medlemmer, så skriv til
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a>, så hjælper vi dig
-          videre.
+          Hvis du er den eneste aktive ejer af en klasse, skal ejerskabet først
+          overdrages til en anden aktiv bruger. Det sikrer, at klassen ikke mister
+          administrationen. Kontakt os, hvis du ikke kan overdrage ejerskabet i appen.
         </p>
       </article>
 
       <article class="legal-section">
-        <h2>5. Anmod via formular (uden app)</h2>
+        <h2>5. Anmod via e-mail</h2>
         <p>
-          Hvis du ikke har adgang til appen, kan du sende en anmodning til
-          <a href="mailto:hej@studos.dk?subject=Anmodning%20om%20sletning%20af%20konto&body=Hej%20Studos%2C%0A%0AJeg%20anmoder%20om%20sletning%20af%20min%20konto.%0A%0ANavn%3A%20%0AE-mail%20p%C3%A5%20kontoen%3A%20%0AKlasse%20og%20skole%20(hvis%20du%20husker)%3A%20%0AGrund%20(valgfri)%3A%20%0A%0ATak.">hej@studos.dk</a>
-          med følgende oplysninger, så vi kan finde og verificere din konto:
+          Hvis du ikke har adgang til appen, kan du sende en sletningsanmodning til
+          <a href="mailto:chris.sorensen1702@gmail.com?subject=Anmodning%20om%20sletning%20af%20konto&body=Hej%20Studos%2C%0A%0AJeg%20anmoder%20om%20sletning%20af%20min%20konto.%0A%0ANavn%3A%20%0AE-mail%20p%C3%A5%20kontoen%3A%20%0AKlasse%20og%20skole%20(hvis%20du%20husker)%3A%20%0A%0ATak.">chris.sorensen1702@gmail.com</a>.
+          Skriv gerne:
         </p>
         <ul>
           <li>Navn på kontoen.</li>
           <li>E-mail tilknyttet kontoen.</li>
-          <li>Klasse og skole (hvis du husker dem).</li>
-          <li>Eventuelt grunden til sletningen (valgfri).</li>
+          <li>Klasse og skole, hvis du husker det.</li>
         </ul>
         <p>
-          Vi behandler anmodningen <strong>inden for 7 arbejdsdage</strong>. For at
-          beskytte din konto mod misbrug kan vi kontakte dig fra den e-mail, kontoen
-          er oprettet med, for at bekræfte anmodningen.
+          Vi kan bede dig bekræfte anmodningen fra kontoens e-mailadresse, så vi ikke
+          sletter en konto på baggrund af en falsk anmodning.
         </p>
         <div class="legal-actions">
-          <a class="button primary" href="mailto:hej@studos.dk?subject=Anmodning%20om%20sletning%20af%20konto&body=Hej%20Studos%2C%0A%0AJeg%20anmoder%20om%20sletning%20af%20min%20konto.%0A%0ANavn%3A%20%0AE-mail%20p%C3%A5%20kontoen%3A%20%0AKlasse%20og%20skole%20(hvis%20du%20husker)%3A%20%0AGrund%20(valgfri)%3A%20%0A%0ATak.">
+          <a class="button primary" href="mailto:chris.sorensen1702@gmail.com?subject=Anmodning%20om%20sletning%20af%20konto&body=Hej%20Studos%2C%0A%0AJeg%20anmoder%20om%20sletning%20af%20min%20konto.%0A%0ANavn%3A%20%0AE-mail%20p%C3%A5%20kontoen%3A%20%0AKlasse%20og%20skole%20(hvis%20du%20husker)%3A%20%0A%0ATak.">
             Anmod om sletning via e-mail
           </a>
         </div>
       </article>
 
       <article class="legal-section">
-        <h2>6. Hvad sker der efter sletning?</h2>
+        <h2>6. Efter sletning</h2>
         <ul>
           <li>Du kan ikke længere logge ind på kontoen.</li>
-          <li>Du modtager ingen push-notifikationer fra Studos.</li>
-          <li>Dit display-navn i historiske beskeder vises som "Slettet bruger".</li>
-          <li>Eventuelle billeder i fælles albummer kan fortsat være synlige for den oprindelige målgruppe, men uden direkte uploader-identitet.</li>
-          <li>Hvis du senere ønsker at bruge Studos igen, skal du oprette en ny konto.</li>
+          <li>Du modtager ikke længere push-notifikationer fra Studos.</li>
+          <li>Dit display-navn kan blive vist som "Slettet bruger" i historisk indhold.</li>
+          <li>Hvis du senere vil bruge Studos igen, skal du oprette en ny konto.</li>
         </ul>
       </article>
 
       <article class="legal-section">
-        <h2>7. Børn og forældreanmodninger</h2>
+        <h2>7. Forældre og værger</h2>
         <p>
-          Studos er rettet mod elever på ungdomsuddannelser, og som
-          forretningsregel skal man være mindst 15 år for at oprette en konto.
-          Forældre eller værger, der ønsker at få en konto slettet på vegne af
-          deres barn — uanset alder — kan skrive til
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a>. Vi prioriterer disse
-          anmodninger særligt højt og besvarer dem inden for 3 arbejdsdage.
+          Studos kræver, at brugere er mindst 16 år. Forældre eller værger kan skrive
+          til <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a>,
+          hvis de mener, at et barn under 16 år har oprettet konto, eller hvis de har
+          spørgsmål til sletning.
         </p>
       </article>
 
       <article class="legal-section">
         <h2>8. Spørgsmål</h2>
         <p>
-          Har du spørgsmål til sletningsprocessen, eller er du i tvivl om hvad der
-          sker med dine data, så skriv til
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a> eller ring
-          <a href="tel:+4520631299">+45 20 63 12 99</a>. Du kan også læse vores
-          <a href="{{ route('legal.privacy') }}">privatlivspolitik</a> og
-          <a href="{{ route('legal.terms') }}">brugervilkår</a>.
+          Har du spørgsmål, så skriv til
+          <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a>
+          eller ring <a href="tel:+4520631299">+45 20 63 12 99</a>. Læs også
+          <a href="{{ route('legal.privacy') }}">privatlivspolitikken</a> og
+          <a href="{{ route('legal.terms') }}">brugervilkårene</a>.
         </p>
         <p>
           <strong>PlateDigital EMV</strong><br>
           CVR: 42456187<br>
           Kærmindevej 12, 7441 Bording<br>
-          E-mail: <a href="mailto:hej@studos.dk">hej@studos.dk</a>
+          E-mail: <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a>
         </p>
       </article>
     </div>

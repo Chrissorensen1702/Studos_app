@@ -1,8 +1,8 @@
 # Apps
 
-Denne mappe indeholder nu kun native/mobile-appen.
+Denne mappe indeholder native/mobile-appen.
 
-- `mobile`: Expo/React Native app.
+- `mobile`: Expo/React Native appen, hvor selve Studos-produktet ligger.
 
-Web, admin og API ligger i Laravel-roden (`app/`, `routes/`, `resources/`,
-`database/` osv.).
+Public web, juridiske sider og API ligger i Laravel-roden (`app/`, `routes/`,
+`resources/`, `database/` osv.).

@@ -15,6 +15,7 @@ class PushNotifier
     public const CHANNEL_ID = 'studos-default';
 
     public const CAT_CHAT_MESSAGE = 'chat_message';
+    public const CAT_CHAT_REACTION = 'chat_reaction';
     public const CAT_GROUP_CHAT_INVITE = 'group_chat_invite';
     public const CAT_DUEL_INVITE = 'duel_invite';
     public const CAT_DUEL_RESPONSE = 'duel_response';
@@ -35,6 +36,7 @@ class PushNotifier
 
     public const CATEGORIES = [
         self::CAT_CHAT_MESSAGE,
+        self::CAT_CHAT_REACTION,
         self::CAT_GROUP_CHAT_INVITE,
         self::CAT_DUEL_INVITE,
         self::CAT_DUEL_RESPONSE,
@@ -185,7 +187,7 @@ class PushNotifier
     {
         // Screen names map to mobile app tabs (apps/mobile/App.js setActiveTab values).
         return match ($category) {
-            self::CAT_CHAT_MESSAGE, self::CAT_GROUP_CHAT_INVITE => 'chat',
+            self::CAT_CHAT_MESSAGE, self::CAT_CHAT_REACTION, self::CAT_GROUP_CHAT_INVITE => 'chat',
             self::CAT_DUEL_INVITE,
             self::CAT_DUEL_RESPONSE,
             self::CAT_DUEL_ACTION_REQUIRED,

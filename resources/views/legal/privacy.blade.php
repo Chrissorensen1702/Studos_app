@@ -5,26 +5,25 @@
 @section('content')
   <section class="page legal-page">
     <header class="legal-hero">
-      <p class="eyebrow">Privatlivspolitik</p>
-      <h1>Sådan håndterer vi dine data</h1>
+      <h1>Sådan behandler Studos dine oplysninger</h1>
       <p>
-        Vi tager dit privatliv alvorligt. Denne politik beskriver hvilke
-        personoplysninger Studos indsamler, hvorfor vi gør det, hvordan vi beskytter
-        dem, og hvilke rettigheder du har under databeskyttelsesforordningen (GDPR).
+        Her kan du se, hvilke personoplysninger Studos behandler, hvorfor vi
+        behandler dem, hvem der kan se dem, hvor længe vi gemmer dem, og hvilke
+        rettigheder du har.
       </p>
       <div class="legal-meta">
-        <span><strong>Version:</strong> 1.2</span>
-        <span><strong>Senest opdateret:</strong> 11. maj 2026</span>
+        <span><strong>Version:</strong> 1.3</span>
+        <span><strong>Senest opdateret:</strong> 12. maj 2026</span>
         <span><strong>Dataansvarlig:</strong> PlateDigital EMV · CVR 42456187</span>
       </div>
     </header>
 
     <div class="legal-content">
       <div class="legal-callout">
-        <strong>Kort fortalt:</strong> Studos er reklamefri og uden tracking. Vi
-        sælger aldrig dine data. Vi indsamler kun det, vi skal bruge for at drive
-        klassehubben, herunder lukkede albummer i appen, og du kan slette din
-        konto når som helst.
+        <strong>Kort fortalt:</strong> Studos er reklamefri og uden tracking til
+        markedsføring. Vi sælger ikke dine data. Vi bruger oplysningerne til at
+        drive en lukket klasseapp med chat, kalender, albummer, dyster, notifikationer
+        og moderation.
       </div>
 
       <article id="dataansvarlig" class="legal-section">
@@ -33,362 +32,358 @@
           <strong>PlateDigital EMV</strong><br>
           CVR: 42456187<br>
           Kærmindevej 12, 7441 Bording<br>
-          E-mail: <a href="mailto:hej@studos.dk">hej@studos.dk</a><br>
+          E-mail: <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a><br>
           Telefon: <a href="tel:+4520631299">+45 20 63 12 99</a>
         </p>
         <p>
-          Henvendelser om dine rettigheder, indsigt, sletning eller dataportabilitet
-          sendes til <a href="mailto:hej@studos.dk">hej@studos.dk</a>. Vi svarer som
-          udgangspunkt inden for 30 dage, jf. GDPR art. 12, stk. 3.
+          Skriv til os, hvis du vil bruge dine rettigheder, har spørgsmål til
+          privatliv eller vil anmode om sletning, indsigt eller rettelse. Vi svarer
+          som udgangspunkt inden for 30 dage.
         </p>
       </article>
 
-      <article id="hvilke-data" class="legal-section">
-        <h2>2. Hvilke oplysninger vi indsamler</h2>
+      <article id="data" class="legal-section">
+        <h2>2. Oplysninger vi behandler</h2>
         <table class="legal-table">
           <thead>
             <tr><th>Kategori</th><th>Eksempler</th><th>Kilde</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td>Identifikatorer</td>
-              <td>Bruger-ID, klasse-ID, personlig Studos-kode</td>
-              <td>Genereret ved oprettelse</td>
+              <td>Konto og identitet</td>
+              <td>Bruger-ID, klasse-ID, skole, rolle, navn, e-mail, fødselsdato, personlig Studos-kode, profilbillede</td>
+              <td>Dig selv og systemet</td>
             </tr>
             <tr>
-              <td>Kontaktoplysninger</td>
-              <td>For- og efternavn, e-mail, telefonnummer (valgfri), fødselsdag, klasse, skole</td>
-              <td>Du selv ved oprettelse</td>
+              <td>Login og sikkerhed</td>
+              <td>Hashet adgangskode, login-sessioner, auth-tokens, engangskoder, rate limiting og relevante server-logs</td>
+              <td>Dig selv, din enhed og serveren</td>
             </tr>
             <tr>
-              <td>Profilbillede / mediefiler</td>
-              <td>Profilbillede, album- og galleribilleder, covers samt eventuelle billeder eller videoer i chats</td>
-              <td>Du selv</td>
-            </tr>
-            <tr>
-              <td>Adgang og login</td>
-              <td>Hashet adgangskode (bcrypt), login-tokens, engangs-loginkoder</td>
-              <td>Du selv / system</td>
+              <td>Klasse og relationer</td>
+              <td>Klassemedlemskab, rolle, connections, blokeringer, klassekode, invitationer og godkendelsesstatus</td>
+              <td>Dig selv, klassen og systemet</td>
             </tr>
             <tr>
               <td>Brugerindhold</td>
-              <td>Chatbeskeder (1:1, grupper og klasse), opslag, kommentarer, begivenheder, RSVP, dyster, udfordringer, gallerier, albummer, albumnavne og albumindstillinger</td>
-              <td>Du selv</td>
+              <td>Chatbeskeder, gruppechats, klassechat, emoji-reaktioner, events, RSVP, dyster, udfordringer, gallerier, albummer, billedtekster og covers</td>
+              <td>Dig selv og andre brugere</td>
             </tr>
             <tr>
-              <td>Album- og billedmetadata</td>
-              <td>Uploader, uploadtidspunkt, synlighed, målgruppe, tilladelser, sortering, rapportstatus og slette-/moderationsstatus</td>
-              <td>Du selv / system</td>
+              <td>Billeder og billedmetadata</td>
+              <td>Profilbilleder, album- og galleribilleder, uploader, uploadtidspunkt, synlighed, målgruppe, slette- og moderationsstatus</td>
+              <td>Dig selv, andre brugere og systemet</td>
             </tr>
             <tr>
-              <td>Connections og blokeringer</td>
-              <td>Hvilke brugere du er forbundet med eller har blokeret</td>
-              <td>Du selv</td>
+              <td>Appaktivitet</td>
+              <td>Caps, check-ins, deltagelse i events, dyste-historik, sidste login, sidste set-tidspunkt og ulæste beskeder</td>
+              <td>Genereret ved brug af appen</td>
             </tr>
             <tr>
-              <td>Nødkontakt (valgfri)</td>
-              <td>Navn og telefon på pårørende</td>
-              <td>Du selv</td>
+              <td>Nødkontakt</td>
+              <td>Navn og telefonnummer på din valgte nødkontakt samt hvem du har valgt kan se den</td>
+              <td>Dig selv</td>
             </tr>
             <tr>
-              <td>Push-notifikationsdata</td>
-              <td>Expo Push Token, enhedsnavn, platform, app-variant, native app-version, native build-version</td>
-              <td>Din enhed</td>
+              <td>Push-notifikationer</td>
+              <td>Expo Push Token, platform, enhedsnavn, app-variant, app-version og build-version</td>
+              <td>Din enhed, hvis du tillader notifikationer</td>
             </tr>
             <tr>
-              <td>App- og brugsdata</td>
-              <td>Caps-saldo, dyste-historik, deltagelse i events, sidste login, sidste set-tidspunkt</td>
-              <td>Genereret ved brug</td>
+              <td>Moderation</td>
+              <td>Rapporter, blokeringsdata, årsag, detaljer, behandlingsstatus, strikes, strike-nummer, hvem der har behandlet sagen, udelukkelse og klager</td>
+              <td>Brugere, klassemoderatorer og Studos</td>
             </tr>
             <tr>
-              <td>Moderationsdata</td>
-              <td>Indberetninger (notices), advarsler, suspenderinger, klagebehandling</td>
-              <td>Brugere / moderatorer</td>
-            </tr>
-            <tr>
-              <td>Diagnostik / sikkerhed</td>
-              <td>IP-adresse til rate limiting og misbrugsforebyggelse, server-logs</td>
-              <td>Server</td>
-            </tr>
-            <tr>
-              <td>Support-korrespondance</td>
-              <td>E-mails du sender til hej@studos.dk og vores svar</td>
-              <td>Du selv / support</td>
+              <td>Support</td>
+              <td>E-mails og oplysninger, du sender til support</td>
+              <td>Dig selv</td>
             </tr>
           </tbody>
         </table>
         <p>
-          Vi indsamler <strong>ikke</strong>: præcis lokation, biometriske data,
-          oplysninger fra dit kontaktkartotek, helbreds- eller racemæssige
-          oplysninger eller andre særlige kategorier, jf. GDPR art. 9. Vi sælger
-          aldrig dine data og deler dem ikke med annoncører.
+          Vi indsamler ikke præcis lokation, kontaktbog, biometriske data eller
+          helbredsoplysninger som faste funktioner i Studos. Brugere kan dog selv
+          skrive eller uploade indhold, der indeholder personoplysninger. Del derfor
+          kun oplysninger og billeder, du har ret til at dele.
         </p>
       </article>
 
       <article id="formaal" class="legal-section">
-        <h2>3. Formål og retsgrundlag</h2>
-        <ul>
-          <li><strong>Levere tjenesten</strong> (kontooprettelse, login, chat, kalender, dyster, albummer og billeddeling) — retsgrundlag: opfyldelse af aftale, GDPR art. 6, stk. 1, litra b.</li>
-          <li><strong>Sikkerhed og misbrugsforebyggelse</strong> (login-koder, rate limiting, blokeringer, rapporter, moderation) — retsgrundlag: legitim interesse, GDPR art. 6, stk. 1, litra f.</li>
-          <li><strong>Vise og administrere albummer</strong> (upload, visning, gem på telefon, sletning, rapportering, uploader- og datooplysninger) — retsgrundlag: opfyldelse af aftale, GDPR art. 6, stk. 1, litra b, og legitim interesse i et sikkert klassefællesskab, litra f.</li>
-          <li><strong>Push-notifikationer</strong> — retsgrundlag: samtykke, GDPR art. 6, stk. 1, litra a. Du kan til enhver tid trække samtykket tilbage i app-indstillingerne.</li>
-          <li><strong>Forbedring af tjenesten</strong> (aggregerede og anonyme statistikker over brug) — retsgrundlag: legitim interesse, GDPR art. 6, stk. 1, litra f.</li>
-          <li><strong>Lovbestemte krav</strong> (myndighedsanmodninger, regnskabs- og bogføringspligt) — retsgrundlag: retlig forpligtelse, GDPR art. 6, stk. 1, litra c.</li>
-        </ul>
+        <h2>3. Hvorfor vi behandler oplysninger</h2>
+        <table class="legal-table">
+          <thead>
+            <tr><th>Formål</th><th>Eksempler</th><th>Retsgrundlag</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Levere appen</td>
+              <td>Konto, login, klasse, chat, kalender, albummer, dyster, Caps og profil</td>
+              <td>Aftale, GDPR art. 6, stk. 1, litra b</td>
+            </tr>
+            <tr>
+              <td>Sikkerhed og misbrug</td>
+              <td>Rate limits, blokeringer, rapporter, moderation, strikes og udelukkelse</td>
+              <td>Legitim interesse, GDPR art. 6, stk. 1, litra f</td>
+            </tr>
+            <tr>
+              <td>Notifikationer</td>
+              <td>Push om chat, reaktioner, invitations- og klasseaktivitet, når du har tilladt det</td>
+              <td>Samtykke, GDPR art. 6, stk. 1, litra a</td>
+            </tr>
+            <tr>
+              <td>Support</td>
+              <td>Besvare spørgsmål, fejlmeldinger og sletningsanmodninger</td>
+              <td>Legitim interesse eller aftale</td>
+            </tr>
+            <tr>
+              <td>Lovkrav</td>
+              <td>Dokumentation, myndighedsanmodninger og eventuelle regnskabskrav</td>
+              <td>Retlig forpligtelse, GDPR art. 6, stk. 1, litra c</td>
+            </tr>
+          </tbody>
+        </table>
         <p>
-          Vi anvender ikke automatiserede afgørelser i GDPR art. 22's forstand,
-          og vi profilerer ikke brugere til markedsføringsformål.
+          Vi bruger ikke dine oplysninger til målrettet annoncering, salg af data
+          eller profilering til markedsføring. Vi træffer ikke automatiserede
+          afgørelser med retsvirkning for dig uden menneskelig vurdering.
         </p>
       </article>
 
-      <article id="album-billeder" class="legal-section">
-        <h2>4. Albummer, billeder og personer på billeder</h2>
+      <article id="deling-i-appen" class="legal-section">
+        <h2>4. Hvem kan se dine oplysninger i Studos</h2>
         <p>
-          Albummer og gallerier i Studos er brugeroprettet indhold. Billeder kan
-          være personoplysninger, når personer kan genkendes. Den bruger, der
-          uploader et billede, skal derfor sikre sig, at billedet lovligt kan deles
-          i den valgte målgruppe, og at personer på billedet ikke med rimelighed
-          kan føle sig udstillet, krænket eller bragt i en privat eller følsom
-          situation.
+          Studos er et lukket klassefællesskab. Andre brugere kan kun se de oplysninger
+          og det indhold, som appens funktioner giver dem adgang til, for eksempel din
+          profil i klassen, beskeder i en chat, billeder i et album, events eller
+          connections.
         </p>
         <p>
-          Albummer er lukkede for den valgte Studos-målgruppe. "Offentlig" eller
-          delt synlighed i appen betyder synlig for den valgte klasse, crew eller
-          specifikke personer i Studos — ikke offentliggørelse på det åbne internet.
-          Brugere med adgang til et album kan dog se billederne og, hvor funktionen
-          er aktiveret, gemme dem på deres egen telefon. De må ikke videredele
-          billeder uden for Studos uden samtykke eller andet lovligt grundlag.
+          Nødkontakt er valgfri. Hvis du tilføjer en nødkontakt, skal du selv vælge
+          synligheden i appen og sikre dig, at oplysningerne må deles med den valgte
+          målgruppe.
         </p>
         <p>
-          Vi viser uploader og uploadtidspunkt i billedviseren for at skabe
-          gennemsigtighed og ansvarlighed. Billeder kan slettes af berettigede
-          brugere eller fjernes af Studos efter rapport, indsigelse, misbrug,
-          ulovligt indhold eller andre saglige grunde.
+          Klasseejere og moderatorer kan få adgang til rapporter og moderationsdata,
+          når det er nødvendigt for at behandle en sag.
         </p>
       </article>
 
-      <article id="deling" class="legal-section">
-        <h2>5. Modtagere og databehandlere</h2>
+      <article id="billeder" class="legal-section">
+        <h2>5. Billeder og albummer</h2>
         <p>
-          Vi deler kun data med tredjeparter, når det er nødvendigt for at drive
-          tjenesten. Tjenesteleverandører, der behandler personoplysninger på
-          vores vegne, gør det altid på grundlag af en databehandleraftale (DPA),
-          jf. GDPR art. 28:
-        </p>
-        <ul>
-          <li><strong>Laravel Cloud</strong> — hosting, database, objektlagring (databehandler).</li>
-          <li><strong>Expo Push Service (Expo Inc.)</strong> — afsendelse af push-notifikationer (databehandler).</li>
-          <li><strong>E-mailudbyder for hej@studos.dk</strong> — håndtering af support-korrespondance (databehandler).</li>
-        </ul>
-        <p>
-          <strong>Apple App Store</strong> og <strong>Google Play</strong> behandler
-          personoplysninger som <em>selvstændige dataansvarlige</em> i forbindelse
-          med distribution af appen og er <em>ikke</em> vores databehandlere. Læs
-          deres egne politikker for, hvordan de behandler dine oplysninger.
+          Billeder kan være personoplysninger, hvis personer kan genkendes. Den, der
+          uploader et billede, skal sikre sig, at billedet lovligt kan deles i den
+          valgte målgruppe, og at personer på billedet ikke bliver udstillet,
+          krænket eller bragt i en privat eller sårbar situation.
         </p>
         <p>
-          Andre brugere ser kun det indhold, du selv vælger at dele i din klasse,
-          gruppechats, direktechat, albummer eller med dine connections. Indhold
-          videregives aldrig til tredjeparter til markedsførings- eller
-          analyseformål.
+          Albummer og gallerier er kun synlige for den målgruppe, der er valgt i appen.
+          Det er ikke offentliggørelse på det åbne internet. Brugere med adgang kan dog
+          se billedet og, hvor appen tillader det, gemme det på deres egen telefon.
+          Videresendelse uden for Studos kræver samtykke eller andet lovligt grundlag.
+        </p>
+      </article>
+
+      <article id="moderation" class="legal-section">
+        <h2>6. Moderation, strikes og udelukkelse</h2>
+        <p>
+          Når indhold eller en bruger rapporteres, behandler vi oplysninger om rapporten,
+          årsag, detaljer, mål, afsender, rapporteret bruger, status og afgørelse. Hvis
+          en rapport fører til en strike, gemmes også strike-nummer, årsag, tidspunkt,
+          eventuelle detaljer og hvem der udstedte den.
+        </p>
+        <p>
+          Strike-systemet har en grænse på 3 aktive strikes. Ved 3 strikes bliver
+          brugeren udelukket fra klassen. Alvorlige sager kan også føre til hurtigere
+          begrænsning eller udelukkelse. Brugeren får besked i appen og kan klage til
+          support.
+        </p>
+      </article>
+
+      <article id="modtagere" class="legal-section">
+        <h2>7. Leverandører og modtagere</h2>
+        <p>
+          Vi deler kun oplysninger, når det er nødvendigt for at drive Studos, beskytte
+          brugere, overholde loven eller levere support.
+        </p>
+        <table class="legal-table">
+          <thead>
+            <tr><th>Modtager</th><th>Formål</th><th>Rolle</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Laravel Cloud</td>
+              <td>Hosting, database og filopbevaring</td>
+              <td>Databehandler</td>
+            </tr>
+            <tr>
+              <td>Expo Push Service</td>
+              <td>Afsendelse af push-notifikationer</td>
+              <td>Databehandler eller underleverandør</td>
+            </tr>
+            <tr>
+              <td>E-mailudbyder for supportmailen</td>
+              <td>Support, rettighedsanmodninger og sletningsanmodninger</td>
+              <td>Databehandler eller selvstændig udbyder, afhængigt af brug</td>
+            </tr>
+            <tr>
+              <td>App-butikker</td>
+              <td>Distribution af appen, hvis du henter den derfra</td>
+              <td>Selvstændige dataansvarlige for deres egne tjenester</td>
+            </tr>
+            <tr>
+              <td>Myndigheder</td>
+              <td>Kun hvis loven kræver det, eller hvis det er nødvendigt ved alvorlig fare</td>
+              <td>Selvstændige dataansvarlige</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Vi deler ikke personoplysninger med annoncører, datahandlere eller
+          analysepartnere til markedsføring.
+        </p>
+      </article>
+
+      <article id="overfoersel" class="legal-section">
+        <h2>8. Overførsel uden for EU/EØS</h2>
+        <p>
+          Nogle leverandører kan behandle oplysninger uden for EU/EØS, for eksempel i
+          forbindelse med push-notifikationer eller teknisk support. Hvis det sker, bruger
+          vi relevante overførselsgrundlag, for eksempel EU-Kommissionens standardkontrakter,
+          og vurderer behovet for supplerende beskyttelse.
         </p>
       </article>
 
       <article id="opbevaring" class="legal-section">
-        <h2>6. Opbevaringsperioder</h2>
+        <h2>9. Hvor længe vi gemmer oplysninger</h2>
         <ul>
-          <li><strong>Aktiv konto:</strong> Så længe din konto er aktiv.</li>
-          <li><strong>Slettet konto:</strong> Personoplysninger pseudonymiseres straks (navn, e-mail, telefon, fødselsdag, profilbillede mv. fjernes; bruger-ID bevares som intern reference for at undgå brudte historikker — se pkt. 7).</li>
-          <li><strong>Albummer og billeder:</strong> Opbevares så længe albummet er aktivt for den valgte målgruppe, eller indtil billedet/albummet slettes af en berettiget bruger, fjernes efter rapport/indsigelse, eller kontoen/klassen afvikles efter gældende sletteflow.</li>
-          <li><strong>Slettede albumfiler:</strong> Fjernes eller gøres utilgængelige hurtigst muligt. Tekniske sikkerhedskopier og logspor kan eksistere kortvarigt, og materiale knyttet til moderation kan opbevares efter nedenstående moderationsregel.</li>
-          <li><strong>Login-tokens:</strong> Op til 90 dage efter sidste brug.</li>
-          <li><strong>Login-koder (engangskoder):</strong> 15 minutter.</li>
-          <li><strong>Push-tokens:</strong> Slettes når du slår notifikationer fra eller sletter kontoen.</li>
-          <li><strong>Moderationsdata (rapporter, klager):</strong> Op til 24 måneder af hensyn til misbrugsforebyggelse og dokumentationspligt efter DSA, derefter pseudonymiseres yderligere eller slettes.</li>
-          <li><strong>Server-logs:</strong> Op til 30 dage.</li>
-          <li><strong>Support-korrespondance:</strong> Op til 24 måneder, medmindre længere opbevaring kræves af lov.</li>
-          <li><strong>Bogføringspligtigt materiale</strong> (hvis Studos senere indfører betalte funktioner): 5 år efter regnskabsårets udløb, jf. bogføringslovens § 12.</li>
+          <li><strong>Aktiv konto:</strong> Konto- og klasseoplysninger gemmes, så længe kontoen er aktiv.</li>
+          <li><strong>Login-sessioner:</strong> Auth-tokens slettes normalt senest 90 dage efter sidste brug eller efter tilbagekaldelse.</li>
+          <li><strong>Engangskoder:</strong> Login-koder udløber efter kort tid, normalt 10-15 minutter.</li>
+          <li><strong>Push-tokens:</strong> Slettes eller deaktiveres, når du slår notifikationer fra eller sletter kontoen. Ubrugte tokens ryddes løbende.</li>
+          <li><strong>Server-logs:</strong> Opbevares normalt op til 30 dage.</li>
+          <li><strong>Support:</strong> Opbevares normalt op til 24 måneder, medmindre sagen kræver længere opbevaring.</li>
+          <li><strong>Rapporter og moderationssager:</strong> Opbevares så længe sagen er relevant for sikkerhed, klagebehandling og dokumentation. Lukkede sager opbevares normalt op til 24 måneder, medmindre lov, alvorlig misbrugshistorik eller en konkret tvist kræver længere opbevaring.</li>
+          <li><strong>Strikes:</strong> Aktive strikes gemmes, så længe de er relevante for klassens sikkerhed og brugerens adgang til klassen. Ved kontosletning fjernes direkte medlemskoblinger, hvor det er muligt.</li>
+          <li><strong>Fælles historik:</strong> Chatbeskeder, events, dyster og albummer kan bevares som en del af klassens historik, men direkte identifikatorer fjernes eller pseudonymiseres ved kontosletning.</li>
+          <li><strong>Regnskab:</strong> Hvis der senere kommer betalte funktioner, kan bogføringsmateriale gemmes efter bogføringslovens regler.</li>
         </ul>
       </article>
 
-      <article id="anonymisering" class="legal-section">
-        <h2>7. Anonymisering, pseudonymisering og historik</h2>
+      <article id="sletning" class="legal-section">
+        <h2>10. Kontosletning og pseudonymisering</h2>
         <p>
-          Når du sletter din konto, fjerner vi de oplysninger, der direkte kan
-          identificere dig (navn, e-mail, telefon, adgangskode, profilbillede mv.).
-          Dit display-navn i historiske beskeder erstattes med "Slettet bruger".
+          Du kan slette kontoen i appens indstillinger eller via
+          <a href="{{ route('legal.delete-account') }}">studos.dk/slet-konto</a>.
+          Når kontoen slettes, fjernes eller pseudonymiseres navn, e-mail, telefon,
+          fødselsdato, adgangskode, profilbillede, push-tokens og aktive login-sessioner.
         </p>
         <p>
-          Visse interne identifikatorer (fx dit bruger-ID) bevares som stabil
-          reference, så klassens fælles historik (chats, dyster, albummer, gallerier) ikke
-          går i stykker. Det betyder, at sletningen i juridisk forstand er en
-          <em>pseudonymisering</em> snarere end en fuld anonymisering — dine data
-          er fortsat omfattet af GDPR, og du beholder dine rettigheder, jf.
-          GDPR betragtning 26.
+          I fælles historik kan dit navn blive erstattet med "Slettet bruger", mens selve
+          historikken bevares for klassen. Det kan for eksempel være tidligere beskeder,
+          events, dyster eller billeder i fælles albummer. Du kan altid kontakte os om
+          konkrete beskeder eller billeder, du ønsker vurderet til sletning.
         </p>
         <p>
-          Billeder, du har uploadet til fælles albummer, fjernes ikke altid
-          automatisk ved kontosletning, hvis de indgår i klassens fælles historik.
-          Din uploader-identitet pseudonymiseres, og du kan slette egne billeder
-          før kontosletning eller kontakte os, hvis du ønsker bestemte billeder
-          fjernet.
+          Pseudonymiserede oplysninger er stadig personoplysninger, hvis de kan kobles
+          til dig med yderligere information. Derfor behandler vi dem fortsat efter GDPR.
+        </p>
+      </article>
+
+      <article id="rettigheder" class="legal-section">
+        <h2>11. Dine rettigheder</h2>
+        <p>Du har efter databeskyttelsesreglerne blandt andet ret til:</p>
+        <ul>
+          <li><strong>Oplysning og indsigt:</strong> Få at vide, hvilke oplysninger vi behandler om dig.</li>
+          <li><strong>Rettelse:</strong> Få rettet forkerte eller mangelfulde oplysninger.</li>
+          <li><strong>Sletning:</strong> Få slettet oplysninger, når betingelserne er opfyldt.</li>
+          <li><strong>Begrænsning:</strong> Få begrænset behandlingen i særlige situationer.</li>
+          <li><strong>Dataportabilitet:</strong> Få udleveret oplysninger, du selv har givet os, i et læsbart format, når betingelserne er opfyldt.</li>
+          <li><strong>Indsigelse:</strong> Gøre indsigelse mod behandling baseret på legitim interesse.</li>
+          <li><strong>Tilbagetrækning af samtykke:</strong> For eksempel ved at slå push-notifikationer fra.</li>
+          <li><strong>Ikke kun automatiseret afgørelse:</strong> Moderationsklager vurderes af et menneske.</li>
+        </ul>
+        <p>
+          Skriv til <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a>,
+          hvis du vil bruge dine rettigheder. Vi kan bede om oplysninger, der bekræfter,
+          at du er den rette kontoindehaver.
+        </p>
+      </article>
+
+      <article id="unge" class="legal-section">
+        <h2>12. Alder og unge brugere</h2>
+        <p>
+          Studos kræver, at brugere er mindst 16 år. Hvis vi bliver opmærksomme på en
+          konto oprettet af en person under 16 år, kan vi lukke kontoen og slette eller
+          pseudonymisere oplysningerne.
         </p>
         <p>
-          Ønsker du yderligere udvanding (fx fjernelse af enkelte beskeder eller
-          billeder, du selv har sendt), kan du kontakte
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a>.
+          Appen er bygget som et lukket klassefællesskab uden reklamer, uden tracking
+          til markedsføring og med mulighed for at rapportere og blokere brugere.
+        </p>
+      </article>
+
+      <article id="notifikationer" class="legal-section">
+        <h2>13. Push-notifikationer</h2>
+        <p>
+          Push-notifikationer kræver, at du giver tilladelse på din telefon. Hvis du
+          tillader dem, gemmer vi en push-token og tekniske oplysninger om enheden, så
+          vi kan sende notifikationer om relevante hændelser, for eksempel chatbeskeder,
+          reaktioner på dine beskeder, invitationer og aktiviteter i klassen.
+        </p>
+        <p>
+          Du kan slå notifikationer fra i appen eller i telefonens indstillinger. Når
+          du slår dem fra i appen, deaktiverer vi tokenet hos Studos.
+        </p>
+      </article>
+
+      <article id="cookies" class="legal-section">
+        <h2>14. Cookies og lokal lagring</h2>
+        <p>
+          Mobilappen bruger ikke browsercookies. Den gemmer nødvendige oplysninger lokalt
+          på enheden, for eksempel login-session og visse appindstillinger. Hjemmesiden
+          studos.dk bruger kun nødvendige cookies til session og sikkerhed. Se
+          <a href="{{ route('legal.cookies') }}">cookiepolitikken</a>.
         </p>
       </article>
 
       <article id="sikkerhed" class="legal-section">
-        <h2>8. Sikkerhed</h2>
+        <h2>15. Sikkerhed</h2>
         <ul>
-          <li>Adgangskoder gemmes som saltede hashes (bcrypt).</li>
-          <li>Al trafik krypteres i transit med TLS.</li>
-          <li>Adgang til produktionsdata er begrænset og logges.</li>
-          <li>Rate limits beskytter mod misbrug og brute force.</li>
-          <li>Vi anmelder personhenførbare brud til Datatilsynet inden for 72 timer, jf. GDPR art. 33, og underretter berørte brugere, hvor det er påkrævet, jf. art. 34.</li>
+          <li>Adgangskoder gemmes som saltede hashes.</li>
+          <li>Transport mellem app og server krypteres med TLS, når appen bruger produktionsmiljø.</li>
+          <li>Adgang til produktionsdata begrænses til relevante personer og formål.</li>
+          <li>Rate limits og moderation hjælper med at forebygge misbrug.</li>
+          <li>Ved brud på persondatasikkerheden følger vi reglerne om anmeldelse til Datatilsynet og underretning af berørte brugere.</li>
         </ul>
-      </article>
-
-      <article id="rettigheder" class="legal-section">
-        <h2>9. Dine rettigheder</h2>
-        <p>Du har under GDPR følgende rettigheder:</p>
-        <ul>
-          <li><strong>Indsigt</strong> (art. 15) — få en kopi af de oplysninger, vi har om dig.</li>
-          <li><strong>Berigtigelse</strong> (art. 16) — få rettet forkerte oplysninger.</li>
-          <li><strong>Sletning</strong> (art. 17) — få slettet dine data. Sker via app eller <a href="{{ route('legal.delete-account') }}">studos.dk/slet-konto</a>.</li>
-          <li><strong>Begrænsning</strong> (art. 18) — få begrænset behandlingen i bestemte tilfælde.</li>
-          <li><strong>Dataportabilitet</strong> (art. 20) — få dine data i et maskinlæsbart format.</li>
-          <li><strong>Indsigelse</strong> (art. 21) — gøre indsigelse mod behandling baseret på legitim interesse.</li>
-          <li><strong>Tilbagekaldelse af samtykke</strong> (art. 7) — særligt for push-notifikationer.</li>
-        </ul>
-        <p>
-          Anmodninger sendes til <a href="mailto:hej@studos.dk">hej@studos.dk</a>. Vi
-          besvarer henvendelser inden for 30 dage og kan kræve identifikation for at
-          beskytte din konto. Du kan klage direkte til Datatilsynet uden først at
-          kontakte os — se pkt. 15.
-        </p>
-        <p>
-          Hvis et billede af dig er delt i et album, kan du også bede om
-          begrænsning, sletning eller en konkret vurdering, selv om du ikke selv
-          har uploadet billedet.
-        </p>
-      </article>
-
-      <article id="boern" class="legal-section">
-        <h2>10. Aldersgrænse og mindreårige</h2>
-        <p>
-          Studos er rettet mod elever på ungdomsuddannelser. Som forretningsregel
-          skal du være mindst <strong>15 år</strong> for at oprette en konto.
-        </p>
-        <p>
-          Bliver vi opmærksomme på, at en konto er oprettet af en bruger under
-          15 år, sletter vi kontoen. Forældre eller værger kan kontakte
-          <a href="mailto:hej@studos.dk">hej@studos.dk</a> for at anmode om
-          sletning på vegne af deres barn — vi prioriterer disse henvendelser
-          særligt højt og besvarer dem inden for 3 arbejdsdage.
-        </p>
-        <p>
-          Som platform, der er tilgængelig for mindreårige, har vi indført særlige
-          beskyttelsesforanstaltninger, jf. DSA art. 28: ingen reklamer, ingen
-          profilering, ingen adfærdsbaseret målretning og lukkede klassebaserede
-          fællesskaber. Se brugervilkårenes pkt. 11.
-        </p>
-        <p>
-          Billeder af børn og unge kræver særlig omtanke. Vi fjerner eller
-          begrænser billeder hurtigt, hvis de fremstår krænkende, private,
-          seksuelle, ydmygende, ulovlige eller på anden måde uegnede for et
-          ungdomsfællesskab.
-        </p>
-      </article>
-
-      <article id="cookies-tracking" class="legal-section">
-        <h2>11. Cookies og tracking</h2>
-        <p>
-          <strong>Mobilappen</strong> bruger ikke cookies og indeholder ingen
-          tracking-SDK'er som Apple App Tracking Transparency, Google UMP,
-          Facebook Pixel, Google Analytics eller Firebase Analytics.
-        </p>
-        <p>
-          <strong>Hjemmesiden studos.dk</strong> bruger kun strengt nødvendige
-          cookies (session, CSRF-beskyttelse). Læs mere i vores
-          <a href="{{ route('legal.cookies') }}">cookiepolitik</a>.
-        </p>
-        <p>
-          Når du vælger eller gemmer billeder i mobilappen, bruges iOS' og
-          Androids native fototilladelser eller systemvælgere. Studos scanner ikke
-          dit billedbibliotek og uploader kun de billeder, du aktivt vælger.
-        </p>
-      </article>
-
-      <article id="push" class="legal-section">
-        <h2>12. Push-notifikationer</h2>
-        <p>
-          Push-notifikationer er valgfrie og kræver dit aktive samtykke i mobilen.
-          Når du aktiverer notifikationer, gemmer vi din Expo Push Token sammen
-          med enhedsnavn, platform, app-variant, native app-version og native
-          build-version. Disse oplysninger bruges udelukkende til at sende dig
-          notifikationer fra Studos og til at fejlsøge afsendelser. Du kan til
-          enhver tid slå notifikationer fra i app-indstillingerne — så slettes
-          eller deaktiveres tokenet.
-        </p>
-      </article>
-
-      <article id="tredjeparter" class="legal-section">
-        <h2>13. Tredjepartstjenester</h2>
-        <table class="legal-table">
-          <thead>
-            <tr><th>Tjeneste</th><th>Formål</th><th>Rolle</th><th>Placering</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Laravel Cloud</td><td>Hosting + database + lagring</td><td>Databehandler</td><td>EU</td></tr>
-            <tr><td>iOS/Android fototilladelser</td><td>Vælge og gemme albumfotos på brugerens egen enhed</td><td>Enheds-/platformsfunktion</td><td>På din enhed</td></tr>
-            <tr><td>Expo Push Service (Expo Inc.)</td><td>Push-notifikationer</td><td>Databehandler</td><td>USA (SCC)</td></tr>
-            <tr><td>Apple App Store</td><td>App-distribution</td><td>Selvstændig dataansvarlig</td><td>EU/USA</td></tr>
-            <tr><td>Google Play</td><td>App-distribution</td><td>Selvstændig dataansvarlig</td><td>EU/USA</td></tr>
-            <tr><td>E-mailudbyder for hej@studos.dk</td><td>Support og kommunikation</td><td>Databehandler</td><td>EU</td></tr>
-          </tbody>
-        </table>
-      </article>
-
-      <article id="overfoersel" class="legal-section">
-        <h2>14. Overførsel til lande uden for EU/EØS</h2>
-        <p>
-          Visse leverandører er placeret i USA (fx Expo Inc.). Overførsler sker
-          på baggrund af EU-Kommissionens standardkontraktbestemmelser
-          (SCC, GDPR art. 46, stk. 2, litra c) og en transfer impact assessment
-          (TIA), der vurderer eventuelle supplerende beskyttelses­foranstaltninger
-          i lyset af Schrems II-praksis.
-        </p>
       </article>
 
       <article id="klage" class="legal-section">
-        <h2>15. Klage til Datatilsynet</h2>
+        <h2>16. Klage til Datatilsynet</h2>
         <p>
-          Du har til enhver tid ret til at klage til Datatilsynet over vores
-          behandling af dine personoplysninger — også uden først at kontakte os:<br>
+          Du kan klage til Datatilsynet over vores behandling af personoplysninger:<br>
           <strong>Datatilsynet</strong>, Carl Jacobsens Vej 35, 2500 Valby<br>
-          Telefon: +45 33 19 32 00 · <a href="https://www.datatilsynet.dk">datatilsynet.dk</a>
+          Telefon: +45 33 19 32 00 · <a href="https://www.datatilsynet.dk" rel="noopener">datatilsynet.dk</a>
         </p>
       </article>
 
       <article id="aendringer" class="legal-section">
-        <h2>16. Ændringer i politikken</h2>
+        <h2>17. Ændringer</h2>
         <p>
-          Vi kan opdatere denne politik. Væsentlige ændringer varsles i appen mindst
-          14 dage før ikrafttræden. Den til enhver tid gældende version er tilgængelig
-          på denne side med versionsnummer og opdateringsdato.
+          Vi opdaterer privatlivspolitikken, når appen, vores databehandling eller
+          lovgivningen ændrer sig. Væsentlige ændringer varsles i appen eller på
+          studos.dk, medmindre ændringen skal ske straks af sikkerheds- eller lovhensyn.
         </p>
       </article>
 
       <article id="kontakt" class="legal-section">
-        <h2>17. Kontakt</h2>
+        <h2>18. Kontakt</h2>
         <p>
           <strong>PlateDigital EMV</strong><br>
           CVR: 42456187<br>
           Kærmindevej 12, 7441 Bording<br>
-          E-mail: <a href="mailto:hej@studos.dk">hej@studos.dk</a><br>
+          E-mail: <a href="mailto:chris.sorensen1702@gmail.com">chris.sorensen1702@gmail.com</a><br>
           Telefon: <a href="tel:+4520631299">+45 20 63 12 99</a>
         </p>
       </article>

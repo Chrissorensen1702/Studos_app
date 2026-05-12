@@ -23,6 +23,7 @@ class StudosController extends Controller
 {
     private const PRIVACY_VERSION = '2026-05-11';
     private const MEMBER_STRIKE_LIMIT = 3;
+    private const MINIMUM_ACCOUNT_AGE = 16;
 
     private const EVENT_COVER_TEMPLATE_IDS = [
         'sunset',
@@ -919,12 +920,31 @@ class StudosController extends Controller
             'schoolId' => ['nullable', 'string', 'max:36'],
             'schoolName' => ['nullable', 'string', 'max:190'],
             'className' => ['required', 'string', 'max:100'],
-            'graduationYear' => ['nullable', 'string', 'max:4'],
+            'graduationYear' => ['nullable', 'digits:4'],
             'graduationDate' => ['nullable', 'date'],
             'ownerName' => ['required', 'string', 'max:190'],
             'ownerEmail' => ['required', 'email', 'max:190'],
+            'ownerBirthday' => ['nullable', 'string', 'max:10'],
+            'password' => ['nullable', 'string', 'min:8'],
+            'passwordConfirmation' => ['nullable', 'string'],
+            'termsAccepted' => ['nullable'],
+            'privacyAccepted' => ['nullable'],
             'joinPolicy' => ['nullable', Rule::in(['open', 'approval', 'closed'])],
         ]);
+
+        if (! blank($data['password'] ?? null)) {
+            abort_if(
+                ($data['passwordConfirmation'] ?? null) !== $data['password'],
+                422,
+                'Adgangskoderne skal være ens.',
+            );
+
+            abort_unless(
+                $request->boolean('termsAccepted') && $request->boolean('privacyAccepted'),
+                422,
+                'Accepter vilkår og privatlivspolitik for at oprette klassen.',
+            );
+        }
 
         [$schoolId, $schoolName] = $this->resolveSchoolForClass($data);
         $classId = (string) Str::uuid();
@@ -946,14 +966,54 @@ class StudosController extends Controller
             'user_agent' => $request->userAgent(),
         ]);
         $ownerParts = preg_split('/\s+/', $ownerName, 2) ?: [];
+        $ownerEmail = Str::lower(trim($data['ownerEmail']));
+        $ownerPassword = $data['password'] ?? null;
+        $ownerBirthday = blank($data['ownerBirthday'] ?? null) ? null : trim($data['ownerBirthday']);
+        $acceptedAt = blank($ownerPassword) ? null : now()->format('Y-m-d H:i:s');
         $publicId = $this->generateClassPublicId(
             $schoolName,
             $className,
             $data['graduationYear'] ?? (string) now()->year,
         );
 
+        if ($ownerBirthday !== null) {
+            if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $ownerBirthday)) {
+                abort(422, 'Fødselsdag skal være en gyldig dato i format YYYY-MM-DD.');
+            }
+
+            $parsedOwnerBirthday = Carbon::createFromFormat('Y-m-d', $ownerBirthday);
+
+            if (! $parsedOwnerBirthday || $parsedOwnerBirthday->format('Y-m-d') !== $ownerBirthday) {
+                abort(422, 'Fødselsdag skal være en gyldig dato i format YYYY-MM-DD.');
+            }
+        }
+
+        if (! blank($ownerPassword)) {
+            abort_unless(
+                $ownerBirthday !== null,
+                422,
+                'Udfyld fødselsdag for klasseejeren.',
+            );
+
+            abort_unless(
+                $this->birthdayMeetsMinimumAccountAge($ownerBirthday),
+                422,
+                'Du skal være mindst 16 år for at oprette en konto.',
+            );
+        }
+
+        $emailUsedInAnyClass = DB::table('members')
+            ->whereRaw('LOWER(email) = ?', [$ownerEmail])
+            ->exists();
+
+        abort_if(
+            $emailUsedInAnyClass,
+            422,
+            'Denne email er allerede knyttet til en anden klasse.',
+        );
+
         try {
-            DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerParts, $classId, $ownerId, $now, $graduationDate, $publicId): void {
+            DB::transaction(function () use ($data, $schoolId, $schoolName, $className, $ownerName, $ownerParts, $ownerEmail, $ownerPassword, $ownerBirthday, $acceptedAt, $classId, $ownerId, $now, $graduationDate, $publicId): void {
                 DB::table('classes')->insert([
                     'id' => $classId,
                     'public_id' => $publicId,
@@ -963,7 +1023,7 @@ class StudosController extends Controller
                     'graduation_year' => trim($data['graduationYear'] ?? (string) now()->year),
                     'graduation_date' => $graduationDate,
                     'owner_name' => $ownerName,
-                    'owner_email' => Str::lower(trim($data['ownerEmail'])),
+                    'owner_email' => $ownerEmail,
                     'invite_code' => $this->generateInviteCode($data['graduationYear'] ?? null),
                     'join_policy' => $data['joinPolicy'] ?? 'approval',
                     'allow_member_posts' => true,
@@ -972,7 +1032,7 @@ class StudosController extends Controller
                     'updated_at' => $now,
                 ]);
 
-                DB::table('members')->insert([
+                $memberData = [
                     'id' => $ownerId,
                     'personal_code' => $this->generatePersonalCode($ownerParts[0] ?? $ownerName),
                     'class_id' => $classId,
@@ -980,25 +1040,33 @@ class StudosController extends Controller
                     'display_name' => $ownerName,
                     'first_name' => $ownerParts[0] ?? null,
                     'last_name' => $ownerParts[1] ?? null,
-                    'email' => Str::lower(trim($data['ownerEmail'])),
+                    'email' => $ownerEmail,
                     'role' => 'owner',
                     'status' => 'active',
                     'joined_at' => $now,
-                ]);
+                ];
 
-                if ($graduationDate) {
-                    DB::table('events')->insert([
-                        'id' => (string) Str::uuid(),
-                        'class_id' => $classId,
-                        'title' => 'Dimission',
-                        'event_date' => $graduationDate,
-                        'location' => null,
-                        'description' => null,
-                        'rsvp_count' => 1,
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ]);
+                if (! blank($ownerPassword) && Schema::hasColumn('members', 'password_hash')) {
+                    $memberData['password_hash'] = Hash::make($ownerPassword);
                 }
+
+                if ($ownerBirthday !== null && Schema::hasColumn('members', 'birthday')) {
+                    $memberData['birthday'] = $ownerBirthday;
+                }
+
+                if ($acceptedAt && Schema::hasColumn('members', 'terms_accepted_at')) {
+                    $memberData['terms_accepted_at'] = $acceptedAt;
+                }
+
+                if ($acceptedAt && Schema::hasColumn('members', 'privacy_accepted_at')) {
+                    $memberData['privacy_accepted_at'] = $acceptedAt;
+                }
+
+                if ($acceptedAt && Schema::hasColumn('members', 'privacy_version')) {
+                    $memberData['privacy_version'] = self::PRIVACY_VERSION;
+                }
+
+                DB::table('members')->insert($memberData);
             });
         } catch (QueryException $exception) {
             if ($this->isDuplicateEmailConstraintError($exception)) {
@@ -1008,9 +1076,28 @@ class StudosController extends Controller
             throw $exception;
         }
 
-        return response()->json([
+        $response = [
             'class' => $this->loadClassById($classId),
-        ], 201);
+        ];
+
+        if (! blank($ownerPassword)) {
+            $ownerMemberRow = DB::table('members')->where('id', $ownerId)->first();
+
+            abort_unless($ownerMemberRow, 500, 'Klasseejer kunne ikke oprettes.');
+
+            $ownerMember = $this->serializeMember(
+                $ownerMemberRow,
+                true,
+                true,
+            );
+
+            $response = [
+                'session' => $this->sessionForMember($ownerMember, $this->issueMemberToken($ownerMember['id'])),
+                'class' => $this->loadClassById($classId, $ownerMember['id']),
+            ];
+        }
+
+        return response()->json($response, 201);
     }
 
     public function classByInvite(Request $request, string $code): JsonResponse
@@ -1296,6 +1383,12 @@ class StudosController extends Controller
         $email = Str::lower(trim($data['email']));
         $classId = null;
         $member = null;
+
+        abort_unless(
+            $this->birthdayMeetsMinimumAccountAge($data['birthday']),
+            422,
+            'Du skal være mindst 16 år for at oprette en konto.',
+        );
 
         try {
             DB::transaction(function () use (
@@ -2292,6 +2385,12 @@ class StudosController extends Controller
             if (! $parsedBirthday || $parsedBirthday->format('Y-m-d') !== $birthday) {
                 abort(422, 'Fødselsdag skal være en gyldig dato i format YYYY-MM-DD.');
             }
+
+            abort_unless(
+                $this->birthdayMeetsMinimumAccountAge($birthday),
+                422,
+                'Du skal være mindst 16 år for at oprette en konto.',
+            );
         }
 
         $updates = [];
@@ -5510,6 +5609,14 @@ class StudosController extends Controller
     private function loginCodeCacheKey(string $classId, string $email): string
     {
         return 'studos-login-code:'.$classId.':'.sha1($email);
+    }
+
+    private function birthdayMeetsMinimumAccountAge(string $birthday): bool
+    {
+        $date = Carbon::parse($birthday)->startOfDay();
+        $cutoff = Carbon::today()->subYears(self::MINIMUM_ACCOUNT_AGE);
+
+        return $date->lessThanOrEqualTo($cutoff);
     }
 
     private function memberSummary($members): array
