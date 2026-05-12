@@ -2,7 +2,7 @@
   "expo": {
     "name": "Studos",
     "slug": "studos",
-    "version": "0.0.1",
+    "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "studos",
     "icon": "./assets/icon.png",
